@@ -1,20 +1,20 @@
 {
   "format": 1,
   "restore": {
-    "C:\\Users\\1\\Documents\\HK_AI_Mod\\HK_AI_Mod.csproj": {}
+    "D:\\hollow_knight_bot\\Hollow-Knight-Bot\\Mod\\HK_AI_Mod\\HK_AI_Mod.csproj": {}
   },
   "projects": {
-    "C:\\Users\\1\\Documents\\HK_AI_Mod\\HK_AI_Mod.csproj": {
+    "D:\\hollow_knight_bot\\Hollow-Knight-Bot\\Mod\\HK_AI_Mod\\HK_AI_Mod.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "C:\\Users\\1\\Documents\\HK_AI_Mod\\HK_AI_Mod.csproj",
+        "projectUniqueName": "D:\\hollow_knight_bot\\Hollow-Knight-Bot\\Mod\\HK_AI_Mod\\HK_AI_Mod.csproj",
         "projectName": "HK_AI_Mod",
-        "projectPath": "C:\\Users\\1\\Documents\\HK_AI_Mod\\HK_AI_Mod.csproj",
-        "packagesPath": "C:\\Users\\1\\.nuget\\packages\\",
-        "outputPath": "C:\\Users\\1\\Documents\\HK_AI_Mod\\obj\\",
+        "projectPath": "D:\\hollow_knight_bot\\Hollow-Knight-Bot\\Mod\\HK_AI_Mod\\HK_AI_Mod.csproj",
+        "packagesPath": "C:\\Users\\Danii\\.nuget\\packages\\",
+        "outputPath": "D:\\hollow_knight_bot\\Hollow-Knight-Bot\\Mod\\HK_AI_Mod\\obj\\",
         "projectStyle": "PackageReference",
         "configFilePaths": [
-          "C:\\Users\\1\\AppData\\Roaming\\NuGet\\NuGet.Config"
+          "C:\\Users\\Danii\\AppData\\Roaming\\NuGet\\NuGet.Config"
         ],
         "originalTargetFrameworks": [
           "net472"
@@ -24,6 +24,7 @@
         },
         "frameworks": {
           "net472": {
+            "framework": "net472",
             "targetAlias": "net472",
             "projectReferences": {}
           }
@@ -37,10 +38,12 @@
           "enableAudit": "true",
           "auditLevel": "low",
           "auditMode": "direct"
-        }
+        },
+        "SdkAnalysisLevel": "10.0.300"
       },
       "frameworks": {
         "net472": {
+          "framework": "net472",
           "targetAlias": "net472",
           "dependencies": {
             "Microsoft.NETFramework.ReferenceAssemblies": {
@@ -50,7 +53,7 @@
               "autoReferenced": true
             }
           },
-          "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\8.0.422\\RuntimeIdentifierGraph.json"
+          "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\10.0.301\\RuntimeIdentifierGraph.json"
         }
       }
     }

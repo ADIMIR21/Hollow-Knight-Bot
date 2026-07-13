@@ -17,7 +17,7 @@ class HollowKnightGym(gym.Env):
         self.game_env = HollowKnightEnv()
         self.controller = HollowKnightController()
         
-        self.action_space = spaces.Discrete(5)
+        self.action_space = spaces.Discrete(6)
         
         self.observation_space = spaces.Dict({
             "image": spaces.Box(low=0, high=255, shape=(84, 84, 4), dtype=np.uint8),

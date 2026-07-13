@@ -7,17 +7,81 @@
     <LangVersion>latest</LangVersion>
   </PropertyGroup>
 
+  <!-- Статическое вычисление пути к Hollow Knight (выполняется при загрузке проекта, до ItemGroup) -->
+  <PropertyGroup>
+    <!-- Пытаемся найти Steam через реестр -->
+    <_SteamPath>$([MSBuild]::GetRegistryValueFromView('HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Valve\Steam', 'InstallPath', '', RegistryView.Registry32, RegistryView.Default))</_SteamPath>
+    <_SteamPath Condition="'$(_SteamPath)' == ''">$([MSBuild]::GetRegistryValueFromView('HKEY_CURRENT_USER\SOFTWARE\Valve\Steam', 'SteamPath', '', RegistryView.Registry32, RegistryView.Default))</_SteamPath>
+
+    <!-- Проверяем основную библиотеку Steam -->
+    <HollowKnightPath Condition="'$(_SteamPath)' != '' And Exists('$(_SteamPath)\steamapps\common\Hollow Knight')">$(_SteamPath)\steamapps\common\Hollow Knight</HollowKnightPath>
+
+    <!-- Fallback по всем дискам A-Z -->
+    <HollowKnightPath Condition="'$(HollowKnightPath)' == '' And Exists('A:\SteamLibrary\steamapps\common\Hollow Knight')">A:\SteamLibrary\steamapps\common\Hollow Knight</HollowKnightPath>
+    <HollowKnightPath Condition="'$(HollowKnightPath)' == '' And Exists('B:\SteamLibrary\steamapps\common\Hollow Knight')">B:\SteamLibrary\steamapps\common\Hollow Knight</HollowKnightPath>
+    <HollowKnightPath Condition="'$(HollowKnightPath)' == '' And Exists('C:\SteamLibrary\steamapps\common\Hollow Knight')">C:\SteamLibrary\steamapps\common\Hollow Knight</HollowKnightPath>
+    <HollowKnightPath Condition="'$(HollowKnightPath)' == '' And Exists('D:\SteamLibrary\steamapps\common\Hollow Knight')">D:\SteamLibrary\steamapps\common\Hollow Knight</HollowKnightPath>
+    <HollowKnightPath Condition="'$(HollowKnightPath)' == '' And Exists('E:\SteamLibrary\steamapps\common\Hollow Knight')">E:\SteamLibrary\steamapps\common\Hollow Knight</HollowKnightPath>
+    <HollowKnightPath Condition="'$(HollowKnightPath)' == '' And Exists('F:\SteamLibrary\steamapps\common\Hollow Knight')">F:\SteamLibrary\steamapps\common\Hollow Knight</HollowKnightPath>
+    <HollowKnightPath Condition="'$(HollowKnightPath)' == '' And Exists('G:\SteamLibrary\steamapps\common\Hollow Knight')">G:\SteamLibrary\steamapps\common\Hollow Knight</HollowKnightPath>
+    <HollowKnightPath Condition="'$(HollowKnightPath)' == '' And Exists('H:\SteamLibrary\steamapps\common\Hollow Knight')">H:\SteamLibrary\steamapps\common\Hollow Knight</HollowKnightPath>
+    <HollowKnightPath Condition="'$(HollowKnightPath)' == '' And Exists('I:\SteamLibrary\steamapps\common\Hollow Knight')">I:\SteamLibrary\steamapps\common\Hollow Knight</HollowKnightPath>
+    <HollowKnightPath Condition="'$(HollowKnightPath)' == '' And Exists('J:\SteamLibrary\steamapps\common\Hollow Knight')">J:\SteamLibrary\steamapps\common\Hollow Knight</HollowKnightPath>
+    <HollowKnightPath Condition="'$(HollowKnightPath)' == '' And Exists('K:\SteamLibrary\steamapps\common\Hollow Knight')">K:\SteamLibrary\steamapps\common\Hollow Knight</HollowKnightPath>
+    <HollowKnightPath Condition="'$(HollowKnightPath)' == '' And Exists('L:\SteamLibrary\steamapps\common\Hollow Knight')">L:\SteamLibrary\steamapps\common\Hollow Knight</HollowKnightPath>
+    <HollowKnightPath Condition="'$(HollowKnightPath)' == '' And Exists('M:\SteamLibrary\steamapps\common\Hollow Knight')">M:\SteamLibrary\steamapps\common\Hollow Knight</HollowKnightPath>
+    <HollowKnightPath Condition="'$(HollowKnightPath)' == '' And Exists('N:\SteamLibrary\steamapps\common\Hollow Knight')">N:\SteamLibrary\steamapps\common\Hollow Knight</HollowKnightPath>
+    <HollowKnightPath Condition="'$(HollowKnightPath)' == '' And Exists('O:\SteamLibrary\steamapps\common\Hollow Knight')">O:\SteamLibrary\steamapps\common\Hollow Knight</HollowKnightPath>
+    <HollowKnightPath Condition="'$(HollowKnightPath)' == '' And Exists('P:\SteamLibrary\steamapps\common\Hollow Knight')">P:\SteamLibrary\steamapps\common\Hollow Knight</HollowKnightPath>
+    <HollowKnightPath Condition="'$(HollowKnightPath)' == '' And Exists('Q:\SteamLibrary\steamapps\common\Hollow Knight')">Q:\SteamLibrary\steamapps\common\Hollow Knight</HollowKnightPath>
+    <HollowKnightPath Condition="'$(HollowKnightPath)' == '' And Exists('R:\SteamLibrary\steamapps\common\Hollow Knight')">R:\SteamLibrary\steamapps\common\Hollow Knight</HollowKnightPath>
+    <HollowKnightPath Condition="'$(HollowKnightPath)' == '' And Exists('S:\SteamLibrary\steamapps\common\Hollow Knight')">S:\SteamLibrary\steamapps\common\Hollow Knight</HollowKnightPath>
+    <HollowKnightPath Condition="'$(HollowKnightPath)' == '' And Exists('T:\SteamLibrary\steamapps\common\Hollow Knight')">T:\SteamLibrary\steamapps\common\Hollow Knight</HollowKnightPath>
+    <HollowKnightPath Condition="'$(HollowKnightPath)' == '' And Exists('U:\SteamLibrary\steamapps\common\Hollow Knight')">U:\SteamLibrary\steamapps\common\Hollow Knight</HollowKnightPath>
+    <HollowKnightPath Condition="'$(HollowKnightPath)' == '' And Exists('V:\SteamLibrary\steamapps\common\Hollow Knight')">V:\SteamLibrary\steamapps\common\Hollow Knight</HollowKnightPath>
+    <HollowKnightPath Condition="'$(HollowKnightPath)' == '' And Exists('W:\SteamLibrary\steamapps\common\Hollow Knight')">W:\SteamLibrary\steamapps\common\Hollow Knight</HollowKnightPath>
+    <HollowKnightPath Condition="'$(HollowKnightPath)' == '' And Exists('X:\SteamLibrary\steamapps\common\Hollow Knight')">X:\SteamLibrary\steamapps\common\Hollow Knight</HollowKnightPath>
+    <HollowKnightPath Condition="'$(HollowKnightPath)' == '' And Exists('Y:\SteamLibrary\steamapps\common\Hollow Knight')">Y:\SteamLibrary\steamapps\common\Hollow Knight</HollowKnightPath>
+    <HollowKnightPath Condition="'$(HollowKnightPath)' == '' And Exists('Z:\SteamLibrary\steamapps\common\Hollow Knight')">Z:\SteamLibrary\steamapps\common\Hollow Knight</HollowKnightPath>
+
+    <!-- Также проверяем Games\Steam -->
+    <HollowKnightPath Condition="'$(HollowKnightPath)' == '' And Exists('C:\Games\Steam\steamapps\common\Hollow Knight')">C:\Games\Steam\steamapps\common\Hollow Knight</HollowKnightPath>
+    <HollowKnightPath Condition="'$(HollowKnightPath)' == '' And Exists('D:\Games\Steam\steamapps\common\Hollow Knight')">D:\Games\Steam\steamapps\common\Hollow Knight</HollowKnightPath>
+
+    <!-- И стандартные пути установки Steam -->
+    <HollowKnightPath Condition="'$(HollowKnightPath)' == '' And Exists('C:\Program Files (x86)\Steam\steamapps\common\Hollow Knight')">C:\Program Files (x86)\Steam\steamapps\common\Hollow Knight</HollowKnightPath>
+    <HollowKnightPath Condition="'$(HollowKnightPath)' == '' And Exists('C:\Program Files\Steam\steamapps\common\Hollow Knight')">C:\Program Files\Steam\steamapps\common\Hollow Knight</HollowKnightPath>
+
+    <!-- Формируем путь к Managed папке -->
+    <HollowKnightManagedDir Condition="'$(HollowKnightPath)' != ''">$(HollowKnightPath)\hollow_knight_Data\Managed\</HollowKnightManagedDir>
+  </PropertyGroup>
+
   <ItemGroup>
-    <!-- Ссылки на оригинальные файлы игры ищите сами-->
-    <Reference Include="Assembly-CSharp">
+    <Reference Include="Assembly-CSharp" Condition="'$(HollowKnightManagedDir)' != '' And Exists('$(HollowKnightManagedDir)Assembly-CSharp.dll')">
+      <HintPath>$(HollowKnightManagedDir)Assembly-CSharp.dll</HintPath>
+    </Reference>
+    <Reference Include="UnityEngine" Condition="'$(HollowKnightManagedDir)' != '' And Exists('$(HollowKnightManagedDir)UnityEngine.dll')">
+      <HintPath>$(HollowKnightManagedDir)UnityEngine.dll</HintPath>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule" Condition="'$(HollowKnightManagedDir)' != '' And Exists('$(HollowKnightManagedDir)UnityEngine.CoreModule.dll')">
+      <HintPath>$(HollowKnightManagedDir)UnityEngine.CoreModule.dll</HintPath>
+    </Reference>
+    <!-- Если автоматический поиск не нашёл - используем D:\SteamLibrary как fallback -->
+    <Reference Include="Assembly-CSharp" Condition="'$(HollowKnightManagedDir)' == ''">
       <HintPath>D:\SteamLibrary\steamapps\common\Hollow Knight\hollow_knight_Data\Managed\Assembly-CSharp.dll</HintPath>
     </Reference>
-    <Reference Include="UnityEngine">
+    <Reference Include="UnityEngine" Condition="'$(HollowKnightManagedDir)' == ''">
       <HintPath>D:\SteamLibrary\steamapps\common\Hollow Knight\hollow_knight_Data\Managed\UnityEngine.dll</HintPath>
     </Reference>
-    <Reference Include="UnityEngine.CoreModule">
+    <Reference Include="UnityEngine.CoreModule" Condition="'$(HollowKnightManagedDir)' == ''">
       <HintPath>D:\SteamLibrary\steamapps\common\Hollow Knight\hollow_knight_Data\Managed\UnityEngine.CoreModule.dll</HintPath>
     </Reference>
   </ItemGroup>
+
+  <!-- Просто выводим сообщение в лог -->
+  <Target Name="PrintHollowKnightPath" BeforeTargets="ResolveAssemblyReferences">
+    <Message Condition="'$(HollowKnightManagedDir)' != ''" Text="*** Hollow Knight найден: $(HollowKnightManagedDir)" Importance="High" />
+    <Message Condition="'$(HollowKnightManagedDir)' == ''" Text="*** Hollow Knight не найден автоматически. Используются пути по умолчанию." Importance="High" />
+  </Target>
 
 </Project>
