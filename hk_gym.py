@@ -105,9 +105,7 @@ class HollowKnightGym(gym.Env):
             boss_x = float(telemetry.get("boss_x", boss_x))
             boss_y = float(telemetry.get("boss_y", boss_y))
             
-            new_boss_hp = float(telemetry.get("boss_hp", boss_hp))
-            if new_boss_hp > 0:
-                boss_hp = new_boss_hp
+            boss_hp = float(telemetry.get("boss_hp", boss_hp))
         
         dist_to_boss = np.sqrt((x - boss_x)**2 + (y - boss_y)**2)
         angle_to_boss = math.atan2(boss_y - y, boss_x - x)
@@ -146,7 +144,7 @@ class HollowKnightGym(gym.Env):
             
             if waited_for_restart:
                 print("[RESET] Запускаю макрос рестарта боя...")
-                time.sleep(2.0)
+                time.sleep(5.0)
                 
                 self.controller.restart_boss_fight()
                 time.sleep(4.0)
@@ -157,18 +155,12 @@ class HollowKnightGym(gym.Env):
             time.sleep(1.0)
             obs = self._get_obs()
             self.last_hp = obs["stats"][0]
-            self.last_boss_hp = max(obs["stats"][2], 99999)
+            self.last_boss_hp = obs["stats"][2]
             self.last_x = obs["stats"][3]
             self.last_y = obs["stats"][4]
             self.last_boss_x = obs["stats"][5]
             self.last_boss_y = obs["stats"][6]
             self.last_dist = obs["stats"][7]
-            
-            frame, telemetry = self.game_env.get_observation()
-            if telemetry is not None:
-                boss_hp_val = float(telemetry.get("boss_hp", 0))
-                if boss_hp_val > 0:
-                    self.last_boss_hp = boss_hp_val
             
             self.episode_step = 0
             self.last_time = time.time()
@@ -249,7 +241,7 @@ class HollowKnightGym(gym.Env):
 
         reward -= 0.05
         
-        if current_boss_hp < self.last_boss_hp:
+        if current_boss_hp < self.last_boss_hp and self.last_boss_hp > 0:
             damage_dealt = self.last_boss_hp - current_boss_hp
             reward += (damage_dealt * 15.0)
             
