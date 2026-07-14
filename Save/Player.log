@@ -1,0 +1,193 @@
+Mono path[0] = 'D:/SteamLibrary/steamapps/common/Hollow Knight/hollow_knight_Data/Managed'
+Mono config path = 'D:/SteamLibrary/steamapps/common/Hollow Knight/MonoBleedingEdge/etc'
+Initialize engine version: 2020.2.2f1 (068178b99f32)
+[Subsystems] Discovering subsystems at path D:/SteamLibrary/steamapps/common/Hollow Knight/hollow_knight_Data/UnitySubsystems
+GfxDevice: creating device client; threaded=1
+Direct3D:
+    Version:  Direct3D 11.0 [level 11.1]
+    Renderer: AMD Radeon RX 6500 XT (ID=0x743f)
+    Vendor:   
+    VRAM:     4050 MB
+    Driver:   32.0.21043.19003
+Begin MonoManager ReloadAssembly
+- Completed reload, in  0.358 seconds
+OnLevelWasLoaded was found on GameMap
+This message has been deprecated and will be removed in a later version of Unity.
+Add a delegate to SceneManager.sceneLoaded instead to get notifications after scene loading has completed
+
+OnLevelWasLoaded was found on PlayMakerUnity2d
+This message has been deprecated and will be removed in a later version of Unity.
+Add a delegate to SceneManager.sceneLoaded instead to get notifications after scene loading has completed
+
+D3D11 device created for Microsoft Media Foundation video decoding.
+<RI> Initializing input.
+<RI> Input initialized.
+<RI> Initialized touch support.
+The class named 'ConfigManager' is abstract. The script class can't be abstract!
+
+UnloadTime: 1.344700 ms
+Graphics tier changed to High
+
+Steam initializing
+
+Steam logged in as D.r.e.A.m.e.R
+
+Selected online subsystem SteamOnlineSubsystem
+
+Discovered supported languages: DE, EN, ES, FR, IT, JA, KO, PT, RU, ZH
+
+Unloading 5 Unused Serialized files (Serialized files now loaded: 0)
+Loaded saved language code 'RU'
+
+Restored language code 'RU'
+
+GameVersionData must be instantiated using the ScriptableObject.CreateInstance method instead of new GameVersionData.
+
+
+Unloading 362 unused Assets to reduce memory usage. Loaded Objects now: 3825.
+Total: 1.532600 ms (FindLiveObjects: 0.156400 ms CreateObjectMapping: 0.136700 ms MarkObjects: 1.073100 ms  DeleteObjects: 0.166000 ms)
+
+Steam stats received.
+
+Unloading 5 Unused Serialized files (Serialized files now loaded: 0)
+UnloadTime: 4.443600 ms
+DontDestroyOnLoad only works for root GameObjects or components on root GameObjects.
+
+Creating Mod Logger
+
+Fallback handler could not load library D:/SteamLibrary/steamapps/common/Hollow Knight/hollow_knight_Data/Mono/data-0000018F64B3D150.dll
+Coroutine couldn't be started because the the game object 'OptionsMenuScreen' is inactive!
+
+Performing automatic level start.
+
+Game controller set to None.
+
+
+Unloading 30 unused Assets to reduce memory usage. Loaded Objects now: 46362.
+Total: 129.064600 ms (FindLiveObjects: 2.075000 ms CreateObjectMapping: 1.498800 ms MarkObjects: 125.249500 ms  DeleteObjects: 0.240400 ms)
+
+Making UI menu lean.
+
+AddEventHandlerComponent: PlayMakerFixedUpdate
+
+AddEventHandlerComponent: PlayMakerFixedUpdate
+
+AddEventHandlerComponent: PlayMakerFixedUpdate
+
+AddEventHandlerComponent: PlayMakerFixedUpdate
+
+AddEventHandlerComponent: PlayMakerFixedUpdate
+
+AddEventHandlerComponent: PlayMakerFixedUpdate
+
+AddEventHandlerComponent: PlayMakerFixedUpdate
+
+AddEventHandlerComponent: PlayMakerFixedUpdate
+
+AddEventHandlerComponent: PlayMakerFixedUpdate
+
+AddEventHandlerComponent: PlayMakerFixedUpdate
+
+AddEventHandlerComponent: PlayMakerFixedUpdate
+
+AddEventHandlerComponent: PlayMakerFixedUpdate
+
+AddEventHandlerComponent: PlayMakerFixedUpdate
+
+AddEventHandlerComponent: PlayMakerFixedUpdate
+
+AddEventHandlerComponent: PlayMakerFixedUpdate
+
+AddEventHandlerComponent: PlayMakerFixedUpdate
+
+AddEventHandlerComponent: PlayMakerFixedUpdate
+
+AddEventHandlerComponent: PlayMakerFixedUpdate
+
+AddEventHandlerComponent: PlayMakerFixedUpdate
+
+AddEventHandlerComponent: PlayMakerFixedUpdate
+
+Deferring level start (marked as manual).
+
+Unloading 25 Unused Serialized files (Serialized files now loaded: 0)
+
+Unloading 80 unused Assets to reduce memory usage. Loaded Objects now: 53870.
+Total: 150.913000 ms (FindLiveObjects: 2.346000 ms CreateObjectMapping: 1.366100 ms MarkObjects: 145.734700 ms  DeleteObjects: 1.465400 ms)
+
+Achievement <b>MAP</b> can not be awarded in map zone <b>GODS_GLORY</b>
+
+Achievement <b>STAG_STATION_HALF</b> can not be awarded in map zone <b>GODS_GLORY</b>
+
+Achievement <b>GRUBFRIEND</b> can not be awarded in map zone <b>GODS_GLORY</b>
+
+Achievement <b>METAMORPHOSIS</b> can not be awarded in map zone <b>GODS_GLORY</b>
+
+Achievement <b>CHARMED</b> can not be awarded in map zone <b>GODS_GLORY</b>
+
+Achievement <b>ENCHANTED</b> can not be awarded in map zone <b>GODS_GLORY</b>
+
+Achievement <b>BLESSED</b> can not be awarded in map zone <b>GODS_GLORY</b>
+
+Achievement <b>HUNTER_1</b> can not be awarded in map zone <b>GODS_GLORY</b>
+
+Achievement <b>HUNTER_2</b> can not be awarded in map zone <b>GODS_GLORY</b>
+
+Achievement <b>SOULFUL</b> can not be awarded in map zone <b>GODS_GLORY</b>
+
+Achievement <b>WORLDSOUL</b> can not be awarded in map zone <b>GODS_GLORY</b>
+
+Achievement <b>PROTECTED</b> can not be awarded in map zone <b>GODS_GLORY</b>
+
+Achievement <b>MASKED</b> can not be awarded in map zone <b>GODS_GLORY</b>
+
+Achievement <b>ATTUNEMENT</b> can not be awarded in map zone <b>GODS_GLORY</b>
+
+Achievement <b>AWAKENING</b> can not be awarded in map zone <b>GODS_GLORY</b>
+
+Achievement <b>ASCENSION</b> can not be awarded in map zone <b>GODS_GLORY</b>
+
+Achievement <b>HORNET_1</b> can not be awarded in map zone <b>GODS_GLORY</b>
+
+Achievement <b>HORNET_2</b> can not be awarded in map zone <b>GODS_GLORY</b>
+
+Achievement <b>SOUL_MASTER_DEFEAT</b> can not be awarded in map zone <b>GODS_GLORY</b>
+
+Achievement <b>DREAM_SOUL_MASTER_DEFEAT</b> can not be awarded in map zone <b>GODS_GLORY</b>
+
+Achievement <b>BROKEN_VESSEL</b> can not be awarded in map zone <b>GODS_GLORY</b>
+
+Achievement <b>DREAM_BROKEN_VESSEL</b> can not be awarded in map zone <b>GODS_GLORY</b>
+
+Achievement <b>DUNG_DEFENDER</b> can not be awarded in map zone <b>GODS_GLORY</b>
+
+Achievement <b>DREAM_FK</b> can not be awarded in map zone <b>GODS_GLORY</b>
+
+Achievement <b>MANTIS_LORDS</b> can not be awarded in map zone <b>GODS_GLORY</b>
+
+Achievement <b>COLLECTOR</b> can not be awarded in map zone <b>GODS_GLORY</b>
+
+Achievement <b>TRAITOR_LORD</b> can not be awarded in map zone <b>GODS_GLORY</b>
+
+Achievement <b>WHITE_DEFENDER</b> can not be awarded in map zone <b>GODS_GLORY</b>
+
+Achievement <b>GREY_PRINCE</b> can not be awarded in map zone <b>GODS_GLORY</b>
+
+Achievement <b>BEAST</b> can not be awarded in map zone <b>GODS_GLORY</b>
+
+Achievement <b>WATCHER</b> can not be awarded in map zone <b>GODS_GLORY</b>
+
+Achievement <b>TEACHER</b> can not be awarded in map zone <b>GODS_GLORY</b>
+
+Achievement <b>COLOSSEUM_1</b> can not be awarded in map zone <b>GODS_GLORY</b>
+
+Achievement <b>COLOSSEUM_2</b> can not be awarded in map zone <b>GODS_GLORY</b>
+
+Achievement <b>COLOSSEUM_3</b> can not be awarded in map zone <b>GODS_GLORY</b>
+
+Achievement <b>GRIMM</b> can not be awarded in map zone <b>GODS_GLORY</b>
+
+Achievement <b>NIGHTMARE_GRIMM</b> can not be awarded in map zone <b>GODS_GLORY</b>
+
+Achievement <b>NAILSMITH_SPARE</b> can not be awarded in map zone <b>GODS_GLORY</b>
+

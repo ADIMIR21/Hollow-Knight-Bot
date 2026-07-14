@@ -1,0 +1,76 @@
+Mono path[0] = 'D:/SteamLibrary/steamapps/common/Hollow Knight/hollow_knight_Data/Managed'
+Mono config path = 'D:/SteamLibrary/steamapps/common/Hollow Knight/MonoBleedingEdge/etc'
+Initialize engine version: 2020.2.2f1 (068178b99f32)
+[Subsystems] Discovering subsystems at path D:/SteamLibrary/steamapps/common/Hollow Knight/hollow_knight_Data/UnitySubsystems
+GfxDevice: creating device client; threaded=1
+Direct3D:
+    Version:  Direct3D 11.0 [level 11.1]
+    Renderer: AMD Radeon RX 6500 XT (ID=0x743f)
+    Vendor:   
+    VRAM:     4050 MB
+    Driver:   32.0.21043.19003
+Begin MonoManager ReloadAssembly
+- Completed reload, in  0.134 seconds
+OnLevelWasLoaded was found on GameMap
+This message has been deprecated and will be removed in a later version of Unity.
+Add a delegate to SceneManager.sceneLoaded instead to get notifications after scene loading has completed
+
+OnLevelWasLoaded was found on PlayMakerUnity2d
+This message has been deprecated and will be removed in a later version of Unity.
+Add a delegate to SceneManager.sceneLoaded instead to get notifications after scene loading has completed
+
+D3D11 device created for Microsoft Media Foundation video decoding.
+<RI> Initializing input.
+<RI> Input initialized.
+<RI> Initialized touch support.
+The class named 'ConfigManager' is abstract. The script class can't be abstract!
+
+UnloadTime: 0.933400 ms
+Graphics tier changed to High
+
+Steam initializing
+
+Steam logged in as D.r.e.A.m.e.R
+
+Selected online subsystem SteamOnlineSubsystem
+
+Discovered supported languages: DE, EN, ES, FR, IT, JA, KO, PT, RU, ZH
+
+Unloading 5 Unused Serialized files (Serialized files now loaded: 0)
+Loaded saved language code 'RU'
+
+Restored language code 'RU'
+
+GameVersionData must be instantiated using the ScriptableObject.CreateInstance method instead of new GameVersionData.
+
+
+Unloading 362 unused Assets to reduce memory usage. Loaded Objects now: 3825.
+Total: 2.048800 ms (FindLiveObjects: 0.270100 ms CreateObjectMapping: 0.332200 ms MarkObjects: 1.333100 ms  DeleteObjects: 0.112800 ms)
+
+Steam stats received.
+
+Unloading 5 Unused Serialized files (Serialized files now loaded: 0)
+UnloadTime: 4.521300 ms
+DontDestroyOnLoad only works for root GameObjects or components on root GameObjects.
+
+Creating Mod Logger
+
+Fallback handler could not load library D:/SteamLibrary/steamapps/common/Hollow Knight/hollow_knight_Data/Mono/data-000001C76E9BA910.dll
+Fallback handler could not load library D:/SteamLibrary/steamapps/common/Hollow Knight/hollow_knight_Data/Mono/data-000001C7982CE9C0.dll
+Coroutine couldn't be started because the the game object 'OptionsMenuScreen' is inactive!
+
+Performing automatic level start.
+
+Game controller set to None.
+
+
+Unloading 30 unused Assets to reduce memory usage. Loaded Objects now: 46362.
+Total: 126.795800 ms (FindLiveObjects: 4.618500 ms CreateObjectMapping: 2.496200 ms MarkObjects: 119.457300 ms  DeleteObjects: 0.223300 ms)
+
+Setting up 4 worker threads for Enlighten.
+  Thread -> id: 3dcc -> priority: 1 
+  Thread -> id: 10d8 -> priority: 1 
+  Thread -> id: 2448 -> priority: 1 
+  Thread -> id: 29c8 -> priority: 1 
+Shutting down Steam API.
+

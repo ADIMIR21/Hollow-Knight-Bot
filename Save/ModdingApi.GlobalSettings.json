@@ -1,0 +1,23 @@
+{
+  "ModEnabledSettings": {},
+  "LoggingLevel": 2,
+  "ShortLoggingLevel": false,
+  "IncludeTimestamps": false,
+  "ConsoleSettings": {
+    "UseLogColors": false,
+    "FineColor": "grey",
+    "InfoColor": "white",
+    "DebugColor": "white",
+    "WarningColor": "yellow",
+    "ErrorColor": "red",
+    "DefaultColor": "white",
+    "ToggleHotkey": "F10",
+    "MaxMessageCount": 24,
+    "Font": "",
+    "FontSize": 12
+  },
+  "ShowDebugLogInGame": false,
+  "PreloadBatchSize": 5,
+  "PreloadMode": "RepackAssets",
+  "ModlogMaxAge": 7
+}
