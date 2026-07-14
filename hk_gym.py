@@ -13,6 +13,9 @@ from ai_controller import HollowKnightController
 
 SHOW_WINDOWS = True  
 
+IDEAL_DIST_MIN = 150
+IDEAL_DIST_MAX = 350
+
 class HollowKnightGym(gym.Env):
     def __init__(self):
         super().__init__()
@@ -46,6 +49,8 @@ class HollowKnightGym(gym.Env):
         self.hold_action_counter = 0
         
         self.auto_restart = False
+        self._last_episode_was_victory = False
+        self._boss_death_frames = 0
         self._running = True
         self._console_thread = threading.Thread(target=self._console_listener, daemon=True)
         self._console_thread.start()
@@ -118,25 +123,29 @@ class HollowKnightGym(gym.Env):
             
             self.controller.reset_all()
             
+            want_restart = self.auto_restart or self._last_episode_was_victory
+            
             print("[RESET] Ожидание возрождения игрока... (нажми 'r' для авто-рестарта)")
             waited_for_restart = False
-            while True:
-                _, telemetry = self.game_env.get_observation()
-                if telemetry is not None:
-                    hp = float(telemetry.get("hp", 0))
-                    if hp > 0:
-                        print("[RESET] Персонаж жив. Начинаем эпизод!")
-                        break
-                
-                if self.auto_restart:
-                    print("[RESET] Включён авто-рестарт. Переход к перезапуску боя...")
-                    waited_for_restart = True
-                    break
+            if want_restart:
+                waited_for_restart = True
+            else:
+                while True:
+                    _, telemetry = self.game_env.get_observation()
+                    if telemetry is not None:
+                        hp = float(telemetry.get("hp", 0))
+                        if hp > 0:
+                            print("[RESET] Персонаж жив. Начинаем эпизод!")
+                            break
                     
-                time.sleep(0.5)
+                    if self.auto_restart:
+                        waited_for_restart = True
+                        break
+                        
+                    time.sleep(0.5)
             
             if waited_for_restart:
-                print("[RESET] Персонаж мёртв. Запускаю макрос рестарта боя...")
+                print("[RESET] Запускаю макрос рестарта боя...")
                 time.sleep(2.0)
                 
                 self.controller.restart_boss_fight()
@@ -166,6 +175,8 @@ class HollowKnightGym(gym.Env):
             
             self.current_action = 0
             self.hold_action_counter = 0
+            self._boss_death_frames = 0
+            self._last_episode_was_victory = False
             
             return obs, {}
             
@@ -254,31 +265,42 @@ class HollowKnightGym(gym.Env):
         if current_dist < 200 and action in [4, 6, 7, 8, 9]:
             reward += 2.0
             
-        if current_boss_hp <= 0 and self.last_boss_hp > 0:
+        if current_boss_hp <= 0:
+            self._boss_death_frames += 1
+        else:
+            self._boss_death_frames = 0
+            
+        if self._boss_death_frames >= 20 and current_boss_hp <= 0:
             reward += 1000.0
             terminated = True
             self.controller.reset_all()
+            self._last_episode_was_victory = True
             
         if current_hp <= 0 and self.last_hp > 0:
             reward -= 200.0
             terminated = True
             self.controller.reset_all()
-            
-        if current_dist > 50 and self.last_dist > 50:
-            dist_delta = self.last_dist - current_dist
+        
+        dist_delta = self.last_dist - current_dist
+        
+        if IDEAL_DIST_MIN <= current_dist <= IDEAL_DIST_MAX:
+            reward += 1.5
+            if action in [4, 6, 7, 8, 9]:
+                reward += 3.0
+        elif current_dist < IDEAL_DIST_MIN:
+            too_close = IDEAL_DIST_MIN - current_dist
+            reward -= 0.02 * too_close
             if dist_delta > 0:
+                reward += 1.0
+            elif dist_delta < -0.001:
+                reward -= 1.0
+        elif current_dist > IDEAL_DIST_MAX:
+            too_far = current_dist - IDEAL_DIST_MAX
+            reward -= 0.005 * too_far
+            if dist_delta < -0.001:
                 reward += 0.5
-                if current_dist < 200:
-                    reward += 1.0
-            else:
-                reward -= 0.1
-            
-            if current_dist < 400 and action in [1, 2, 8, 9, 10, 11, 12, 13]:
-                dx_to_boss = obs["stats"][8]
-                if dx_to_boss > 0 and action in [2, 9, 11, 13]:
-                    reward += 0.3
-                elif dx_to_boss < 0 and action in [1, 8, 10, 12]:
-                    reward += 0.3
+            elif dist_delta > 0:
+                reward -= 0.2
         
         if current_dist < self.last_dist and current_dist > 100:
             reward += 0.2
@@ -298,20 +320,23 @@ class HollowKnightGym(gym.Env):
             latest_frame = obs["image"][:, :, -1]
             vision_img_display = cv2.resize(latest_frame, (256, 256), interpolation=cv2.INTER_NEAREST)
             cv2.imshow("AI Vision", vision_img_display)  
-            stats_img = np.zeros((400, 450, 3), dtype=np.uint8)
+            stats_img = np.zeros((440, 450, 3), dtype=np.uint8)
             
             dx_to_boss = obs["stats"][8]
             dy_to_boss = obs["stats"][9]
             
+            dist_color = (0, 255, 0) if IDEAL_DIST_MIN <= current_dist <= IDEAL_DIST_MAX else (0, 0, 255)
+            
             cv2.putText(stats_img, f"HP: {int(current_hp)}", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
             cv2.putText(stats_img, f"Boss HP: {int(current_boss_hp)}", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
             cv2.putText(stats_img, f"Mana: {int(current_mana)}", (20, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
-            cv2.putText(stats_img, f"Dist: {current_dist:.1f}", (20, 160), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-            cv2.putText(stats_img, f"Dir: ({dx_to_boss:.2f}, {dy_to_boss:.2f})", (20, 200), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 255), 2)
-            cv2.putText(stats_img, f"Reward: {reward:.1f}", (20, 240), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-            cv2.putText(stats_img, f"Step: {self.episode_step} / 2500", (20, 280), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (200, 200, 200), 2)
-            cv2.putText(stats_img, f"FPS: {fps:.1f}", (20, 320), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 0, 255), 2)
-            cv2.putText(stats_img, f"AutoReset: {'ON' if self.auto_restart else 'OFF'}", (20, 360), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255) if self.auto_restart else (100, 100, 100), 2)
+            cv2.putText(stats_img, f"Dist: {current_dist:.1f}", (20, 160), cv2.FONT_HERSHEY_SIMPLEX, 0.8, dist_color, 2)
+            cv2.putText(stats_img, f"Zone: {IDEAL_DIST_MIN}-{IDEAL_DIST_MAX}", (20, 200), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+            cv2.putText(stats_img, f"Dir: ({dx_to_boss:.2f}, {dy_to_boss:.2f})", (20, 240), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 255), 2)
+            cv2.putText(stats_img, f"Reward: {reward:.1f}", (20, 280), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+            cv2.putText(stats_img, f"Step: {self.episode_step} / 2500", (20, 320), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (200, 200, 200), 2)
+            cv2.putText(stats_img, f"FPS: {fps:.1f}", (20, 360), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 0, 255), 2)
+            cv2.putText(stats_img, f"AutoReset: {'ON' if self.auto_restart else 'OFF'}", (20, 400), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255) if self.auto_restart else (100, 100, 100), 2)
             
             cv2.imshow("AI Dashboard", stats_img)
             cv2.waitKey(1) 
