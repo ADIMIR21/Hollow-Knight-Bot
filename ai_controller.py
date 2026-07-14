@@ -51,7 +51,6 @@ class HollowKnightController:
                 self.gamepad.left_joystick_float(x_value_float=1.0, y_value_float=0.0)
                 self.gamepad.press_button(button=self.buttons["dash"])
             elif action_id == 14:
-                # больше не используется
                 pass
             elif action_id == 15:
                 self.gamepad.press_button(button=self.buttons["jump"])
