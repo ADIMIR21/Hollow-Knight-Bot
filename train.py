@@ -8,13 +8,11 @@ LOGS_DIR = "logs"
 
 LOAD_MODEL_NAME = "hk_model_final"
 
-
 if not os.path.exists(MODELS_DIR):
     os.makedirs(MODELS_DIR)
 if not os.path.exists(LOGS_DIR):
     os.makedirs(LOGS_DIR)
 
-# 1. СОЗДАЕМ СВОЙ ПЕРЕХВАТЧИК СОБЫТИЙ
 class ResetAfterUpdateCallback(BaseCallback):
     def __init__(self, verbose=0):
         super().__init__(verbose)
@@ -23,7 +21,7 @@ class ResetAfterUpdateCallback(BaseCallback):
         return True 
     
     def _on_rollout_start(self) -> None:
-        print("\n[СИСТЕМА] Мозги обновлены (Таблица выведена). Ща все будет...")
+        print("\n[СИСТЕМА] Мозги обновлены. Ща все будет...")
 
         new_obs = self.training_env.reset()
         self.model._last_obs = new_obs
@@ -35,8 +33,24 @@ def main():
     model_path = f"{MODELS_DIR}/{LOAD_MODEL_NAME}.zip"
 
     if os.path.exists(model_path):
-        print(f"\n[СИСТЕМА] Найдено сохранение: {LOAD_MODEL_NAME}. Загружаю прошлое сохранение...")
-        model = PPO.load(model_path, env=env)
+        print(f"\n[СИСТЕМА] Найдено сохранение: {LOAD_MODEL_NAME}. Загружаю...")
+        try:
+            model = PPO.load(model_path, env=env)
+            print("[СИСТЕМА] Модель успешно загружена.")
+        except Exception as e:
+            print(f"[СИСТЕМА] Ошибка загрузки модели: {e}")
+            print("[СИСТЕМА] Создаю новую модель с нуля...")
+            model = PPO(
+                "MultiInputPolicy", 
+                env, 
+                verbose=1, 
+                tensorboard_log=LOGS_DIR,
+                learning_rate=0.0003,
+                n_steps=4096,      
+                batch_size=256,   
+                n_epochs=8,        
+                ent_coef=0.02,    
+            )
     else:
         print("\n[СИСТЕМА] Сохранение не найдено. Создаю новое с нуля...")
         model = PPO(
@@ -44,7 +58,6 @@ def main():
             env, 
             verbose=1, 
             tensorboard_log=LOGS_DIR,
-
             learning_rate=0.0003,
             n_steps=4096,      
             batch_size=256,   
@@ -52,7 +65,6 @@ def main():
             ent_coef=0.02,    
         )
 
-    #автосохранение
     checkpoint_callback = CheckpointCallback(
         save_freq=20000, 
         save_path=MODELS_DIR,

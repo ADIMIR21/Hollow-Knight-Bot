@@ -17,7 +17,6 @@ class ScreenCaptureAgent:
         self.update_window_position()
 
     def update_window_position(self):
-        """Находит окно игры в системе и обновляет координаты для захвата"""
         try:
             windows = gw.getWindowsWithTitle(self.window_title)
             

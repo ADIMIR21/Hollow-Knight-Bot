@@ -6,7 +6,6 @@ import tempfile
 
 FILE_PATH = os.path.join(tempfile.gettempdir(), "hk_ai_data.json")
 
-
 print(f"Следим за файлом: {FILE_PATH}")
 print("Для выхода нажмите Ctrl + C\n")
 
@@ -32,7 +31,6 @@ try:
             continue
 
         try:
-            # Читаем файл
             with open(FILE_PATH, 'r', encoding='utf-8') as f:
                 content = f.read()
                 if old_content == content:
@@ -41,7 +39,6 @@ try:
                     continue
                 old_content = content
             
-            # Если пустой файл
             if not content.strip():
                 print(f"[{attempt}] Файл пустой, скорее всего (попали в момент перезаписи C#)")
                 time.sleep(0.02)
@@ -58,7 +55,6 @@ try:
                 print(f"[{attempt}] текст успели вытащить: {content}")
 
         except PermissionError:
-
             print(f"[{attempt}] Файл занят игрой")
             time.sleep(0.01) 
 

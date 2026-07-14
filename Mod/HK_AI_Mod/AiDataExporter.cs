@@ -52,19 +52,27 @@ namespace HK_AI_Mod
 
                     if (_currentBoss == null || _currentBoss.hp <= 0)
                     {
+                        HealthManager bestCandidate = null;
+                        int bestHp = 0;
+                        
                         foreach (HealthManager hm in GameObject.FindObjectsOfType<HealthManager>())
                         {
-                            if (hm.hp > 200) 
+                            int bossCandidateHp = hm.hp;
+                            if (bossCandidateHp > 20 && bossCandidateHp > bestHp)
                             {
-                                _currentBoss = hm;
-                                break;
+                                bestCandidate = hm;
+                                bestHp = bossCandidateHp;
                             }
                         }
+                        
+                        _currentBoss = bestCandidate;
                     }
 
                     int bossHp = _currentBoss != null ? _currentBoss.hp : 0;
+                    float bossX = _currentBoss != null ? _currentBoss.transform.position.x : 0f;
+                    float bossY = _currentBoss != null ? _currentBoss.transform.position.y : 0f;
 
-                    string data = $"{{\"hp\": {hp}, \"mana\": {mana}, \"boss_hp\": {bossHp}, \"x\": {x.ToString("F2", CultureInfo.InvariantCulture)}, \"y\": {y.ToString("F2", CultureInfo.InvariantCulture)}}}";
+                    string data = $"{{\"hp\": {hp}, \"mana\": {mana}, \"boss_hp\": {bossHp}, \"x\": {x.ToString("F2", CultureInfo.InvariantCulture)}, \"y\": {y.ToString("F2", CultureInfo.InvariantCulture)}, \"boss_x\": {bossX.ToString("F2", CultureInfo.InvariantCulture)}, \"boss_y\": {bossY.ToString("F2", CultureInfo.InvariantCulture)}}}";
                     
                     WriteSafe(data);
                 }

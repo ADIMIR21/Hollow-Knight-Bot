@@ -18,7 +18,7 @@ class HollowKnightEnv:
 
     def get_telemetry(self):
         if not os.path.exists(PATH_TO_TELEMETRY):
-            return {"hp": 9, "mana": 0, "boss_hp": 0, "x": 0.0, "y": 0.0, "status": "no_file"}
+            return None
         try:
             with open(PATH_TO_TELEMETRY, 'r') as f:
                 return json.load(f)
@@ -39,7 +39,7 @@ def main():
         cv2.resizeWindow(window_name, AI_VISION_SIZE[0], AI_VISION_SIZE[1])
         print("[СИСТЕМА] Предпросмотр ВКЛЮЧЕН. Нажми 'q' в окне трансляции для выхода.")
     else:
-        print("[СИСТЕМА] Предпросмотр ВЫКЛЮЧЕН. Скрипт работает в фоновом режиме. Нажми Ctrl+C в консоли для выхода.")
+        print("[СИСТЕМА] Предпросмотр ВЫКЛЮЧЕН. Нажми Ctrl+C в консоли для выхода.")
     
     last_x, last_y = 0.0, 0.0
     last_hp, last_mana, last_boss_hp = 0, 0, 0

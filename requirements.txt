@@ -1,0 +1,8 @@
+vgamepad>=0.1.0
+gymnasium>=0.29.0
+numpy>=1.24.0
+opencv-python>=4.8.0
+mss>=9.0.0
+pygetwindow>=0.0.9
+stable-baselines3>=2.0.0
+tensorboard>=2.0.0

@@ -3,6 +3,8 @@ from gymnasium import spaces
 import numpy as np
 import time
 import cv2
+import threading
+import sys
 from collections import deque 
 
 from ai_environment import HollowKnightEnv
@@ -17,19 +19,51 @@ class HollowKnightGym(gym.Env):
         self.game_env = HollowKnightEnv()
         self.controller = HollowKnightController()
         
-        self.action_space = spaces.Discrete(6)
+        self.action_space = spaces.Discrete(16)
         
         self.observation_space = spaces.Dict({
             "image": spaces.Box(low=0, high=255, shape=(84, 84, 4), dtype=np.uint8),
-            "stats": spaces.Box(low=0, high=2000, shape=(3,), dtype=np.float32) 
+            "stats": spaces.Box(low=0, high=5000, shape=(8,), dtype=np.float32)
         })
         
         self.last_hp = 9
         self.last_boss_hp = 0
+        self.last_x = 0.0
+        self.last_y = 0.0
+        self.last_boss_x = 0.0
+        self.last_boss_y = 0.0
+        self.last_dist = 0.0
         self.episode_step = 0
         self.last_time = time.time()
         
         self.frames = deque([np.zeros((84, 84), dtype=np.uint8) for _ in range(4)], maxlen=4)
+        
+        self.auto_restart = False
+        self._running = True
+        self._console_thread = threading.Thread(target=self._console_listener, daemon=True)
+        self._console_thread.start()
+        
+    def _console_listener(self):
+        while self._running:
+            try:
+                cmd = sys.stdin.readline().strip().lower()
+                if cmd == 'r':
+                    self.auto_restart = True
+                    print("\n[КОНСОЛЬ] АВТО-РЕСТАРТ ВКЛЮЧЁН. После смерти бой будет перезапускаться.")
+                elif cmd == 's':
+                    self.auto_restart = False
+                    print("\n[КОНСОЛЬ] АВТО-РЕСТАРТ ВЫКЛЮЧЕН. После смерти обучение остановится.")
+                elif cmd == 'q':
+                    print("\n[КОНСОЛЬ] Выход по запросу...")
+                    self._running = False
+                    import os
+                    os._exit(0)
+            except (EOFError, ValueError):
+                time.sleep(0.1)
+                
+    def close(self):
+        self._running = False
+        super().close()
         
     def _get_obs(self):
         frame, telemetry = self.game_env.get_observation()
@@ -43,19 +77,29 @@ class HollowKnightGym(gym.Env):
         
         stacked_image = np.stack(self.frames, axis=-1)
         
-        hp = self.last_hp
-        boss_hp = self.last_boss_hp
+        hp = float(self.last_hp)
+        boss_hp = float(self.last_boss_hp)
         mana = 0.0
+        x = self.last_x
+        y = self.last_y
+        boss_x = self.last_boss_x
+        boss_y = self.last_boss_y
         
         if telemetry is not None and "hp" in telemetry:
             hp = float(telemetry.get("hp", hp))
             mana = float(telemetry.get("mana", mana))
+            x = float(telemetry.get("x", x))
+            y = float(telemetry.get("y", y))
+            boss_x = float(telemetry.get("boss_x", boss_x))
+            boss_y = float(telemetry.get("boss_y", boss_y))
             
             new_boss_hp = float(telemetry.get("boss_hp", boss_hp))
-            if new_boss_hp > 0 or (new_boss_hp == 0 and self.last_boss_hp < 50): 
+            if new_boss_hp > 0:
                 boss_hp = new_boss_hp
-
-        stats = np.array([hp, mana, boss_hp], dtype=np.float32)
+        
+        dist_to_boss = np.sqrt((x - boss_x)**2 + (y - boss_y)**2)
+        
+        stats = np.array([hp, mana, boss_hp, x, y, boss_x, boss_y, dist_to_boss], dtype=np.float32)
         return {"image": stacked_image, "stats": stats}
 
     def reset(self, seed=None, options=None):
@@ -63,40 +107,79 @@ class HollowKnightGym(gym.Env):
             
             self.controller.reset_all()
             
-            print("[RESET] Проверка арены...")
+            # Универсальный цикл ожидания: ждём пока персонаж оживёт,
+            # либо пока пользователь не включит auto_restart (клавиша 'r')
+            print("[RESET] Ожидание возрождения игрока... (нажми 'r' для авто-рестарта)")
+            waited_for_restart = False
             while True:
                 _, telemetry = self.game_env.get_observation()
+                if telemetry is not None:
+                    hp = float(telemetry.get("hp", 0))
+                    if hp > 0:
+                        print("[RESET] Персонаж жив. Начинаем эпизод!")
+                        break
                 
+                # Если пользователь включил auto_restart во время ожидания — выходим из цикла
+                if self.auto_restart:
+                    print("[RESET] Включён авто-рестарт. Переход к перезапуску боя...")
+                    waited_for_restart = True
+                    break
+                    
+                time.sleep(0.5)
+            
+            if waited_for_restart:
+                print("[RESET] Проверка арены...")
+                time.sleep(2.0)
+                
+                _, telemetry = self.game_env.get_observation()
                 check_boss_hp = 0.0
                 if telemetry is not None:
                     check_boss_hp = float(telemetry.get("boss_hp", 0))
-                    
+                
                 if check_boss_hp <= 0:
-                    print("[RESET] Пуста арена. Начинаем рестарт!")
-                    break 
-
-                print(f"[RESET] Босс еще жив (HP: {check_boss_hp}). Ждем...")
-                time.sleep(1.0) 
-
-            time.sleep(5.0) 
+                    print(f"[RESET] Арена пуста (Boss HP={check_boss_hp}). Запускаю макрос рестарта!")
+                    time.sleep(3.0)
+                    self.controller.restart_boss_fight()
+                    time.sleep(4.0)
+                else:
+                    print(f"[RESET] Босс жив (HP={check_boss_hp}). Продолжаем бой!")
+                    time.sleep(1.0)
+            else:
+                # Персонаж сам ожил (например, после победы или возрождения без рестарта)
+                time.sleep(1.0)
             
-            self.controller.restart_boss_fight()
-            time.sleep(4.0) 
-            
-            frame, _ = self.game_env.get_observation()
-            frame_84 = cv2.resize(frame, (84, 84), interpolation=cv2.INTER_AREA)
-            if len(frame_84.shape) == 3:
-                frame_84 = cv2.cvtColor(frame_84, cv2.COLOR_BGR2GRAY)      
-            for _ in range(4):
-                self.frames.append(frame_84) 
+            self._init_frames()
+            time.sleep(1.0)  # даём время сцене загрузиться
             obs = self._get_obs()
             self.last_hp = obs["stats"][0]
-            self.last_boss_hp = obs["stats"][2]
+            # boss_hp может быть 0 пока босс не появился, не помечаем это как победу
+            self.last_boss_hp = max(obs["stats"][2], 99999)  # временно высокое значение
+            # после первого step'а last_boss_hp обновится корректно
+            self.last_x = obs["stats"][3]
+            self.last_y = obs["stats"][4]
+            self.last_boss_x = obs["stats"][5]
+            self.last_boss_y = obs["stats"][6]
+            self.last_dist = obs["stats"][7]
+            
+            # принудительно обновим telemetry при старте
+            frame, telemetry = self.game_env.get_observation()
+            if telemetry is not None:
+                boss_hp_val = float(telemetry.get("boss_hp", 0))
+                if boss_hp_val > 0:
+                    self.last_boss_hp = boss_hp_val
             
             self.episode_step = 0
             self.last_time = time.time()
             
             return obs, {}
+            
+    def _init_frames(self):
+        frame, _ = self.game_env.get_observation()
+        frame_84 = cv2.resize(frame, (84, 84), interpolation=cv2.INTER_AREA)
+        if len(frame_84.shape) == 3:
+            frame_84 = cv2.cvtColor(frame_84, cv2.COLOR_BGR2GRAY)
+        for _ in range(4):
+            self.frames.append(frame_84)
 
     def step(self, action):
         self.controller.set_action(action)
@@ -105,8 +188,13 @@ class HollowKnightGym(gym.Env):
         obs = self._get_obs()
         
         current_hp = obs["stats"][0]
-        current_boss_hp = obs["stats"][2]
         current_mana = obs["stats"][1]
+        current_boss_hp = obs["stats"][2]
+        current_x = obs["stats"][3]
+        current_y = obs["stats"][4]
+        current_boss_x = obs["stats"][5]
+        current_boss_y = obs["stats"][6]
+        current_dist = obs["stats"][7]
         
         reward = 0.0
         terminated = False
@@ -119,51 +207,64 @@ class HollowKnightGym(gym.Env):
         fps = 1.0 / (time_since_last_step + 0.0001)
         self.last_time = current_time
 
-
         if self.episode_step > 2500:
             truncated = True
             self.controller.reset_all()
 
-        reward -= 0.1 
+        reward -= 0.05
         
-        
-        #ИИ ударил босса 
         if current_boss_hp < self.last_boss_hp:
             damage_dealt = self.last_boss_hp - current_boss_hp
-            reward += (damage_dealt * 3.0)
+            reward += (damage_dealt * 15.0)
             
-
+            if action in [4, 6, 7, 8, 9]:
+                reward += 5.0
+                
         if current_hp < self.last_hp:
-            reward -= 250.0
+            reward -= 50.0
             
+        if action in [1, 2, 5, 10, 11, 12, 13] and current_hp >= self.last_hp:
+            reward += 0.5
             
-        # Босс убит 
+        if current_dist < 200 and action in [4, 6, 7, 8, 9]:
+            reward += 2.0
+            
+        # action 14 (focus) отключён
         if current_boss_hp <= 0 and self.last_boss_hp > 0:
-            reward += 1000.0
+            reward += 500.0
             terminated = True
             self.controller.reset_all()
             
-        #ИИ умер
         if current_hp <= 0 and self.last_hp > 0:
-            reward -= 700.0
+            reward -= 150.0
             terminated = True
             self.controller.reset_all()
+            
+        if current_dist < self.last_dist and current_dist > 100:
+            reward += 0.2
             
         self.last_hp = current_hp
         self.last_boss_hp = current_boss_hp
+        self.last_x = current_x
+        self.last_y = current_y
+        self.last_boss_x = current_boss_x
+        self.last_boss_y = current_boss_y
+        self.last_dist = current_dist
         
         if SHOW_WINDOWS:      
             latest_frame = obs["image"][:, :, -1]
             vision_img_display = cv2.resize(latest_frame, (256, 256), interpolation=cv2.INTER_NEAREST)
             cv2.imshow("AI Vision", vision_img_display)  
-            stats_img = np.zeros((300, 400, 3), dtype=np.uint8)
+            stats_img = np.zeros((360, 450, 3), dtype=np.uint8)
             
             cv2.putText(stats_img, f"HP: {int(current_hp)}", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
             cv2.putText(stats_img, f"Boss HP: {int(current_boss_hp)}", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
             cv2.putText(stats_img, f"Mana: {int(current_mana)}", (20, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
-            cv2.putText(stats_img, f"Reward: {reward:.1f}", (20, 160), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-            cv2.putText(stats_img, f"Step: {self.episode_step} / 2500", (20, 200), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (200, 200, 200), 2)
-            cv2.putText(stats_img, f"FPS: {fps:.1f}", (20, 240), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 0, 255), 2)
+            cv2.putText(stats_img, f"Dist: {current_dist:.1f}", (20, 160), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+            cv2.putText(stats_img, f"Reward: {reward:.1f}", (20, 200), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+            cv2.putText(stats_img, f"Step: {self.episode_step} / 2500", (20, 240), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (200, 200, 200), 2)
+            cv2.putText(stats_img, f"FPS: {fps:.1f}", (20, 280), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 0, 255), 2)
+            cv2.putText(stats_img, f"AutoReset: {'ON' if self.auto_restart else 'OFF'}", (20, 320), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255) if self.auto_restart else (100, 100, 100), 2)
             
             cv2.imshow("AI Dashboard", stats_img)
             cv2.waitKey(1) 
