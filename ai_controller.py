@@ -6,7 +6,7 @@ class HollowKnightController:
         print("[CONTROLLER] Подключаем геймпад...")
         self.gamepad = vg.VX360Gamepad()
         
-        time.sleep(2.0) 
+        time.sleep(2.0)
         print("[CONTROLLER] Геймпад Xbox 360 подключился)!")
         
         self.buttons = {
@@ -68,7 +68,7 @@ class HollowKnightController:
         print("[СИСТЕМА] Запускаем макрос перезапуска боя...")
         
         self.reset_all()
-        time.sleep(6.0) 
+        time.sleep(6.0)
 
         self.gamepad.press_button(button=self.buttons["jump"])
         self.gamepad.update()
@@ -76,21 +76,21 @@ class HollowKnightController:
         self.reset_all()
         self.gamepad.release_button(button=self.buttons["jump"])
         self.gamepad.update()
-        time.sleep(4.0) 
+        time.sleep(4.0)
         self.reset_all()
         
         self.gamepad.left_joystick_float(x_value_float=0.0, y_value_float=1.0)
         self.gamepad.update()
-        time.sleep(0.2) 
+        time.sleep(0.2)
         self.reset_all()
         
-        time.sleep(2.0) 
+        time.sleep(2.0)
 
         self.reset_all()
         self.gamepad.press_button(button=self.buttons["jump"])
         self.gamepad.update()
         
-        time.sleep(0.6) 
+        time.sleep(0.6)
 
         self.reset_all()
         
@@ -103,15 +103,15 @@ if __name__ == "__main__":
     time.sleep(5)
     
     print("Идем вправо...")
-    ctrl.set_action(2) 
+    ctrl.set_action(2)
     time.sleep(0.5)
     
     print("Прыгаем в движении!")
-    ctrl.set_action(3) 
+    ctrl.set_action(3)
     time.sleep(0.3)
     
     print("Рывок!")
-    ctrl.set_action(5) 
+    ctrl.set_action(5)
     time.sleep(0.2)
     
     print("Остановка.")

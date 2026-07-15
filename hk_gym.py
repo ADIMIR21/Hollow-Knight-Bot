@@ -52,6 +52,7 @@ class HollowKnightGym(gym.Env):
         self._last_episode_was_victory = False
         self._boss_death_frames = 0
         self._running = True
+        self._first_reset = True
         self._console_thread = threading.Thread(target=self._console_listener, daemon=True)
         self._console_thread.start()
         
@@ -121,35 +122,42 @@ class HollowKnightGym(gym.Env):
             
             self.controller.reset_all()
             
-            want_restart = self.auto_restart or self._last_episode_was_victory
-            
-            print("[RESET] Ожидание возрождения игрока... (нажми 'r' для авто-рестарта)")
-            waited_for_restart = False
-            if want_restart:
-                waited_for_restart = True
-            else:
-                while True:
-                    _, telemetry = self.game_env.get_observation()
-                    if telemetry is not None:
-                        hp = float(telemetry.get("hp", 0))
-                        if hp > 0:
-                            print("[RESET] Персонаж жив. Начинаем эпизод!")
-                            break
-                    
-                    if self.auto_restart:
-                        waited_for_restart = True
-                        break
-                        
-                    time.sleep(0.5)
-            
-            if waited_for_restart:
-                print("[RESET] Запускаю макрос рестарта боя...")
+            if self._first_reset:
+                self._first_reset = False
+                print("[RESET] Первый запуск. Ожидаю загрузку игры...")
                 time.sleep(5.0)
-                
+                print("[RESET] Запускаю макрос рестарта боя...")
                 self.controller.restart_boss_fight()
-                time.sleep(4.0)
             else:
-                time.sleep(1.0)
+                want_restart = self.auto_restart or self._last_episode_was_victory
+                
+                print("[RESET] Ожидание возрождения игрока... (нажми 'r' для авто-рестарта)")
+                waited_for_restart = False
+                if want_restart:
+                    waited_for_restart = True
+                else:
+                    while True:
+                        _, telemetry = self.game_env.get_observation()
+                        if telemetry is not None:
+                            hp = float(telemetry.get("hp", 0))
+                            if hp > 0:
+                                print("[RESET] Персонаж жив. Начинаем эпизод!")
+                                break
+                        
+                        if self.auto_restart:
+                            waited_for_restart = True
+                            break
+                            
+                        time.sleep(0.5)
+                
+                if waited_for_restart:
+                    print("[RESET] Запускаю макрос рестарта боя...")
+                    time.sleep(5.0)
+                    
+                    self.controller.restart_boss_fight()
+                    time.sleep(4.0)
+                else:
+                    time.sleep(1.0)
             
             self._init_frames()
             time.sleep(1.0)
