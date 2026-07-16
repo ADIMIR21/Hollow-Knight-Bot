@@ -128,6 +128,9 @@ class HollowKnightGym(gym.Env):
                 time.sleep(5.0)
                 print("[RESET] Запускаю макрос рестарта боя...")
                 self.controller.restart_boss_fight()
+                
+                print("[RESET] Ожидание стабилизации игры после макроса...")
+                time.sleep(2.0)
             else:
                 want_restart = self.auto_restart or self._last_episode_was_victory
                 
@@ -136,19 +139,29 @@ class HollowKnightGym(gym.Env):
                 if want_restart:
                     waited_for_restart = True
                 else:
-                    while True:
+                    print("[RESET] Ожидание выхода из паузы и обновления данных...")
+                    time.sleep(1.5)
+                    
+                    for attempt in range(20):
                         _, telemetry = self.game_env.get_observation()
                         if telemetry is not None:
                             hp = float(telemetry.get("hp", 0))
+                            print(f"[RESET] Попытка {attempt+1}: telemetry получена, hp={hp}")
                             if hp > 0:
                                 print("[RESET] Персонаж жив. Начинаем эпизод!")
                                 break
+                        else:
+                            print(f"[RESET] Попытка {attempt+1}: telemetry = None")
                         
                         if self.auto_restart:
+                            print("[RESET] Активирован авто-рестарт во время ожидания")
                             waited_for_restart = True
                             break
                             
                         time.sleep(0.5)
+                    else:
+                        print("[RESET] Персонаж не появился после 10 секунд. Запускаю макрос рестарта...")
+                        waited_for_restart = True
                 
                 if waited_for_restart:
                     print("[RESET] Запускаю макрос рестарта боя...")
