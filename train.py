@@ -2,6 +2,7 @@ import os
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import CheckpointCallback, BaseCallback, CallbackList
 from hk_gym import HollowKnightGym
+from ai_controller import HollowKnightController
 
 MODELS_DIR = "models/ppo_hk"
 LOGS_DIR = "logs"
@@ -13,18 +14,25 @@ if not os.path.exists(MODELS_DIR):
 if not os.path.exists(LOGS_DIR):
     os.makedirs(LOGS_DIR)
 
-class ResetAfterUpdateCallback(BaseCallback):
-    def __init__(self, verbose=0):
+
+class PauseCallback(BaseCallback):
+    def __init__(self, controller: HollowKnightController, verbose=0):
         super().__init__(verbose)
+        self.controller = controller
 
     def _on_step(self) -> bool:
-        return True 
-    
-    def _on_rollout_start(self) -> None:
-        print("\n[СИСТЕМА] Мозги обновлены. Ща все будет...")
+        return True
 
-        new_obs = self.training_env.reset()
-        self.model._last_obs = new_obs
+    def _on_rollout_end(self) -> bool:
+        print("\n[PAUSE_CALLBACK] Сбор данных завершён. Ставлю на паузу перед обучением...")
+        self.controller.toggle_pause()
+        return True
+
+    def _on_rollout_start(self) -> bool:
+        print("\n[PAUSE_CALLBACK] Обучение завершено. Снимаю с паузы...")
+        self.controller.toggle_pause()
+        return True
+
 
 def main():
     print("Создание среды ХК...")
@@ -70,10 +78,11 @@ def main():
         save_path=MODELS_DIR,
         name_prefix="hk_night_run"
     )
+
+    controller = HollowKnightController()
+    pause_callback = PauseCallback(controller=controller)
     
-    reset_callback = ResetAfterUpdateCallback()
-    
-    callback_list = CallbackList([checkpoint_callback, reset_callback])
+    callback_list = CallbackList([checkpoint_callback, pause_callback])
 
     print("\n[СИСТЕМА] ИИ готов к обучению.")
     print("Через 10 сек начнется")

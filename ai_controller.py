@@ -1,5 +1,6 @@
 import vgamepad as vg
 import time
+import pyautogui
 
 class HollowKnightController:
     def __init__(self):
@@ -13,7 +14,8 @@ class HollowKnightController:
             "jump": vg.XUSB_BUTTON.XUSB_GAMEPAD_A,
             "attack": vg.XUSB_BUTTON.XUSB_GAMEPAD_X,
             "focus": vg.XUSB_BUTTON.XUSB_GAMEPAD_B,
-            "dash": vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_SHOULDER
+            "dash": vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_SHOULDER,
+            "pause": vg.XUSB_BUTTON.XUSB_GAMEPAD_START
         }
 
     def set_action(self, action_id):
@@ -63,6 +65,14 @@ class HollowKnightController:
         for btn in self.buttons.values():
             self.gamepad.release_button(button=btn)
         self.gamepad.update()
+
+    def toggle_pause(self):
+        print("[CONTROLLER] Пауза через Escape...")
+        self.reset_all()
+        time.sleep(0.1)
+        pyautogui.press('esc')
+        time.sleep(0.5)
+        print("[CONTROLLER] Escape нажат.")
 
     def restart_boss_fight(self):
         print("[СИСТЕМА] Запускаем макрос перезапуска боя...")
