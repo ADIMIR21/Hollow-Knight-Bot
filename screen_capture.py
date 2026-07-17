@@ -4,6 +4,7 @@ import numpy as np
 import time
 import pygetwindow as gw  
 
+USE_SCREEN_CAPTURE = False
 AI_VISION_SIZE = (256, 256)
 
 class ScreenCaptureAgent:
