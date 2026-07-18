@@ -159,6 +159,10 @@ class HollowKnightGym(gym.Env):
                 self._first_reset = False
                 print("[RESET] Первый запуск. Ожидаю загрузку игры...")
                 time.sleep(5.0)
+                print("[RESET] Прыжок поднятия игрока...")
+                self.controller.set_action(3)
+                time.sleep(3.0)
+                self.controller.reset_all()
                 print("[RESET] Запускаю макрос рестарта боя...")
                 self.controller.restart_boss_fight()
                 
