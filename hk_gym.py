@@ -14,9 +14,6 @@ from screen_capture import USE_SCREEN_CAPTURE
 
 SHOW_WINDOWS = True  
 
-IDEAL_DIST_MIN = 150
-IDEAL_DIST_MAX = 350
-
 STATS_SIZE = 25
 
 class HollowKnightGym(gym.Env):
@@ -295,9 +292,9 @@ class HollowKnightGym(gym.Env):
             "was_hit": 0.0,
             "movement": 0.0,
             "melee_attack": 0.0,
+            "missed_attack": 0.0,
             "victory": 0.0,
             "death": 0.0,
-            "distance_zone": 0.0,
             "dodge": 0.0,
             "survival": 0.0,
         }
@@ -318,7 +315,9 @@ class HollowKnightGym(gym.Env):
         reward -= 0.05
         reward_parts["step_penalty"] -= 0.05
 
-        if current_boss_hp < self.last_boss_hp and self.last_boss_hp > 0:
+        boss_took_damage = current_boss_hp < self.last_boss_hp and self.last_boss_hp > 0
+
+        if boss_took_damage:
             damage_dealt = self.last_boss_hp - current_boss_hp
             dmg_reward = damage_dealt * 15.0
             reward += dmg_reward
@@ -333,12 +332,17 @@ class HollowKnightGym(gym.Env):
             reward += 0.15
             reward_parts["movement"] += 0.15
 
-        if current_dist < 200 and action in [4, 6, 7, 8, 9] and boss_is_attacking < 0.5:
-            reward += 2.0
-            reward_parts["melee_attack"] += 2.0
-        elif current_dist < 200 and action in [4, 8, 9] and boss_is_attacking > 0.5:
-            reward -= 4.0
-            reward_parts["melee_attack"] -= 4.0
+        is_attack_action = action in [4, 6, 7, 8, 9]
+        if is_attack_action:
+            if boss_took_damage and current_dist < 200 and boss_is_attacking < 0.5:
+                reward += 2.0
+                reward_parts["melee_attack"] += 2.0
+            elif not boss_took_damage and current_dist < 200 and boss_is_attacking < 0.5:
+                reward -= 0.2
+                reward_parts["missed_attack"] -= 0.2
+            elif current_dist < 200 and action in [4, 8, 9] and boss_is_attacking > 0.5:
+                reward -= 4.0
+                reward_parts["melee_attack"] -= 4.0
 
         if current_boss_hp <= 0:
             self._boss_death_frames += 1
@@ -357,35 +361,6 @@ class HollowKnightGym(gym.Env):
             reward_parts["death"] -= 200.0
             terminated = True
             self.controller.reset_all()
-
-        dist_delta = self.last_dist - current_dist
-        
-        if IDEAL_DIST_MIN <= current_dist <= IDEAL_DIST_MAX:
-            reward += 1.5
-            reward_parts["distance_zone"] += 1.5
-            if action in [4, 6, 7, 8, 9] and boss_is_attacking < 0.5:
-                reward += 3.0
-                reward_parts["distance_zone"] += 3.0
-        elif current_dist < IDEAL_DIST_MIN:
-            too_close = min(IDEAL_DIST_MIN - current_dist, 150.0)
-            reward -= 0.02 * too_close
-            reward_parts["distance_zone"] -= 0.02 * too_close
-            if dist_delta > 0:
-                reward += 1.0
-                reward_parts["distance_zone"] += 1.0
-            elif dist_delta < -0.001:
-                reward -= 1.0
-                reward_parts["distance_zone"] -= 1.0
-        elif current_dist > IDEAL_DIST_MAX:
-            too_far = min(current_dist - IDEAL_DIST_MAX, 400.0)
-            reward -= 0.005 * too_far
-            reward_parts["distance_zone"] -= 0.005 * too_far
-            if dist_delta < -0.001:
-                reward += 0.5
-                reward_parts["distance_zone"] += 0.5
-            elif dist_delta > 0:
-                reward -= 0.2
-                reward_parts["distance_zone"] -= 0.2
 
         is_sprinting = abs(vel_x) > 6.0
         is_dodging_action = is_dashing > 0.5 or is_jumping > 0.5 or is_sprinting
@@ -453,22 +428,20 @@ class HollowKnightGym(gym.Env):
         if SHOW_WINDOWS:
             stats_img = np.zeros((520, 500, 3), dtype=np.uint8)
             
-            dist_color = (0, 255, 0) if IDEAL_DIST_MIN <= current_dist <= IDEAL_DIST_MAX else (0, 0, 255)
             attack_color = (0, 255, 255) if boss_is_attacking > 0.5 else (100, 100, 100)
             dodge_color = (0, 255, 0) if self._dodged_attack_this_phase else (100, 100, 100)
             
             cv2.putText(stats_img, f"HP: {int(current_hp)}", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
             cv2.putText(stats_img, f"Boss HP: {int(current_boss_hp)}", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
             cv2.putText(stats_img, f"Mana: {int(current_mana)}", (20, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
-            cv2.putText(stats_img, f"Dist: {current_dist:.1f}", (20, 160), cv2.FONT_HERSHEY_SIMPLEX, 0.8, dist_color, 2)
-            cv2.putText(stats_img, f"Zone: {IDEAL_DIST_MIN}-{IDEAL_DIST_MAX}", (20, 200), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-            cv2.putText(stats_img, f"Vel: ({vel_x:.1f}, {vel_y:.1f})", (20, 240), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 255), 2)
-            cv2.putText(stats_img, f"Boss Attack: {'YES' if boss_is_attacking > 0.5 else 'no'}", (20, 280), cv2.FONT_HERSHEY_SIMPLEX, 0.7, attack_color, 2)
-            cv2.putText(stats_img, f"Dodged: {'YES' if self._dodged_attack_this_phase else 'no'}", (20, 320), cv2.FONT_HERSHEY_SIMPLEX, 0.7, dodge_color, 2)
-            cv2.putText(stats_img, f"Reward: {reward:.1f}", (20, 360), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-            cv2.putText(stats_img, f"Step: {self.episode_step} / 3000", (20, 400), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (200, 200, 200), 2)
-            cv2.putText(stats_img, f"FPS: {fps:.1f}", (20, 440), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 0, 255), 2)
-            cv2.putText(stats_img, f"AutoReset: {'ON' if self.auto_restart else 'OFF'}", (20, 480), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255) if self.auto_restart else (100, 100, 100), 2)
+            cv2.putText(stats_img, f"Dist: {current_dist:.1f}", (20, 160), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+            cv2.putText(stats_img, f"Vel: ({vel_x:.1f}, {vel_y:.1f})", (20, 200), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 255), 2)
+            cv2.putText(stats_img, f"Boss Attack: {'YES' if boss_is_attacking > 0.5 else 'no'}", (20, 240), cv2.FONT_HERSHEY_SIMPLEX, 0.7, attack_color, 2)
+            cv2.putText(stats_img, f"Dodged: {'YES' if self._dodged_attack_this_phase else 'no'}", (20, 280), cv2.FONT_HERSHEY_SIMPLEX, 0.7, dodge_color, 2)
+            cv2.putText(stats_img, f"Reward: {reward:.1f}", (20, 320), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+            cv2.putText(stats_img, f"Step: {self.episode_step} / 3000", (20, 360), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (200, 200, 200), 2)
+            cv2.putText(stats_img, f"FPS: {fps:.1f}", (20, 400), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 0, 255), 2)
+            cv2.putText(stats_img, f"AutoReset: {'ON' if self.auto_restart else 'OFF'}", (20, 440), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255) if self.auto_restart else (100, 100, 100), 2)
             
             cv2.imshow("AI Dashboard", stats_img)
             cv2.waitKey(1) 
