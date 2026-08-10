@@ -73,7 +73,7 @@
 - **Modding API** для Hollow Knight (установлен)
 - **Python 3.10+**
 - **.NET Framework 4.7.2** (для сборки мода)
-- **(Scarab)[https://github.com/fifty-six/Scarab]** (мод-менеджер)
+- **[Scarab](https://github.com/fifty-six/Scarab)** (мод-менеджер)
 
 ### Установка Python-зависимостей
 
