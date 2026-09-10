@@ -7,14 +7,26 @@ import threading
 import sys
 from collections import deque 
 import math
+import os
 
 from ai_environment import HollowKnightEnv
 from ai_controller import HollowKnightController
 from screen_capture import USE_SCREEN_CAPTURE
 
-SHOW_WINDOWS = True  
+SHOW_WINDOWS = False
 
-STATS_SIZE = 25
+STAT_NAMES = [
+    "hp", "mana", "boss_hp", "x", "y", "boss_x", "boss_y",
+    "dist_to_boss", "dx_to_boss", "dy_to_boss",
+    "vel_x", "vel_y", "boss_vel_x", "boss_vel_y",
+    "grounded", "facing_right", "boss_facing_right",
+    "is_attacking", "is_dashing", "is_jumping", "is_falling", "is_recoiling",
+    "boss_is_attacking", "near_hazard", "was_hit"
+]
+IDX = {name: i for i, name in enumerate(STAT_NAMES)}
+STATS_SIZE = len(STAT_NAMES)
+
+BOSS_SCENE = os.environ.get("HK_BOSS_SCENE", "GG_False_Knight")
 
 class HollowKnightGym(gym.Env):
     def __init__(self):
@@ -22,6 +34,7 @@ class HollowKnightGym(gym.Env):
         
         self.game_env = HollowKnightEnv()
         self.controller = HollowKnightController()
+        self.controller.set_boss_scene(BOSS_SCENE)
         
         self.action_space = spaces.Discrete(16)
         
@@ -42,6 +55,9 @@ class HollowKnightGym(gym.Env):
         self.episode_step = 0
         self.last_time = time.time()
         
+        self._hit_counter = None
+        self._damage_total = None
+        
         self._boss_attack_active = False
         self._dodged_attack_this_phase = False
         self._consecutive_dodges = 0
@@ -52,7 +68,7 @@ class HollowKnightGym(gym.Env):
         self.current_action = 0
         self.hold_action_counter = 0
         
-        self.auto_restart = False
+        self.auto_restart = True
         self._last_episode_was_victory = False
         self._boss_death_frames = 0
         self._running = True
@@ -150,6 +166,62 @@ class HollowKnightGym(gym.Env):
         
         return stats
 
+    def _read_counters(self, telemetry):
+        new_hits = 0
+        new_damage = 0.0
+        use_fallback = True
+        if telemetry is not None and "hit_counter" in telemetry:
+            use_fallback = False
+            hc = int(telemetry.get("hit_counter", 0))
+            dt = float(telemetry.get("boss_damage_total", 0.0))
+            if self._hit_counter is not None:
+                new_hits = max(0, hc - self._hit_counter)
+                new_damage = max(0.0, dt - self._damage_total)
+            self._hit_counter = hc
+            self._damage_total = dt
+        return new_hits, new_damage, use_fallback
+
+    def _try_fast_restart(self):
+        telemetry = self.game_env.get_telemetry()
+        if telemetry is None or "restart_pending" not in telemetry:
+            print("[RESET] Мод без поддержки быстрого рестарта, будет использован макрос.")
+            return False
+        
+        self.controller.request_fast_restart()
+        
+        deadline = time.time() + 5.0
+        accepted = False
+        while time.time() < deadline:
+            time.sleep(0.2)
+            telemetry = self.game_env.get_telemetry()
+            if not self.controller.fast_restart_available():
+                accepted = True
+                break
+            if telemetry is not None and telemetry.get("restart_pending", 0) == 1:
+                accepted = True
+                break
+        
+        if not accepted:
+            print("[RESET] Мод не подтвердил команду рестарта. Фолбэк на макрос.")
+            return False
+        
+        print("[RESET] Быстрый рестарт принят, жду загрузку сцены боя...")
+        deadline = time.time() + 25.0
+        while time.time() < deadline:
+            time.sleep(0.3)
+            telemetry = self.game_env.get_telemetry()
+            if (telemetry is not None
+                    and telemetry.get("status") == "fight"
+                    and telemetry.get("restart_pending", 0) == 0
+                    and float(telemetry.get("hp", 0)) > 0
+                    and float(telemetry.get("boss_hp", 0)) > 0):
+                time.sleep(0.5)
+                print("[RESET] Бой перезапущен.")
+                return True
+        
+        print("[RESET] Сцена боя не поднялась за отведённое время. Фолбэк на макрос.")
+        return False
+
     def reset(self, seed=None, options=None):
             super().reset(seed=seed)
             
@@ -171,53 +243,59 @@ class HollowKnightGym(gym.Env):
             else:
                 want_restart = self.auto_restart or self._last_episode_was_victory
                 
-                print("[RESET] Ожидание возрождения игрока... (нажми 'r' для авто-рестарта)")
-                waited_for_restart = False
-                if want_restart:
-                    waited_for_restart = True
+                if want_restart and self._try_fast_restart():
+                    pass
                 else:
-                    print("[RESET] Ожидание выхода из паузы и обновления данных...")
-                    time.sleep(1.5)
-                    
-                    for attempt in range(20):
-                        _, telemetry = self.game_env.get_observation()
-                        if telemetry is not None:
-                            hp = float(telemetry.get("hp", 0))
-                            print(f"[RESET] Попытка {attempt+1}: telemetry получена, hp={hp}")
-                            if hp > 0:
-                                print("[RESET] Персонаж жив. Начинаем эпизод!")
-                                break
-                        else:
-                            print(f"[RESET] Попытка {attempt+1}: telemetry = None")
-                        
-                        if self.auto_restart:
-                            print("[RESET] Активирован авто-рестарт во время ожидания")
-                            waited_for_restart = True
-                            break
-                            
-                        time.sleep(0.5)
-                    else:
-                        print("[RESET] Персонаж не появился после 10 секунд. Запускаю макрос рестарта...")
+                    print("[RESET] Ожидание возрождения игрока... (нажми 'r' для авто-рестарта)")
+                    waited_for_restart = False
+                    if want_restart:
                         waited_for_restart = True
-                
-                if waited_for_restart:
-                    print("[RESET] Запускаю макрос рестарта боя...")
-                    time.sleep(5.0)
+                    else:
+                        print("[RESET] Ожидание выхода из паузы и обновления данных...")
+                        time.sleep(1.5)
+                        
+                        for attempt in range(20):
+                            _, telemetry = self.game_env.get_observation()
+                            if telemetry is not None:
+                                hp = float(telemetry.get("hp", 0))
+                                print(f"[RESET] Попытка {attempt+1}: telemetry получена, hp={hp}")
+                                if hp > 0:
+                                    print("[RESET] Персонаж жив. Начинаем эпизод!")
+                                    break
+                            else:
+                                print(f"[RESET] Попытка {attempt+1}: telemetry = None")
+                            
+                            if self.auto_restart:
+                                print("[RESET] Активирован авто-рестарт во время ожидания")
+                                waited_for_restart = True
+                                break
+                                
+                            time.sleep(0.5)
+                        else:
+                            print("[RESET] Персонаж не появился после 10 секунд. Запускаю макрос рестарта...")
+                            waited_for_restart = True
                     
-                    self.controller.restart_boss_fight()
-                    time.sleep(4.0)
-                else:
-                    time.sleep(1.0)
+                    if waited_for_restart:
+                        print("[RESET] Запускаю макрос рестарта боя...")
+                        time.sleep(5.0)
+                        
+                        self.controller.restart_boss_fight()
+                        time.sleep(4.0)
+                    else:
+                        time.sleep(1.0)
             
             time.sleep(1.0)
             obs = self._get_obs()
-            self.last_hp = obs[0]
-            self.last_boss_hp = obs[2]
-            self.last_x = obs[3]
-            self.last_y = obs[4]
-            self.last_boss_x = obs[5]
-            self.last_boss_y = obs[6]
-            self.last_dist = obs[7]
+            self.last_hp = obs[IDX["hp"]]
+            self.last_boss_hp = obs[IDX["boss_hp"]]
+            self.last_x = obs[IDX["x"]]
+            self.last_y = obs[IDX["y"]]
+            self.last_boss_x = obs[IDX["boss_x"]]
+            self.last_boss_y = obs[IDX["boss_y"]]
+            self.last_dist = obs[IDX["dist_to_boss"]]
+            
+            _, telemetry = self.game_env.get_observation()
+            self._read_counters(telemetry)
             
             self.episode_step = 0
             self.last_time = time.time()
@@ -269,25 +347,27 @@ class HollowKnightGym(gym.Env):
             time.sleep(0.01)
         
         obs = self._get_obs()
+        _, telemetry = self.game_env.get_observation()
+        new_hits, new_damage, use_fallback = self._read_counters(telemetry)
         
-        current_hp = obs[0]
-        current_mana = obs[1]
-        current_boss_hp = obs[2]
-        current_x = obs[3]
-        current_y = obs[4]
-        current_boss_x = obs[5]
-        current_boss_y = obs[6]
-        current_dist = obs[7]
+        current_hp = obs[IDX["hp"]]
+        current_mana = obs[IDX["mana"]]
+        current_boss_hp = obs[IDX["boss_hp"]]
+        current_x = obs[IDX["x"]]
+        current_y = obs[IDX["y"]]
+        current_boss_x = obs[IDX["boss_x"]]
+        current_boss_y = obs[IDX["boss_y"]]
+        current_dist = obs[IDX["dist_to_boss"]]
         
-        vel_x = obs[10]
-        vel_y = obs[11]
-        grounded = obs[14]
-        is_dashing = obs[18]
-        is_jumping = obs[19]
-        is_recoiling = obs[21]
-        boss_is_attacking = obs[22]
-        near_hazard = obs[23]
-        was_hit = obs[24]
+        vel_x = obs[IDX["vel_x"]]
+        vel_y = obs[IDX["vel_y"]]
+        grounded = obs[IDX["grounded"]]
+        is_dashing = obs[IDX["is_dashing"]]
+        is_jumping = obs[IDX["is_jumping"]]
+        is_recoiling = obs[IDX["is_recoiling"]]
+        boss_is_attacking = obs[IDX["boss_is_attacking"]]
+        near_hazard = obs[IDX["near_hazard"]]
+        was_hit = obs[IDX["was_hit"]]
         
         reward = 0.0
         reward_parts = {
@@ -319,20 +399,25 @@ class HollowKnightGym(gym.Env):
         reward -= 0.05
         reward_parts["step_penalty"] -= 0.05
 
-        boss_took_damage = current_boss_hp < self.last_boss_hp and self.last_boss_hp > 0
+        if use_fallback:
+            boss_took_damage = current_boss_hp < self.last_boss_hp and self.last_boss_hp > 0
+            got_hit = was_hit > 0.5
+        else:
+            boss_took_damage = new_damage > 0.0
+            got_hit = new_hits > 0
 
         if boss_took_damage:
-            damage_dealt = self.last_boss_hp - current_boss_hp
+            damage_dealt = new_damage if not use_fallback else (self.last_boss_hp - current_boss_hp)
             dmg_reward = damage_dealt * 15.0
             reward += dmg_reward
             reward_parts["boss_damage"] += dmg_reward
 
-        if was_hit > 0.5:
+        if got_hit:
             reward -= 100.0
             reward_parts["was_hit"] -= 100.0
             self._times_hit += 1
 
-        if action in [1, 2, 5, 10, 11, 12, 13] and was_hit < 0.5:
+        if action in [1, 2, 5, 10, 11, 12, 13] and not got_hit:
             reward += 0.15
             reward_parts["movement"] += 0.15
 
@@ -379,7 +464,7 @@ class HollowKnightGym(gym.Env):
         if self._boss_attack_active:
             self._dodge_check_frames += 1
             
-            if not self._dodged_attack_this_phase and was_hit < 0.5 and is_dodging_action:
+            if not self._dodged_attack_this_phase and not got_hit and is_dodging_action:
                 reward += 20.0
                 reward_parts["dodge"] += 20.0
                 self._dodged_attack_this_phase = True
@@ -393,18 +478,18 @@ class HollowKnightGym(gym.Env):
                     reward += 8.0
                     reward_parts["dodge"] += 8.0
             
-            if not is_dodging_action and was_hit < 0.5 and grounded > 0.5 and self._dodge_check_frames > 2:
+            if not is_dodging_action and not got_hit and grounded > 0.5 and self._dodge_check_frames > 2:
                 reward -= 8.0
                 reward_parts["dodge"] -= 8.0
             
-            if was_hit > 0.5:
+            if got_hit:
                 reward -= 60.0
                 reward_parts["dodge"] -= 60.0
                 self._consecutive_dodges = 0
         
         if boss_is_attacking < 0.5 and self._boss_attack_active:
             self._boss_attack_active = False
-            if not self._dodged_attack_this_phase and was_hit < 0.5:
+            if not self._dodged_attack_this_phase and not got_hit:
                 if near_hazard < 0.5:
                     reward += 5.0
                     reward_parts["dodge"] += 5.0
@@ -414,7 +499,7 @@ class HollowKnightGym(gym.Env):
                     reward_parts["dodge"] -= 3.0
             self._consecutive_dodges = 0
 
-        if was_hit < 0.5 and self.episode_step % 50 == 0:
+        if not got_hit and self.episode_step % 50 == 0:
             reward += 1.0
             reward_parts["survival"] += 1.0
 
@@ -425,9 +510,9 @@ class HollowKnightGym(gym.Env):
         self.last_boss_x = current_boss_x
         self.last_boss_y = current_boss_y
         self.last_dist = current_dist
-        self.last_dx_to_boss = obs[8]
-        self.last_dy_to_boss = obs[9]
-        self.last_angle_to_boss = math.atan2(obs[9], obs[8])
+        self.last_dx_to_boss = obs[IDX["dx_to_boss"]]
+        self.last_dy_to_boss = obs[IDX["dy_to_boss"]]
+        self.last_angle_to_boss = math.atan2(obs[IDX["dy_to_boss"]], obs[IDX["dx_to_boss"]])
         
         if SHOW_WINDOWS:
             stats_img = np.zeros((520, 500, 3), dtype=np.uint8)
