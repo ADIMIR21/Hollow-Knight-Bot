@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Globalization;
 using System.Collections.Generic;
@@ -9,7 +9,7 @@ namespace HK_AI_Mod
 {
     public class AiDataExporter : Mod
     {
-        public override string GetVersion() => "2.2";
+        public override string GetVersion() => "1.0";
 
         private string _filePath = "";
         private string _cmdPath = "";
@@ -31,6 +31,9 @@ namespace HK_AI_Mod
         private const int ATTACK_STICKY_MIN_FRAMES = 2;
 
         private bool _restartPending = false;
+        private bool _inMenuScene = true;
+        private float _timeScaleWatchdog = 0f;
+        private bool _timeScaleFixed = false;
         private const string DEFAULT_BOSS_SCENE = "GG_False_Knight";
 
         public override void Initialize()
@@ -41,22 +44,33 @@ namespace HK_AI_Mod
 
             UnityEngine.SceneManagement.SceneManager.activeSceneChanged += (oldScene, newScene) =>
             {
-                if (newScene.name != null && newScene.name.Contains("Menu"))
-                    WriteSafe("{\"status\": \"main_menu\"}");
+                bool isMenu = newScene.name != null && newScene.name.Contains("Menu");
+                _inMenuScene = isMenu;
+                if (isMenu)
+                    WriteSafe(StatusJson("main_menu"));
                 else
                 {
                     _currentBoss = null;
                     _restartPending = false;
                     _lastBossHpKnown = 0;
-                    WriteSafe("{\"status\": \"loading_scene\"}");
+                    if (_timeScaleWatchdog > 0f)
+                        _timeScaleWatchdog = 1.5f;
+                    WriteSafe(StatusJson("loading_scene"));
                 }
             };
+
+            try { if (File.Exists(_cmdPath)) File.Delete(_cmdPath); } catch (Exception) {}
+
+            var host = new GameObject("HK_AI_Mod_Host");
+            UnityEngine.Object.DontDestroyOnLoad(host);
+            var ticker = host.AddComponent<AiModTicker>();
+            ticker.OnTick += OnTick;
 
             ModHooks.HeroUpdateHook += OnHeroUpdate;
             Application.quitting += OnGameQuitting;
 
-            WriteSafe("{\"status\": \"initialized\"}");
-            Log($"ИИ Экспортер 2.2 работает! Файл: {_filePath}");
+            WriteSafe(StatusJson("initialized"));
+            Log($"ИИ Экспортер 1.0 работает! Файл: {_filePath}");
         }
 
         private string ReadTargetScene()
@@ -74,6 +88,34 @@ namespace HK_AI_Mod
             return DEFAULT_BOSS_SCENE;
         }
 
+        private void OnTick(float unscaledDelta)
+        {
+            PollCommand();
+            TimeScaleWatchdogTick(unscaledDelta);
+        }
+
+        private void TimeScaleWatchdogTick(float unscaledDelta)
+        {
+            if (_timeScaleFixed || _timeScaleWatchdog <= 0f) return;
+
+            _timeScaleWatchdog -= unscaledDelta;
+            if (_timeScaleWatchdog > 0f) return;
+
+            try
+            {
+                if (_inMenuScene || GameManager.instance == null) return;
+                if (GameManager.instance.IsInSceneTransition) return;
+
+                if (Time.timeScale <= 0f)
+                {
+                    Time.timeScale = 1f;
+                    Log("[ИИ] Время стояло на месте после рестарта — вернул timeScale=1");
+                }
+                _timeScaleFixed = true;
+            }
+            catch (Exception) {}
+        }
+
         private void PollCommand()
         {
             try
@@ -83,26 +125,66 @@ namespace HK_AI_Mod
                     _restartPending = false;
                     return;
                 }
+                if (_inMenuScene) return;
+
                 string cmd = File.ReadAllText(_cmdPath).Trim().ToLower();
-                if (cmd == "restart" && !_restartPending)
+                if (cmd != "restart")
                 {
-                    _restartPending = true;
-                    string targetScene = ReadTargetScene();
-                    Log($"[ИИ] Быстрый рестарт: переход в сцену '{targetScene}'");
-                    GameManager.instance.BeginSceneTransition(new GameManager.SceneLoadInfo
-                    {
-                        SceneName = targetScene,
-                        EntryGateName = "door1",
-                        Visualization = GameManager.SceneLoadVisualizations.GodsAndGlory,
-                        AlwaysUnloadUnusedAssets = false
-                    });
-                    File.Delete(_cmdPath);
+                    TryDeleteCmd();
+                    return;
                 }
+                if (_restartPending)
+                {
+                    TryDeleteCmd();
+                    return;
+                }
+                _restartPending = true;
+                string targetScene = ReadTargetScene();
+                Log($"[ИИ] Быстрый рестарт: переход в сцену '{targetScene}'");
+
+                _timeScaleWatchdog = 30f;
+                _timeScaleFixed = false;
+
+                GameManager.instance.BeginSceneTransition(new GameManager.SceneLoadInfo
+                {
+                    SceneName = targetScene,
+                    EntryGateName = "door1",
+                    PreventCameraFadeOut = true,
+                    WaitForSceneTransitionCameraFade = false,
+                    Visualization = GameManager.SceneLoadVisualizations.Default,
+                    AlwaysUnloadUnusedAssets = false
+                });
+                TryDeleteCmd();
             }
             catch (Exception e)
             {
                 Log($"[ИИ] Ошибка команды рестарта: {e}");
             }
+        }
+
+        private void TryDeleteCmd()
+        {
+            for (int attempt = 0; attempt < 3; attempt++)
+            {
+                try
+                {
+                    File.Delete(_cmdPath);
+                    return;
+                }
+                catch (IOException)
+                {
+                    System.Threading.Thread.Sleep(30);
+                }
+                catch (Exception)
+                {
+                    return;
+                }
+            }
+        }
+
+        private string StatusJson(string status)
+        {
+            return "{\"status\": \"" + status + "\", \"restart_pending\": " + (_restartPending ? 1 : 0) + "}";
         }
 
         private bool IsAttackAnimation(string animName)
@@ -359,9 +441,9 @@ namespace HK_AI_Mod
                     WriteSafe(data);
                 }
             }
-            catch (Exception) 
-            { 
-                WriteSafe("{\"status\": \"waiting_for_hero_body\"}");
+            catch (Exception)
+            {
+                WriteSafe(StatusJson("waiting_for_hero_body"));
             }
         }
 
@@ -389,10 +471,21 @@ namespace HK_AI_Mod
             {
                 if (!string.IsNullOrEmpty(_filePath) && File.Exists(_filePath))
                 {
-                    File.Delete(_filePath); 
+                    File.Delete(_filePath);
                 }
             }
             catch (Exception){}
+        }
+    }
+
+    public class AiModTicker : MonoBehaviour
+    {
+        public event Action<float> OnTick;
+
+        private void Update()
+        {
+            var handler = OnTick;
+            if (handler != null) handler(Time.unscaledDeltaTime);
         }
     }
 }
