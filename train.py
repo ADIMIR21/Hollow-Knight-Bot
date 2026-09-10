@@ -1,8 +1,12 @@
 import os
+import time
+
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import CheckpointCallback, BaseCallback, CallbackList
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
+from stable_baselines3.common.type_aliases import Schedule
+
 from hk_gym import HollowKnightGym
 from ai_controller import HollowKnightController
 
@@ -16,6 +20,12 @@ if not os.path.exists(MODELS_DIR):
     os.makedirs(MODELS_DIR)
 if not os.path.exists(LOGS_DIR):
     os.makedirs(LOGS_DIR)
+
+
+def linear_schedule(initial_value: float) -> Schedule:
+    def func(progress_remaining: float) -> float:
+        return progress_remaining * initial_value
+    return func
 
 
 class RewardComponentLoggingCallback(BaseCallback):
@@ -77,15 +87,15 @@ class PauseCallback(BaseCallback):
 
 def make_model(env):
     return PPO(
-        "MlpPolicy", 
-        env, 
-        verbose=1, 
+        "MlpPolicy",
+        env,
+        verbose=1,
         tensorboard_log=LOGS_DIR,
-        learning_rate=0.0003,
+        learning_rate=linear_schedule(3e-4),
         n_steps=2048,
         batch_size=128,
-        n_epochs=10,           
-        ent_coef=0.03,
+        n_epochs=10,
+        ent_coef=0.01,
         clip_range=0.2,
         gae_lambda=0.95,
         gamma=0.99,
@@ -96,42 +106,51 @@ def make_model(env):
     )
 
 
+def load_compatible_vecnorm(vec_env):
+    if not os.path.exists(VECNORM_PATH):
+        return fresh_vecnorm(vec_env)
+    try:
+        loaded = VecNormalize.load(VECNORM_PATH, vec_env)
+        obs_dim = vec_env.observation_space.shape[0]
+        if loaded.obs_rms is not None and loaded.obs_rms.mean.shape[0] != obs_dim:
+            print(f"[СИСТЕМА] vecnormalize.pkl от другого пространства наблюдений "
+                  f"({loaded.obs_rms.mean.shape[0]} != {obs_dim}). Начинаю нормализацию заново.")
+            return fresh_vecnorm(vec_env)
+        loaded.training = True
+        loaded.norm_reward = False
+        print(f"\n[СИСТЕМА] Восстанавливаю статистику нормализации: {VECNORM_PATH}")
+        return loaded
+    except Exception as e:
+        print(f"[СИСТЕМА] Не удалось загрузить vecnormalize.pkl: {e}. Начинаю нормализацию заново.")
+        return fresh_vecnorm(vec_env)
+
+
+def fresh_vecnorm(vec_env):
+    return VecNormalize(
+        vec_env,
+        norm_obs=True,
+        norm_reward=False,
+        clip_obs=10.0,
+        gamma=0.99,
+    )
+
+
 def main():
     print("Создание среды ХК...")
     raw_env = HollowKnightGym()
     monitored_env = Monitor(raw_env)
-    vec_env = DummyVecEnv([lambda: monitored_env])
+    base_vec_env = DummyVecEnv([lambda: monitored_env])
 
     model_path = f"{MODELS_DIR}/{LOAD_MODEL_NAME}.zip"
     have_saved_model = os.path.exists(model_path)
-    have_saved_vecnorm = os.path.exists(VECNORM_PATH)
 
-    if have_saved_model and have_saved_vecnorm:
-        print(f"\n[СИСТЕМА] Восстанавливаю статистику нормализации: {VECNORM_PATH}")
-        vec_env = VecNormalize.load(VECNORM_PATH, vec_env)
-        vec_env.training = True
-        vec_env.norm_reward = True
-    else:
-        vec_env = VecNormalize(
-            vec_env,
-            norm_obs=True,
-            norm_reward=True,
-            clip_obs=10.0,
-            clip_reward=10.0,
-            gamma=0.99,
-        )
-        if have_saved_model and not have_saved_vecnorm:
-            print("[СИСТЕМА] WARNING: есть сохранённая модель, но нет vecnormalize.pkl.")
-            print("[СИСТЕМА] Нормализация начнётся с нуля - первые roll-out'ы после")
-            print("[СИСТЕМА] загрузки могут быть нестабильны, пока статистика не наберётся.")
+    vec_env = load_compatible_vecnorm(base_vec_env)
 
     if have_saved_model:
         print(f"\n[СИСТЕМА] Найдено сохранение: {LOAD_MODEL_NAME}. Загружаю...")
         try:
             model = PPO.load(model_path, env=vec_env)
             print("[СИСТЕМА] Модель успешно загружена.")
-            print("[СИСТЕМА] WARNING: старая модель сохранена с MultiInputPolicy.")
-            print("[СИСТЕМА] Рекомендуется удалить старую модель и создать новую.")
         except Exception as e:
             print(f"[СИСТЕМА] Ошибка загрузки модели: {e}")
             print("[СИСТЕМА] Создаю новую модель с нуля...")
@@ -141,7 +160,7 @@ def main():
         model = make_model(vec_env)
 
     checkpoint_callback = CheckpointCallback(
-        save_freq=20000, 
+        save_freq=20000,
         save_path=MODELS_DIR,
         name_prefix="hk_night_run"
     )
@@ -162,16 +181,15 @@ def main():
 
     print("\n[СИСТЕМА] ИИ готов к обучению.")
     print("Через 10 сек начнется")
-    import time
     time.sleep(10)
     print("ПОЕХАЛИ!\n")
 
     try:
         model.learn(total_timesteps=2000000, reset_num_timesteps=False, callback=callback_list)
-        
+
     except KeyboardInterrupt:
         print("\n[СИСТЕМА] Обучение прервано. Сохраняю че получилось...")
-    
+
     finally:
         final_save_path = f"{MODELS_DIR}/hk_model_final"
         model.save(final_save_path)
