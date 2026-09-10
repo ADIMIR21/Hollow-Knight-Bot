@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO;
 using System.Globalization;
 using System.Collections.Generic;
@@ -302,11 +302,16 @@ namespace HK_AI_Mod
         {
             try
             {
-                using (FileStream fs = new FileStream(_filePath, FileMode.Create, FileAccess.Write, FileShare.ReadWrite))
+                string tmpPath = _filePath + ".tmp";
+                using (FileStream fs = new FileStream(tmpPath, FileMode.Create, FileAccess.Write, FileShare.ReadWrite))
                 using (StreamWriter sw = new StreamWriter(fs))
                 {
                     sw.Write(json);
                 }
+                if (File.Exists(_filePath))
+                    File.Replace(tmpPath, _filePath, null);
+                else
+                    File.Move(tmpPath, _filePath);
             }
             catch (Exception) {}
         }
