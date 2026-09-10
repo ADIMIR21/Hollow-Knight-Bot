@@ -9,14 +9,19 @@ namespace HK_AI_Mod
 {
     public class AiDataExporter : Mod
     {
-        public override string GetVersion() => "2.1"; 
+        public override string GetVersion() => "2.2";
 
         private string _filePath = "";
+        private string _cmdPath = "";
+        private string _sceneConfigPath = "";
         private int _frameCounter = 0;
-        
+
         private HealthManager? _currentBoss = null;
         private int _lastPlayerHp = 9;
-        
+        private long _hitCounter = 0;
+        private long _bossDamageTotal = 0;
+        private int _lastBossHpKnown = 0;
+
         private float _lastBossVelX = 0f;
         private float _lastBossVelY = 0f;
 
@@ -25,17 +30,24 @@ namespace HK_AI_Mod
         private int _attackStickyFrames = 0;
         private const int ATTACK_STICKY_MIN_FRAMES = 2;
 
+        private bool _restartPending = false;
+        private const string DEFAULT_BOSS_SCENE = "GG_False_Knight";
+
         public override void Initialize()
         {
             _filePath = Path.Combine(Path.GetTempPath(), "hk_ai_data.json");
+            _cmdPath = Path.Combine(Path.GetTempPath(), "hk_ai_cmd.txt");
+            _sceneConfigPath = Path.Combine(Path.GetTempPath(), "hk_ai_boss.txt");
 
-            UnityEngine.SceneManagement.SceneManager.activeSceneChanged += (oldScene, newScene) => 
+            UnityEngine.SceneManagement.SceneManager.activeSceneChanged += (oldScene, newScene) =>
             {
                 if (newScene.name != null && newScene.name.Contains("Menu"))
                     WriteSafe("{\"status\": \"main_menu\"}");
                 else
                 {
                     _currentBoss = null;
+                    _restartPending = false;
+                    _lastBossHpKnown = 0;
                     WriteSafe("{\"status\": \"loading_scene\"}");
                 }
             };
@@ -44,7 +56,53 @@ namespace HK_AI_Mod
             Application.quitting += OnGameQuitting;
 
             WriteSafe("{\"status\": \"initialized\"}");
-            Log($"ИИ Экспортер 2.1 работает! Файл: {_filePath}");
+            Log($"ИИ Экспортер 2.2 работает! Файл: {_filePath}");
+        }
+
+        private string ReadTargetScene()
+        {
+            try
+            {
+                if (File.Exists(_sceneConfigPath))
+                {
+                    string scene = File.ReadAllText(_sceneConfigPath).Trim();
+                    if (!string.IsNullOrEmpty(scene))
+                        return scene;
+                }
+            }
+            catch (Exception) {}
+            return DEFAULT_BOSS_SCENE;
+        }
+
+        private void PollCommand()
+        {
+            try
+            {
+                if (!File.Exists(_cmdPath))
+                {
+                    _restartPending = false;
+                    return;
+                }
+                string cmd = File.ReadAllText(_cmdPath).Trim().ToLower();
+                if (cmd == "restart" && !_restartPending)
+                {
+                    _restartPending = true;
+                    string targetScene = ReadTargetScene();
+                    Log($"[ИИ] Быстрый рестарт: переход в сцену '{targetScene}'");
+                    GameManager.instance.BeginSceneTransition(new GameManager.SceneLoadInfo
+                    {
+                        SceneName = targetScene,
+                        EntryGateName = "door1",
+                        Visualization = GameManager.SceneLoadVisualizations.GodsAndGlory,
+                        AlwaysUnloadUnusedAssets = false
+                    });
+                    File.Delete(_cmdPath);
+                }
+            }
+            catch (Exception e)
+            {
+                Log($"[ИИ] Ошибка команды рестарта: {e}");
+            }
         }
 
         private bool IsAttackAnimation(string animName)
@@ -123,6 +181,8 @@ namespace HK_AI_Mod
             if (_frameCounter < 3) return;
             _frameCounter = 0;
 
+            PollCommand();
+
             try
             {
                 if (HeroController.instance != null && PlayerData.instance != null && !HeroController.instance.cState.transitioning)
@@ -146,6 +206,7 @@ namespace HK_AI_Mod
                     bool is_dead = hero.cState.dead;
                     
                     bool was_hit = hp < _lastPlayerHp;
+                    if (was_hit) _hitCounter++;
                     _lastPlayerHp = hp;
                     
                     if (_currentBoss == null || _currentBoss.hp <= 0 || _currentBoss.isDead)
@@ -166,9 +227,13 @@ namespace HK_AI_Mod
                         _currentBoss = bestCandidate;
                         _lastBossVelX = 0f;
                         _lastBossVelY = 0f;
+                        _lastBossHpKnown = bestHp;
                     }
 
                     int bossHp = _currentBoss != null ? _currentBoss.hp : 0;
+                    if (_lastBossHpKnown > bossHp)
+                        _bossDamageTotal += _lastBossHpKnown - bossHp;
+                    _lastBossHpKnown = bossHp;
                     float bossX = _currentBoss != null ? _currentBoss.transform.position.x : 0f;
                     float bossY = _currentBoss != null ? _currentBoss.transform.position.y : 0f;
                     
@@ -265,7 +330,7 @@ namespace HK_AI_Mod
                         boss_is_attacking = true;
                     }
 
-                    string data = $"{{\"hp\": {hp}, \"mana\": {mana}, \"boss_hp\": {bossHp}, " +
+                    string data = $"{{\"status\": \"fight\", \"restart_pending\": {(_restartPending ? 1 : 0)}, \"hp\": {hp}, \"mana\": {mana}, \"boss_hp\": {bossHp}, " +
                         $"\"x\": {x.ToString("F2", CultureInfo.InvariantCulture)}, " +
                         $"\"y\": {y.ToString("F2", CultureInfo.InvariantCulture)}, " +
                         $"\"boss_x\": {bossX.ToString("F2", CultureInfo.InvariantCulture)}, " +
@@ -284,6 +349,8 @@ namespace HK_AI_Mod
                         $"\"is_recoiling\": {(is_recoiling ? 1 : 0)}, " +
                         $"\"is_dead\": {(is_dead ? 1 : 0)}, " +
                         $"\"was_hit\": {(was_hit ? 1 : 0)}, " +
+                        $"\"hit_counter\": {_hitCounter}, " +
+                        $"\"boss_damage_total\": {_bossDamageTotal}, " +
                         $"\"boss_is_attacking\": {(boss_is_attacking ? 1 : 0)}, " +
                         $"\"near_hazard\": {(near_hazard ? 1 : 0)}, " +
                         $"\"boss_state\": \"{boss_state}\"" +
