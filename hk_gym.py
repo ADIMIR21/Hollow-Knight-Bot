@@ -27,6 +27,8 @@ IDX = {name: i for i, name in enumerate(STAT_NAMES)}
 STATS_SIZE = len(STAT_NAMES)
 
 BOSS_SCENE = os.environ.get("HK_BOSS_SCENE", "GG_False_Knight")
+FRAME_SKIP = max(1, int(os.environ.get("HK_FRAME_SKIP", "4")))
+FRAME_STACK = max(1, int(os.environ.get("HK_FRAME_STACK", "4")))
 
 class HollowKnightGym(gym.Env):
     def __init__(self):
@@ -39,8 +41,10 @@ class HollowKnightGym(gym.Env):
         self.action_space = spaces.Discrete(16)
         
         self.observation_space = spaces.Box(
-            low=-np.inf, high=np.inf, shape=(STATS_SIZE,), dtype=np.float32
+            low=-np.inf, high=np.inf, shape=(STATS_SIZE * FRAME_STACK,), dtype=np.float32
         )
+        
+        self._obs_deque = deque(maxlen=FRAME_STACK)
         
         self.last_hp = 9
         self.last_boss_hp = 0
@@ -263,6 +267,9 @@ class HollowKnightGym(gym.Env):
             
             time.sleep(1.0)
             obs = self._get_obs()
+            self._obs_deque.clear()
+            for _ in range(FRAME_STACK):
+                self._obs_deque.append(obs.copy())
             self.last_hp = obs[IDX["hp"]]
             self.last_boss_hp = obs[IDX["boss_hp"]]
             self.last_x = obs[IDX["x"]]
@@ -281,7 +288,8 @@ class HollowKnightGym(gym.Env):
             self._boss_hp_start = float(obs[IDX["boss_hp"]])
             self._last_phi = self._potential(float(obs[IDX["hp"]]), float(obs[IDX["boss_hp"]]))
             
-            return obs, {}
+            stacked_obs = np.concatenate(list(self._obs_deque)).astype(np.float32)
+            return stacked_obs, {}
 
     def _potential(self, hp, boss_hp):
         damage_done = max(0.0, self._boss_hp_start - boss_hp)
@@ -318,10 +326,12 @@ class HollowKnightGym(gym.Env):
         
         time.sleep(0.005)
         
-        if action in [1, 2, 8, 9, 10, 11, 12, 13] and self.hold_action_counter < 5:
-            time.sleep(0.01)
+        for _ in range(FRAME_SKIP - 1):
+            time.sleep(0.016)
         
         obs = self._get_obs()
+        self._obs_deque.append(obs.copy())
+        stacked_obs = np.concatenate(list(self._obs_deque)).astype(np.float32)
         
         current_hp = obs[IDX["hp"]]
         current_mana = obs[IDX["mana"]]
@@ -414,4 +424,4 @@ class HollowKnightGym(gym.Env):
             cv2.imshow("AI Dashboard", stats_img)
             cv2.waitKey(1) 
         
-        return obs, reward, terminated, truncated, {"reward_parts": reward_parts}
+        return stacked_obs, reward, terminated, truncated, {"reward_parts": reward_parts}
