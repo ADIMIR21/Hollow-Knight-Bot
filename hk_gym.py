@@ -188,10 +188,15 @@ class HollowKnightGym(gym.Env):
         
         print("[RESET] Быстрый рестарт принят, жду загрузку сцены боя...")
         deadline = time.time() + 25.0
+        saw_loading = False
         while time.time() < deadline:
             time.sleep(0.3)
             telemetry = self.game_env.get_telemetry()
-            if (telemetry is not None
+            if (telemetry is not None and telemetry.get("status") == "loading_scene"):
+                saw_loading = True
+                continue
+            if (saw_loading
+                    and telemetry is not None
                     and telemetry.get("status") == "fight"
                     and telemetry.get("restart_pending", 0) == 0
                     and float(telemetry.get("hp", 0)) > 0
