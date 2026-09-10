@@ -1,6 +1,12 @@
 import vgamepad as vg
 import time
 import pyautogui
+import os
+import tempfile
+
+CMD_FILE = os.path.join(tempfile.gettempdir(), "hk_ai_cmd.txt")
+BOSS_SCENE_FILE = os.path.join(tempfile.gettempdir(), "hk_ai_boss.txt")
+DEFAULT_BOSS_SCENE = "GG_False_Knight"
 
 class HollowKnightController:
     def __init__(self):
@@ -17,6 +23,24 @@ class HollowKnightController:
             "dash": vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_SHOULDER,
             "pause": vg.XUSB_BUTTON.XUSB_GAMEPAD_START
         }
+
+    def set_boss_scene(self, scene_name):
+        try:
+            with open(BOSS_SCENE_FILE, "w") as f:
+                f.write(scene_name.strip())
+            print(f"[CONTROLLER] Целевая сцена босса: {scene_name.strip()}")
+        except OSError as e:
+            print(f"[CONTROLLER] Не удалось записать конфиг сцены: {e}")
+
+    def request_fast_restart(self):
+        try:
+            with open(CMD_FILE, "w") as f:
+                f.write("restart")
+        except OSError as e:
+            print(f"[CONTROLLER] Не удалось отправить команду рестарта: {e}")
+
+    def fast_restart_available(self):
+        return os.path.exists(CMD_FILE)
 
     def set_action(self, action_id):
             self.gamepad.left_joystick_float(x_value_float=0.0, y_value_float=0.0)
