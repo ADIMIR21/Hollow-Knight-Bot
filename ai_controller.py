@@ -1,6 +1,5 @@
 import vgamepad as vg
 import time
-import pyautogui
 import os
 import tempfile
 
@@ -89,46 +88,6 @@ class HollowKnightController:
         for btn in self.buttons.values():
             self.gamepad.release_button(button=btn)
         self.gamepad.update()
-
-    def toggle_pause(self):
-        print("[CONTROLLER] Пауза через Escape...")
-        self.reset_all()
-        time.sleep(0.1)
-        pyautogui.press('esc')
-        time.sleep(0.5)
-        print("[CONTROLLER] Escape нажат.")
-
-    def restart_boss_fight(self):
-        print("[СИСТЕМА] Запускаем макрос перезапуска боя...")
-        
-        self.reset_all()
-        time.sleep(6.0)
-
-        self.gamepad.press_button(button=self.buttons["jump"])
-        self.gamepad.update()
-        time.sleep(3.0)
-        self.reset_all()
-        self.gamepad.release_button(button=self.buttons["jump"])
-        self.gamepad.update()
-        time.sleep(4.0)
-        self.reset_all()
-        
-        self.gamepad.left_joystick_float(x_value_float=0.0, y_value_float=1.0)
-        self.gamepad.update()
-        time.sleep(0.2)
-        self.reset_all()
-        
-        time.sleep(2.0)
-
-        self.reset_all()
-        self.gamepad.press_button(button=self.buttons["jump"])
-        self.gamepad.update()
-        
-        time.sleep(0.6)
-
-        self.reset_all()
-        
-        print("[СИСТЕМА] Бой запущен...")
 
 if __name__ == "__main__":
     ctrl = HollowKnightController()

@@ -527,6 +527,23 @@ namespace HK_AI_Mod
                         }
                     }
 
+                    if (!_bossDead)
+                    {
+                        try
+                        {
+                            foreach (HealthManager hm in GameObject.FindObjectsOfType<HealthManager>())
+                            {
+                                if (hm != null && hm.hp > 20 && (hm.isDead || hm.hp <= 0))
+                                {
+                                    _bossDead = true;
+                                    Log($"[ИИ] Босс мёртв (перебор HM: {hm.gameObject.name})");
+                                    break;
+                                }
+                            }
+                        }
+                        catch (Exception) {}
+                    }
+
                     if (_bossDead)
                         bossHp = 0;
                     else if (_currentBoss != null)
@@ -571,7 +588,6 @@ namespace HK_AI_Mod
                         _lastBossVelY = boss_vel_y;
 
                         string bossObjName = _currentBoss.gameObject.name.ToLower();
-                        if (bossObjName.Contains("false knight") || bossObjName.Contains("false_knight") || bossObjName.Contains("falseknight"))
                         {
                             PlayMakerFSM[] fsms = _currentBoss.GetComponentsInChildren<PlayMakerFSM>();
                             foreach (PlayMakerFSM fsm in fsms)
@@ -591,6 +607,12 @@ namespace HK_AI_Mod
                                 {
                                     boss_is_attacking = true;
                                     boss_state = stateName;
+                                }
+
+                                if (!_bossDead && stateName == "Death Anim Start")
+                                {
+                                    _bossDead = true;
+                                    Log("[ИИ] Босс мёртв (FSM Death Anim Start)");
                                 }
                             }
                         }

@@ -66,25 +66,6 @@ class VecNormalizeSaveCallback(BaseCallback):
         return True
 
 
-class PauseCallback(BaseCallback):
-    def __init__(self, controller: HollowKnightController, verbose=0):
-        super().__init__(verbose)
-        self.controller = controller
-
-    def _on_step(self) -> bool:
-        return True
-
-    def _on_rollout_end(self) -> bool:
-        print("\n[PAUSE_CALLBACK] Сбор данных завершён. Ставлю на паузу перед обучением...")
-        self.controller.toggle_pause()
-        return True
-
-    def _on_rollout_start(self) -> bool:
-        print("\n[PAUSE_CALLBACK] Обучение завершено. Снимаю с паузы...")
-        self.controller.toggle_pause()
-        return True
-
-
 def make_model(env):
     return PPO(
         "MlpPolicy",
@@ -168,14 +149,11 @@ def main():
         vec_env=vec_env, save_path=VECNORM_PATH, save_freq=20000
     )
 
-    controller = raw_env.controller
-    pause_callback = PauseCallback(controller=controller)
     reward_logging_callback = RewardComponentLoggingCallback()
 
     callback_list = CallbackList([
         checkpoint_callback,
         vecnorm_save_callback,
-        pause_callback,
         reward_logging_callback,
     ])
 

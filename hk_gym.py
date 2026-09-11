@@ -216,69 +216,42 @@ class HollowKnightGym(gym.Env):
         print("[RESET] Сцена боя не поднялась за отведённое время. Фолбэк на макрос.")
         return False
 
+    def _wait_for_fight_scene(self, timeout):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            telemetry = self.game_env.get_telemetry()
+            if (telemetry is not None
+                    and telemetry.get("status") == "fight"
+                    and float(telemetry.get("hp", 0)) > 0
+                    and float(telemetry.get("boss_hp", 0)) > 0
+                    and int(telemetry.get("restart_pending", 0)) == 0):
+                print("[RESET] Сцена боя готова.")
+                return True
+            time.sleep(0.3)
+        print("[RESET] Бой не поднялся. Зайди в арену вручную.")
+        return False
+
     def reset(self, seed=None, options=None):
             super().reset(seed=seed)
-            
+
             self.controller.reset_all()
-            
+
             if self._first_reset:
                 self._first_reset = False
-                print("[RESET] Первый запуск. Ожидаю загрузку игры...")
-                time.sleep(5.0)
-                print("[RESET] Прыжок поднятия игрока...")
-                self.controller.set_action(3)
-                time.sleep(3.0)
-                self.controller.reset_all()
-                print("[RESET] Запускаю макрос рестарта боя...")
-                self.controller.restart_boss_fight()
-                
-                print("[RESET] Ожидание стабилизации игры после макроса...")
-                time.sleep(2.0)
+                if not self._wait_for_fight_scene(10.0):
+                    print("[RESET] Автотелепорт на арену...")
+                    self._try_fast_restart()
+                    self._wait_for_fight_scene(60.0)
             else:
                 want_restart = self.auto_restart or self._last_episode_was_victory
-                
+
                 if want_restart and self._try_fast_restart():
-                    pass
+                    self._wait_for_fight_scene(10.0)
                 else:
-                    print("[RESET] Ожидание возрождения игрока... (нажми 'r' для авто-рестарта)")
-                    waited_for_restart = False
-                    if want_restart:
-                        waited_for_restart = True
-                    else:
-                        print("[RESET] Ожидание выхода из паузы и обновления данных...")
-                        time.sleep(1.5)
-                        
-                        for attempt in range(20):
-                            _, telemetry = self.game_env.get_observation()
-                            if telemetry is not None:
-                                hp = float(telemetry.get("hp", 0))
-                                print(f"[RESET] Попытка {attempt+1}: telemetry получена, hp={hp}")
-                                if hp > 0:
-                                    print("[RESET] Персонаж жив. Начинаем эпизод!")
-                                    break
-                            else:
-                                print(f"[RESET] Попытка {attempt+1}: telemetry = None")
-                            
-                            if self.auto_restart:
-                                print("[RESET] Активирован авто-рестарт во время ожидания")
-                                waited_for_restart = True
-                                break
-                                
-                            time.sleep(0.5)
-                        else:
-                            print("[RESET] Персонаж не появился после 10 секунд. Запускаю макрос рестарта...")
-                            waited_for_restart = True
-                    
-                    if waited_for_restart:
-                        print("[RESET] Запускаю макрос рестарта боя...")
-                        time.sleep(5.0)
-                        
-                        self.controller.restart_boss_fight()
-                        time.sleep(4.0)
-                    else:
-                        time.sleep(1.0)
-            
-            time.sleep(1.0)
+                    print("[RESET] Быстрый рестарт не удался, жду появления боя...")
+                    self._wait_for_fight_scene(20.0)
+
+            time.sleep(0.5)
             obs = self._get_obs()
             self._obs_deque.clear()
             for _ in range(FRAME_STACK):
