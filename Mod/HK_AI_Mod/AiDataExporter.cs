@@ -14,6 +14,7 @@ namespace HK_AI_Mod
         private string _filePath = "";
         private string _cmdPath = "";
         private string _sceneConfigPath = "";
+        private string _gateConfigPath = "";
         private int _frameCounter = 0;
 
         private HealthManager? _currentBoss = null;
@@ -33,13 +34,16 @@ namespace HK_AI_Mod
         private bool _restartPending = false;
         private bool _inMenuScene = true;
         private float _watchdogTimer = 0f;
+        private int _forcedEntryAttempts = 0;
         private const string DEFAULT_BOSS_SCENE = "GG_False_Knight";
+        private const string DEFAULT_ENTRY_GATE = "door1";
 
         public override void Initialize()
         {
             _filePath = Path.Combine(Path.GetTempPath(), "hk_ai_data.json");
             _cmdPath = Path.Combine(Path.GetTempPath(), "hk_ai_cmd.txt");
             _sceneConfigPath = Path.Combine(Path.GetTempPath(), "hk_ai_boss.txt");
+            _gateConfigPath = Path.Combine(Path.GetTempPath(), "hk_ai_gate.txt");
 
             UnityEngine.SceneManagement.SceneManager.activeSceneChanged += (oldScene, newScene) =>
             {
@@ -53,6 +57,7 @@ namespace HK_AI_Mod
                     _restartPending = false;
                     _lastBossHpKnown = 0;
                     _watchdogTimer = 2.5f;
+                    _forcedEntryAttempts = 0;
                     WriteSafe(StatusJson("loading_scene"));
                 }
             };
@@ -92,11 +97,6 @@ namespace HK_AI_Mod
             TransitionWatchdogTick(unscaledDelta);
         }
 
-        // После быстрого рестарта переход сцены может "зависнуть": PreventCameraFadeOut
-        // пропускает фейд, из-за чего камера-фейдер никогда не шлёт событие FADE_COMPLETE
-        // и игра навсегда остаётся в состоянии перехода (IsInSceneTransition = true).
-        // В этом состоянии герой без коллизий и ввода (transitioning), а FSM боссов стоят.
-        // Лечим: если через N секунд (unscaled) переход не завершился сам — дожимаем вручную.
         private void TransitionWatchdogTick(float unscaledDelta)
         {
             if (_watchdogTimer <= 0f) return;
@@ -108,7 +108,6 @@ namespace HK_AI_Mod
                 GameManager gm = GameManager.instance;
                 if (gm == null || _inMenuScene) return;
 
-                // Сцена ещё реально грузится — подождём ещё один цикл watchdog
                 if (gm.IsLoadingSceneTransition)
                 {
                     _watchdogTimer = 1.5f;
@@ -117,27 +116,96 @@ namespace HK_AI_Mod
 
                 HeroController hero = HeroController.instance;
                 bool heroFrozen = hero != null && hero.cState != null && hero.cState.transitioning;
-                bool transitionStuck = gm.IsInSceneTransition;
 
-                if (!heroFrozen && !transitionStuck && Time.timeScale > 0f)
-                    return; // всё нормально завершилось само
-
-                Log($"[ИИ] Переход завис: transitioning={heroFrozen}, inTransition={transitionStuck}, timeScale={Time.timeScale}. Дожимаю вручную.");
+                if (!heroFrozen)
+                {
+                    if (gm.IsInSceneTransition)
+                        ReflectionHelper.SetField(gm, "<IsInSceneTransition>k__BackingField", false);
+                    return;
+                }
 
                 if (Time.timeScale <= 0f)
                     Time.timeScale = 1f;
 
-                if (heroFrozen || transitionStuck)
+                TransitionPoint gate = FindTransitionGate(hero.transform, ReadTargetGateName());
+                Log($"[ИИ] Герой завис в transitioning. Гейт '{ReadTargetGateName()}' найден: {gate != null}, попытка #{_forcedEntryAttempts}");
+
+                if (gate != null && _forcedEntryAttempts == 0)
                 {
-                    ReflectionHelper.SetField(gm, "<IsInSceneTransition>k__BackingField", false);
-                    gm.FinishedEnteringScene();
-                    gm.FadeSceneIn();
+                    _forcedEntryAttempts++;
+                    hero.StartCoroutine(hero.EnterScene(gate, 0f));
+                    _watchdogTimer = 3f;
+                    return;
                 }
+
+                _forcedEntryAttempts++;
+                if (gate != null)
+                {
+                    Vector2 gp = gate.transform.position;
+                    hero.transform.SetPosition2D(gp.x, gp.y + 1f);
+                }
+                ReflectionHelper.CallMethod(hero, "FinishedEnteringScene", true, false);
+                gm.FinishedEnteringScene();
+                gm.FadeSceneIn();
+                Log("[ИИ] Герой выставлен у гейта вручную и разблокирован");
             }
             catch (Exception e)
             {
                 Log($"[ИИ] Ошибка watchdog перехода: {e}");
             }
+        }
+
+        private string ReadTargetGateName()
+        {
+            try
+            {
+                if (File.Exists(_gateConfigPath))
+                {
+                    string gate = File.ReadAllText(_gateConfigPath).Trim();
+                    if (!string.IsNullOrEmpty(gate))
+                        return gate;
+                }
+            }
+            catch (Exception) {}
+            return DEFAULT_ENTRY_GATE;
+        }
+
+        private static TransitionPoint FindTransitionGate(UnityEngine.Transform heroTransform, string gateName)
+        {
+            try
+            {
+                var scene = UnityEngine.SceneManagement.SceneManager.GetActiveScene();
+                GameObject[] roots = scene.GetRootGameObjects();
+                foreach (GameObject root in roots)
+                {
+                    if (root.name == gateName)
+                    {
+                        TransitionPoint tp = root.GetComponent<TransitionPoint>();
+                        if (tp != null) return tp;
+                    }
+                    TransitionPoint[] all = root.GetComponentsInChildren<TransitionPoint>(true);
+                    foreach (TransitionPoint tp in all)
+                    {
+                        if (tp != null && tp.name == gateName)
+                            return tp;
+                    }
+                }
+                foreach (var loaded in UnityEngine.SceneManagement.SceneManager.GetAllScenes())
+                {
+                    if (!loaded.isLoaded || loaded == scene) continue;
+                    foreach (GameObject root in loaded.GetRootGameObjects())
+                    {
+                        TransitionPoint[] all = root.GetComponentsInChildren<TransitionPoint>(true);
+                        foreach (TransitionPoint tp in all)
+                        {
+                            if (tp != null && tp.name == gateName)
+                                return tp;
+                        }
+                    }
+                }
+            }
+            catch (Exception) {}
+            return null;
         }
 
         private void PollCommand()
@@ -313,7 +381,7 @@ namespace HK_AI_Mod
                     if (was_hit) _hitCounter++;
                     _lastPlayerHp = hp;
                     
-                    if (_currentBoss == null || _currentBoss.hp <= 0 || _currentBoss.isDead)
+                    if (_currentBoss == null)
                     {
                         HealthManager? bestCandidate = null;
                         int bestHp = 0;
