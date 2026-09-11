@@ -98,7 +98,7 @@ def load_compatible_vecnorm(vec_env):
                   f"({loaded.obs_rms.mean.shape[0]} != {obs_dim}). Начинаю нормализацию заново.")
             return fresh_vecnorm(vec_env)
         loaded.training = True
-        loaded.norm_reward = False
+        loaded.norm_reward = True
         print(f"\n[СИСТЕМА] Восстанавливаю статистику нормализации: {VECNORM_PATH}")
         return loaded
     except Exception as e:
@@ -110,7 +110,7 @@ def fresh_vecnorm(vec_env):
     return VecNormalize(
         vec_env,
         norm_obs=True,
-        norm_reward=False,
+        norm_reward=True,
         clip_obs=10.0,
         gamma=0.99,
     )
