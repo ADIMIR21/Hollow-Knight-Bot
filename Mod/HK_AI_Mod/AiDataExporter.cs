@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO;
 using System.Globalization;
 using System.Collections.Generic;
@@ -32,8 +32,7 @@ namespace HK_AI_Mod
 
         private bool _restartPending = false;
         private bool _inMenuScene = true;
-        private float _timeScaleWatchdog = 0f;
-        private bool _timeScaleFixed = false;
+        private float _watchdogTimer = 0f;
         private const string DEFAULT_BOSS_SCENE = "GG_False_Knight";
 
         public override void Initialize()
@@ -53,8 +52,7 @@ namespace HK_AI_Mod
                     _currentBoss = null;
                     _restartPending = false;
                     _lastBossHpKnown = 0;
-                    if (_timeScaleWatchdog > 0f)
-                        _timeScaleWatchdog = 1.5f;
+                    _watchdogTimer = 2.5f;
                     WriteSafe(StatusJson("loading_scene"));
                 }
             };
@@ -91,29 +89,55 @@ namespace HK_AI_Mod
         private void OnTick(float unscaledDelta)
         {
             PollCommand();
-            TimeScaleWatchdogTick(unscaledDelta);
+            TransitionWatchdogTick(unscaledDelta);
         }
 
-        private void TimeScaleWatchdogTick(float unscaledDelta)
+        // После быстрого рестарта переход сцены может "зависнуть": PreventCameraFadeOut
+        // пропускает фейд, из-за чего камера-фейдер никогда не шлёт событие FADE_COMPLETE
+        // и игра навсегда остаётся в состоянии перехода (IsInSceneTransition = true).
+        // В этом состоянии герой без коллизий и ввода (transitioning), а FSM боссов стоят.
+        // Лечим: если через N секунд (unscaled) переход не завершился сам — дожимаем вручную.
+        private void TransitionWatchdogTick(float unscaledDelta)
         {
-            if (_timeScaleFixed || _timeScaleWatchdog <= 0f) return;
-
-            _timeScaleWatchdog -= unscaledDelta;
-            if (_timeScaleWatchdog > 0f) return;
+            if (_watchdogTimer <= 0f) return;
+            _watchdogTimer -= unscaledDelta;
+            if (_watchdogTimer > 0f) return;
 
             try
             {
-                if (_inMenuScene || GameManager.instance == null) return;
-                if (GameManager.instance.IsInSceneTransition) return;
+                GameManager gm = GameManager.instance;
+                if (gm == null || _inMenuScene) return;
+
+                // Сцена ещё реально грузится — подождём ещё один цикл watchdog
+                if (gm.IsLoadingSceneTransition)
+                {
+                    _watchdogTimer = 1.5f;
+                    return;
+                }
+
+                HeroController hero = HeroController.instance;
+                bool heroFrozen = hero != null && hero.cState != null && hero.cState.transitioning;
+                bool transitionStuck = gm.IsInSceneTransition;
+
+                if (!heroFrozen && !transitionStuck && Time.timeScale > 0f)
+                    return; // всё нормально завершилось само
+
+                Log($"[ИИ] Переход завис: transitioning={heroFrozen}, inTransition={transitionStuck}, timeScale={Time.timeScale}. Дожимаю вручную.");
 
                 if (Time.timeScale <= 0f)
-                {
                     Time.timeScale = 1f;
-                    Log("[ИИ] Время стояло на месте после рестарта — вернул timeScale=1");
+
+                if (heroFrozen || transitionStuck)
+                {
+                    ReflectionHelper.SetField(gm, "<IsInSceneTransition>k__BackingField", false);
+                    gm.FinishedEnteringScene();
+                    gm.FadeSceneIn();
                 }
-                _timeScaleFixed = true;
             }
-            catch (Exception) {}
+            catch (Exception e)
+            {
+                Log($"[ИИ] Ошибка watchdog перехода: {e}");
+            }
         }
 
         private void PollCommand()
@@ -142,15 +166,13 @@ namespace HK_AI_Mod
                 string targetScene = ReadTargetScene();
                 Log($"[ИИ] Быстрый рестарт: переход в сцену '{targetScene}'");
 
-                _timeScaleWatchdog = 30f;
-                _timeScaleFixed = false;
+                _watchdogTimer = 0f;
 
                 GameManager.instance.BeginSceneTransition(new GameManager.SceneLoadInfo
                 {
                     SceneName = targetScene,
                     EntryGateName = "door1",
-                    PreventCameraFadeOut = true,
-                    WaitForSceneTransitionCameraFade = false,
+                    WaitForSceneTransitionCameraFade = true,
                     Visualization = GameManager.SceneLoadVisualizations.Default,
                     AlwaysUnloadUnusedAssets = false
                 });
