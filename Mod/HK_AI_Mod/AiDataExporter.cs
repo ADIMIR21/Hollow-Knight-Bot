@@ -430,6 +430,7 @@ namespace HK_AI_Mod
                     float x = hero.transform.position.x;
                     float y = hero.transform.position.y;
                     int hp = PlayerData.instance.health;
+                    int max_hp = PlayerData.instance.maxHealth;
                     int mana = PlayerData.instance.MPCharge;
                     
                     float vel_x = hero.current_velocity.x;
@@ -652,7 +653,7 @@ namespace HK_AI_Mod
                         boss_is_attacking = true;
                     }
 
-                    string data = $"{{\"status\": \"fight\", \"restart_pending\": {(_restartPending ? 1 : 0)}, \"hp\": {hp}, \"mana\": {mana}, \"boss_hp\": {bossHp}, \"boss_dead\": {(_bossDead ? 1 : 0)}, " +
+                    string data = $"{{\"status\": \"fight\", \"restart_pending\": {(_restartPending ? 1 : 0)}, \"hp\": {hp}, \"max_hp\": {max_hp}, \"mana\": {mana}, \"boss_hp\": {bossHp}, \"boss_dead\": {(_bossDead ? 1 : 0)}, " +
                         $"\"x\": {x.ToString("F2", CultureInfo.InvariantCulture)}, " +
                         $"\"y\": {y.ToString("F2", CultureInfo.InvariantCulture)}, " +
                         $"\"boss_x\": {bossX.ToString("F2", CultureInfo.InvariantCulture)}, " +

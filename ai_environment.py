@@ -62,6 +62,7 @@ def main():
                 current_x = telemetry.get("x", 0.0)
                 current_y = telemetry.get("y", 0.0)
                 hp = telemetry.get("hp", 9)
+                max_hp = telemetry.get("max_hp", 9)
                 mana = telemetry.get("mana", 0)
                 boss_hp = telemetry.get("boss_hp", 0)
                 
@@ -83,7 +84,7 @@ def main():
                     
                     os.system('cls' if os.name == 'nt' else 'clear')
                     print(f"=== МОЗГИ ИИ ===")
-                    print(f"ИГРОК:    {hp} HP | ДУША: {mana}/99 MP")
+                    print(f"ИГРОК:    {hp}/{max_hp} HP | ДУША: {mana}/99 MP")
                     print(f"БОСС:     {boss_hp} HP | Состояние: {boss_state}")
                     print(f"ПОЗИЦИЯ:  X: {current_x:.2f} | Y: {current_y:.2f}")
                     print(f"СКОРОСТЬ: VX: {vel_x:.2f} | VY: {vel_y:.2f}")

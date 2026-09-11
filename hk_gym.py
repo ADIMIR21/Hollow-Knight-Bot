@@ -47,6 +47,7 @@ class HollowKnightGym(gym.Env):
         self._obs_deque = deque(maxlen=FRAME_STACK)
         
         self.last_hp = 9
+        self.max_hp = 9.0
         self.last_boss_hp = 0
         self._last_boss_dead = 0.0
         self.last_x = 0.0
@@ -126,6 +127,7 @@ class HollowKnightGym(gym.Env):
         if telemetry is not None and "hp" in telemetry:
             self._last_boss_dead = float(telemetry.get("boss_dead", self._last_boss_dead))
             hp = float(telemetry.get("hp", hp))
+            self.max_hp = max(1.0, float(telemetry.get("max_hp", self.max_hp)))
             mana = float(telemetry.get("mana", mana))
             x = float(telemetry.get("x", x))
             y = float(telemetry.get("y", y))
@@ -279,7 +281,7 @@ class HollowKnightGym(gym.Env):
 
     def _potential(self, hp, boss_hp):
         damage_done = max(0.0, self._boss_hp_start - boss_hp)
-        hp_lost = max(0.0, 9.0 - hp)
+        hp_lost = max(0.0, self.max_hp - hp)
         return 15.0 * damage_done - 10.0 * hp_lost
 
     def _redirect_attack_to_boss(self, action):
