@@ -23,11 +23,13 @@ class HollowKnightEnv:
         print("[ENV] хк успешно найден!")
 
     def get_telemetry(self):
-        try:
-            with open(PATH_TO_TELEMETRY, 'r') as f:
-                return json.load(f)
-        except (OSError, json.JSONDecodeError):
-            return None
+        for attempt in range(3):
+            try:
+                with open(PATH_TO_TELEMETRY, 'r') as f:
+                    return json.load(f)
+            except (OSError, json.JSONDecodeError):
+                time.sleep(0.02)
+        return None
 
     def get_observation(self):
         frame = None

@@ -48,6 +48,7 @@ class HollowKnightGym(gym.Env):
         
         self.last_hp = 9
         self.last_boss_hp = 0
+        self._last_boss_dead = 0.0
         self.last_x = 0.0
         self.last_y = 0.0
         self.last_boss_x = 0.0
@@ -67,6 +68,7 @@ class HollowKnightGym(gym.Env):
         self.auto_restart = True
         self._last_episode_was_victory = False
         self._boss_death_frames = 0
+        self._no_boss_frames = 0
         self._running = True
         self._first_reset = True
         self._console_thread = threading.Thread(target=self._console_listener, daemon=True)
@@ -96,7 +98,7 @@ class HollowKnightGym(gym.Env):
         
     def _get_obs(self):
         frame, telemetry = self.game_env.get_observation()
-        
+
         hp = float(self.last_hp)
         boss_hp = float(self.last_boss_hp)
         mana = 0.0
@@ -104,7 +106,7 @@ class HollowKnightGym(gym.Env):
         y = self.last_y
         boss_x = self.last_boss_x
         boss_y = self.last_boss_y
-        
+
         vel_x = 0.0
         vel_y = 0.0
         boss_vel_x = 0.0
@@ -120,8 +122,9 @@ class HollowKnightGym(gym.Env):
         boss_is_attacking = 0.0
         near_hazard = 0.0
         was_hit = 0.0
-        
+
         if telemetry is not None and "hp" in telemetry:
+            self._last_boss_dead = float(telemetry.get("boss_dead", self._last_boss_dead))
             hp = float(telemetry.get("hp", hp))
             mana = float(telemetry.get("mana", mana))
             x = float(telemetry.get("x", x))
@@ -164,6 +167,11 @@ class HollowKnightGym(gym.Env):
 
     def _try_fast_restart(self):
         telemetry = self.game_env.get_telemetry()
+        for _ in range(5):
+            if telemetry is not None and "restart_pending" in telemetry:
+                break
+            time.sleep(0.2)
+            telemetry = self.game_env.get_telemetry()
         if telemetry is None or "restart_pending" not in telemetry:
             print("[RESET] Мод без поддержки быстрого рестарта, будет использован макрос.")
             return False
@@ -385,8 +393,17 @@ class HollowKnightGym(gym.Env):
             self._boss_death_frames += 1
         else:
             self._boss_death_frames = 0
-            
-        if self._boss_death_frames >= 20 and current_boss_hp <= 0:
+
+        if current_boss_hp <= 0 and self._last_boss_dead < 0.5:
+            self._no_boss_frames += 1
+        else:
+            self._no_boss_frames = 0
+
+        if self._no_boss_frames >= 150:
+            truncated = True
+            self.controller.reset_all()
+
+        if self._boss_death_frames >= 20 and current_boss_hp <= 0 and self._last_boss_dead >= 0.5:
             reward += 1000.0
             reward_parts["victory"] += 1000.0
             terminated = True

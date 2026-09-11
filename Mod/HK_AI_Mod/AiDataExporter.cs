@@ -33,6 +33,8 @@ namespace HK_AI_Mod
 
         private bool _restartPending = false;
         private bool _inMenuScene = true;
+        private bool _bossDead = false;
+        private BossSceneController _subscribedBsc = null;
         private float _watchdogTimer = 0f;
         private int _forcedEntryAttempts = 0;
         private const string DEFAULT_BOSS_SCENE = "GG_False_Knight";
@@ -56,8 +58,10 @@ namespace HK_AI_Mod
                     _currentBoss = null;
                     _restartPending = false;
                     _lastBossHpKnown = 0;
+                    _bossDead = false;
                     _watchdogTimer = 2.5f;
                     _forcedEntryAttempts = 0;
+                    SubscribeBossDeath();
                     WriteSafe(StatusJson("loading_scene"));
                 }
             };
@@ -74,6 +78,30 @@ namespace HK_AI_Mod
 
             WriteSafe(StatusJson("initialized"));
             Log($"ИИ Экспортер 1.0 работает! Файл: {_filePath}");
+        }
+
+        private void SubscribeBossDeath()
+        {
+            try
+            {
+                if (_subscribedBsc != null)
+                    _subscribedBsc.OnBossesDead -= OnBossesDeadHandler;
+                _subscribedBsc = null;
+
+                BossSceneController bsc = BossSceneController.Instance;
+                if (bsc != null)
+                {
+                    bsc.OnBossesDead += OnBossesDeadHandler;
+                    _subscribedBsc = bsc;
+                }
+            }
+            catch (Exception) {}
+        }
+
+        private void OnBossesDeadHandler()
+        {
+            _bossDead = true;
+            Log("[ИИ] Босс мёртв (событие BossSceneController)");
         }
 
         private string ReadTargetScene()
@@ -127,8 +155,40 @@ namespace HK_AI_Mod
                 if (Time.timeScale <= 0f)
                     Time.timeScale = 1f;
 
-                TransitionPoint gate = FindTransitionGate(hero.transform, ReadTargetGateName());
-                Log($"[ИИ] Герой завис в transitioning. Гейт '{ReadTargetGateName()}' найден: {gate != null}, попытка #{_forcedEntryAttempts}");
+                TransitionPoint gate = null;
+                string gateName = ReadTargetGateName();
+                try
+                {
+                    var registry = TransitionPoint.TransitionPoints;
+                    if (registry != null)
+                    {
+                        foreach (TransitionPoint tp in registry)
+                        {
+                            if (tp != null && tp.name == gateName)
+                            {
+                                gate = tp;
+                                break;
+                            }
+                        }
+                    }
+                }
+                catch (Exception) {}
+                if (gate == null && _forcedEntryAttempts == 0)
+                {
+                    try
+                    {
+                        var names = new System.Text.StringBuilder();
+                        var registry = TransitionPoint.TransitionPoints;
+                        if (registry != null)
+                            foreach (TransitionPoint tp in registry)
+                                names.Append(tp != null ? tp.name : "null").Append("; ");
+                        Log($"[ИИ] Активные гейты сцены: {names}");
+                    }
+                    catch (Exception) {}
+                }
+                if (gate == null)
+                    gate = FindTransitionGate(hero.transform, gateName);
+                Log($"[ИИ] Герой завис в transitioning. Гейт '{gateName}' найден: {gate != null}{(gate != null ? $" ({gate.name})" : "")}, попытка #{_forcedEntryAttempts}");
 
                 if (gate != null && _forcedEntryAttempts == 0)
                 {
@@ -147,6 +207,13 @@ namespace HK_AI_Mod
                 ReflectionHelper.CallMethod(hero, "FinishedEnteringScene", true, false);
                 gm.FinishedEnteringScene();
                 gm.FadeSceneIn();
+
+                try
+                {
+                    var heroRenderer = hero.GetComponentInChildren<Renderer>();
+                    if (heroRenderer != null) heroRenderer.enabled = true;
+                }
+                catch (Exception) {}
                 Log("[ИИ] Герой выставлен у гейта вручную и разблокирован");
             }
             catch (Exception e)
@@ -381,28 +448,89 @@ namespace HK_AI_Mod
                     if (was_hit) _hitCounter++;
                     _lastPlayerHp = hp;
                     
-                    if (_currentBoss == null)
+                    if (_currentBoss == null && !_bossDead)
                     {
                         HealthManager? bestCandidate = null;
                         int bestHp = 0;
-                        
-                        foreach (HealthManager hm in GameObject.FindObjectsOfType<HealthManager>())
+
+                        try
                         {
-                            int bossCandidateHp = hm.hp;
-                            if (bossCandidateHp > 20 && bossCandidateHp > bestHp)
+                            BossSceneController bsc = BossSceneController.Instance;
+                            if (bsc != null && bsc.bosses != null)
                             {
-                                bestCandidate = hm;
-                                bestHp = bossCandidateHp;
+                                foreach (HealthManager hm in bsc.bosses)
+                                {
+                                    if (hm == null) continue;
+                                    int hpNow = hm.hp;
+                                    if (hpNow > 0 && hpNow > bestHp)
+                                    {
+                                        bestCandidate = hm;
+                                        bestHp = hpNow;
+                                    }
+                                }
                             }
                         }
-                        
-                        _currentBoss = bestCandidate;
-                        _lastBossVelX = 0f;
-                        _lastBossVelY = 0f;
-                        _lastBossHpKnown = bestHp;
+                        catch (Exception) {}
+
+                        if (bestCandidate == null)
+                        {
+                            foreach (HealthManager hm in GameObject.FindObjectsOfType<HealthManager>())
+                            {
+                                int bossCandidateHp = hm.hp;
+                                if (bossCandidateHp > 20 && bossCandidateHp > bestHp)
+                                {
+                                    bestCandidate = hm;
+                                    bestHp = bossCandidateHp;
+                                }
+                            }
+                        }
+
+                        if (bestCandidate != null)
+                        {
+                            _currentBoss = bestCandidate;
+                            _lastBossVelX = 0f;
+                            _lastBossVelY = 0f;
+                            _lastBossHpKnown = bestHp;
+                            Log($"[ИИ] Босс выбран: {bestCandidate.gameObject.name} (hp={bestHp})");
+                        }
                     }
 
-                    int bossHp = _currentBoss != null ? _currentBoss.hp : 0;
+                    int bossHp = 0;
+                    if (!_bossDead)
+                    {
+                        try
+                        {
+                            BossSceneController bsc = BossSceneController.Instance;
+                            if (bsc != null && bsc.bosses != null)
+                            {
+                                foreach (HealthManager hm in bsc.bosses)
+                                {
+                                    if (hm == null) continue;
+                                    if (hm.isDead || hm.hp <= 0)
+                                    {
+                                        _bossDead = true;
+                                        Log("[ИИ] Босс мёртв (HealthManager.isDead)");
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        catch (Exception) {}
+                    }
+
+                    if (_currentBoss != null && !_bossDead)
+                    {
+                        if (_currentBoss.hp <= 0 || _currentBoss.isDead)
+                        {
+                            _bossDead = true;
+                            Log("[ИИ] Босс мёртв (текущий HealthManager)");
+                        }
+                    }
+
+                    if (_bossDead)
+                        bossHp = 0;
+                    else if (_currentBoss != null)
+                        bossHp = _currentBoss.hp;
                     if (_lastBossHpKnown > bossHp)
                         _bossDamageTotal += _lastBossHpKnown - bossHp;
                     _lastBossHpKnown = bossHp;
@@ -502,7 +630,7 @@ namespace HK_AI_Mod
                         boss_is_attacking = true;
                     }
 
-                    string data = $"{{\"status\": \"fight\", \"restart_pending\": {(_restartPending ? 1 : 0)}, \"hp\": {hp}, \"mana\": {mana}, \"boss_hp\": {bossHp}, " +
+                    string data = $"{{\"status\": \"fight\", \"restart_pending\": {(_restartPending ? 1 : 0)}, \"hp\": {hp}, \"mana\": {mana}, \"boss_hp\": {bossHp}, \"boss_dead\": {(_bossDead ? 1 : 0)}, " +
                         $"\"x\": {x.ToString("F2", CultureInfo.InvariantCulture)}, " +
                         $"\"y\": {y.ToString("F2", CultureInfo.InvariantCulture)}, " +
                         $"\"boss_x\": {bossX.ToString("F2", CultureInfo.InvariantCulture)}, " +
