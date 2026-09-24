@@ -1,14 +1,21 @@
-"""Телепорт к боссам пантеона (Godhome) — выбор босса для тренировки/обучения.
+"""Телепорт к боссам пантеона (Godhome) — выбор босса и запуск обучения.
 
 Требует мод HK_AI_Mod v1.2+ в игре (права на команды boss/teleport/bosses/warp).
 
 Использование:
-  python teleport.py                  — интерактивное меню выбора босса
+  python teleport.py                  — интерактивное меню выбора босса;
+                                        после телепорта спросит про обучение
+  python teleport.py --train          — то же, но обучение запускается сразу
   python teleport.py --list           — показать список боссов и выйти
   python teleport.py --boss hornet    — телепорт к боссу по имени/номеру/алиасу
   python teleport.py --boss 8         — телепорт к боссу по номеру списка
-  python teleport.py --restart        — рестарт боя в текущей сцене
+  python teleport.py --boss nkg --train — телепорт + сразу обучение (train.py)
+  python teleport.py --restart        — рестарт текущего боя
   python teleport.py --warp           — вернуть героя к гейту арены
+
+Обучение для каждого босса хранится автоматически:
+models/ppo_hk/<сцена>/ — чекпоинты, hk_model_final.zip, vecnormalize.pkl.
+Создавать что-то вручную не нужно.
 
 Интерактивные команды в меню:
   <номер/имя/алиас>  телепорт к боссу (например: 5, hornet, nkg, false_knight)
@@ -19,6 +26,9 @@
 """
 
 import argparse
+import os
+import subprocess
+import sys
 
 from bosses import (
     BOSS_LIST,
@@ -59,12 +69,33 @@ def check_mod():
     return True
 
 
+def run_train(scene):
+    """Запускает обучение (train.py) для выбранного босса в этой же консоли.
+
+    Ctrl+C в train.py корректно сохраняет модель и статистику нормализации
+    в models/ppo_hk/<сцена>/.
+    """
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    print(f"\n[ОБУЧЕНИЕ] Старт train.py для {scene}. Ctrl+C — прервать с сохранением.\n")
+    try:
+        return subprocess.call(
+            [sys.executable, os.path.join(script_dir, "train.py"), "--boss", scene],
+            cwd=script_dir,
+        )
+    except KeyboardInterrupt:
+        print("\n[ОБУЧЕНИЕ] Прервано (Ctrl+C).")
+        return 130
+
+
 def teleport_to(query, timeout=45.0):
-    """Телепорт к боссу по запросу и ожидание начала боя."""
+    """Телепорт к боссу по запросу и ожидание начала боя.
+
+    Возвращает (ok, scene) — сцена резолвится локально.
+    """
     resolved = resolve_query(query)
     if resolved is None:
         print(f"[ТЕЛЕПОРТ] Босс не распознан: {query!r}. Смотри: python teleport.py --list")
-        return False
+        return False, None
 
     scene, label = resolved
     before = current_scene()
@@ -87,7 +118,7 @@ def teleport_to(query, timeout=45.0):
         print("[ТЕЛЕПОРТ] Бой не поднялся за отведённое время.")
         print("           Проверь ModLog (мод пишет активные гейты сцены) — "
               "у некоторых сцен вход может отличаться от door1 (задай его: hk_ai_gate.txt).")
-    return ok
+    return ok, scene
 
 
 def legacy_fallback(query):
@@ -95,17 +126,41 @@ def legacy_fallback(query):
     resolved = resolve_query(query)
     if resolved is None:
         print(f"[ТЕЛЕПОРТ] Босс не распознан: {query!r}.")
-        return False
+        return None
     scene, label = resolved
     print(f"[ТЕЛЕПОРТ] Старый мод v1.1: задаю сцену {scene} и рестарт.")
     set_boss_scene(scene)
     request_restart()
     ok = wait_for_scene(scene, timeout=45.0)
     print("[ТЕЛЕПОРТ] Готово!" if ok else "[ТЕЛЕПОРТ] Бой не поднялся.")
-    return ok
+    return scene if ok else None
 
 
-def interactive_loop():
+# Хабы Godhome без боссов — обучение там не имеет смысла.
+NON_TRAIN_SCENES = {"GG_Atrium", "GG_Workshop", "GG_Boss_Door_Entrance"}
+
+
+def maybe_train(scene, auto_train):
+    """Запускает обучение сцены (или спрашивает), кроме хабов без боссов."""
+    if not scene:
+        return
+    if scene in NON_TRAIN_SCENES:
+        print(f"[ОБУЧЕНИЕ] {scene} — хаб без босса, обучение не запускаю.")
+        print("           Выбери арену с боссом (python teleport.py --list).")
+        return
+    if auto_train:
+        run_train(scene)
+        return
+    try:
+        answer = input("Запустить обучение этого босса? [Y/n]> ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return
+    if answer in ("", "y", "yes", "д", "да"):
+        run_train(scene)
+
+
+def interactive_loop(auto_train=False):
     current = current_scene()
     if current:
         print(f"[ТЕЛЕПОРТ] Текущая сцена: {current}")
@@ -141,13 +196,17 @@ def interactive_loop():
             print_boss_list()
             continue
 
-        teleport_to(query)
+        ok, scene = teleport_to(query)
+        if ok:
+            maybe_train(scene, auto_train)
         print()
 
 
 def main():
     parser = argparse.ArgumentParser(description="Телепорт к боссам пантеона Hollow Knight")
     parser.add_argument("--boss", metavar="ИМЯ", help="номер/имя сцены/алиас босса")
+    parser.add_argument("--train", action="store_true",
+                        help="после телепортации сразу запустить train.py для выбранного босса")
     parser.add_argument("--list", action="store_true", help="показать список боссов")
     parser.add_argument("--restart", action="store_true", help="рестарт боя в текущей сцене")
     parser.add_argument("--warp", action="store_true", help="варп героя к гейту арены")
@@ -167,15 +226,19 @@ def main():
         return
     if args.boss:
         if have_mod:
-            teleport_to(args.boss)
+            ok, scene = teleport_to(args.boss)
+            if ok:
+                maybe_train(scene, auto_train=args.train)
         else:
-            legacy_fallback(args.boss)
+            scene = legacy_fallback(args.boss)
+            if scene:
+                maybe_train(scene, auto_train=args.train)
         return
 
     # Интерактивное меню
     print_boss_list()
     if have_mod:
-        interactive_loop()
+        interactive_loop(auto_train=args.train)
         return
 
     print("[ТЕЛЕПОРТ] Интерактивный режим требует мод v1.2 и запущенную игру.")
