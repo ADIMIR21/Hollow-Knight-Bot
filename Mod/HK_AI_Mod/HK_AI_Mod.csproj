@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net472</TargetFramework>
@@ -50,8 +50,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Reference Include="Assembly-CSharp" Condition="'$(HollowKnightManagedDir)' != '' And Exists('$(HollowKnightManagedDir)Assembly-CSharp.dll')">
-      <HintPath>$(HollowKnightManagedDir)Assembly-CSharp.dll</HintPath>
+    <Reference Include="Assembly-CSharp">
+      <HintPath>libs\Assembly-CSharp.dll</HintPath>
+      <Private>false</Private>
     </Reference>
     <Reference Include="UnityEngine" Condition="'$(HollowKnightManagedDir)' != '' And Exists('$(HollowKnightManagedDir)UnityEngine.dll')">
       <HintPath>$(HollowKnightManagedDir)UnityEngine.dll</HintPath>
@@ -64,18 +65,6 @@
     </Reference>
     <Reference Include="PlayMaker" Condition="'$(HollowKnightManagedDir)' != '' And Exists('$(HollowKnightManagedDir)PlayMaker.dll')">
       <HintPath>$(HollowKnightManagedDir)PlayMaker.dll</HintPath>
-    </Reference>
-    <Reference Include="Assembly-CSharp" Condition="'$(HollowKnightManagedDir)' == ''">
-      <HintPath>D:\SteamLibrary\steamapps\common\Hollow Knight\hollow_knight_Data\Managed\Assembly-CSharp.dll</HintPath>
-    </Reference>
-    <Reference Include="UnityEngine" Condition="'$(HollowKnightManagedDir)' == ''">
-      <HintPath>D:\SteamLibrary\steamapps\common\Hollow Knight\hollow_knight_Data\Managed\UnityEngine.dll</HintPath>
-    </Reference>
-    <Reference Include="UnityEngine.CoreModule" Condition="'$(HollowKnightManagedDir)' == ''">
-      <HintPath>D:\SteamLibrary\steamapps\common\Hollow Knight\hollow_knight_Data\Managed\UnityEngine.CoreModule.dll</HintPath>
-    </Reference>
-    <Reference Include="UnityEngine.Physics2DModule" Condition="'$(HollowKnightManagedDir)' == ''">
-      <HintPath>D:\SteamLibrary\steamapps\common\Hollow Knight\hollow_knight_Data\Managed\UnityEngine.Physics2DModule.dll</HintPath>
     </Reference>
     <Reference Include="PlayMaker" Condition="'$(HollowKnightManagedDir)' == ''">
       <HintPath>D:\SteamLibrary\steamapps\common\Hollow Knight\hollow_knight_Data\Managed\PlayMaker.dll</HintPath>

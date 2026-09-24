@@ -9,7 +9,7 @@ import tempfile
 PATH_TO_TELEMETRY = os.path.join(tempfile.gettempdir(), "hk_ai_data.json") 
 AI_VISION_SIZE = (256, 256)
 
-ENABLE_PREVIEW = True 
+ENABLE_PREVIEW = False 
 
 class HollowKnightEnv:
     def __init__(self):

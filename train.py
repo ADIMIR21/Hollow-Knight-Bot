@@ -130,7 +130,18 @@ def main():
     if have_saved_model:
         print(f"\n[СИСТЕМА] Найдено сохранение: {LOAD_MODEL_NAME}. Загружаю...")
         try:
-            model = PPO.load(model_path, env=vec_env)
+            # Модель сохранена под Python 3.11: вшитые в pickle расписания
+            # (learning_rate/clip_range) содержат байткод 3.11, который
+            # роняет Python 3.14 при вызове (access violation).
+            # Подменяем их свежими объектами через custom_objects.
+            model = PPO.load(
+                model_path,
+                env=vec_env,
+                custom_objects={
+                    "learning_rate": lambda progress_remaining: 3e-4 * progress_remaining,
+                    "clip_range": 0.2,
+                },
+            )
             print("[СИСТЕМА] Модель успешно загружена.")
         except Exception as e:
             print(f"[СИСТЕМА] Ошибка загрузки модели: {e}")
