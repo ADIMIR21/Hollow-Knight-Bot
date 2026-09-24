@@ -9,7 +9,7 @@ namespace HK_AI_Mod
 {
     public class AiDataExporter : Mod
     {
-        public override string GetVersion() => "1.1";
+        public override string GetVersion() => "1.2";
 
         private string _filePath = "";
         private string _cmdPath = "";
@@ -38,6 +38,160 @@ namespace HK_AI_Mod
         private int _forcedEntryAttempts = 0;
         private const string DEFAULT_BOSS_SCENE = "GG_False_Knight";
         private const string DEFAULT_ENTRY_GATE = "door1";
+
+        // ---------------- Реестр боссов Godhome (пантеоны) ----------------
+        // Сцены взяты из build settings игры (hollow_knight_Data/globalgamemanagers).
+        // Варианты с суффиксом _V — усложнённые версии боёв (Ascended/Radiant),
+        // GG_Mantis_Lords_V = Sisters of Battle, GG_Nosk_Hornet = Winged Nosk.
+        public struct BossEntry
+        {
+            public string Scene;
+            public string Label;
+
+            public BossEntry(string scene, string label)
+            {
+                Scene = scene;
+                Label = label;
+            }
+        }
+
+        private static readonly BossEntry[] BossRegistry = new BossEntry[]
+        {
+            // --- Пантеон Мастера (ранние боссы) ---
+            new BossEntry("GG_Vengefly", "Vengefly King"),
+            new BossEntry("GG_Gruz_Mother", "Gruz Mother"),
+            new BossEntry("GG_False_Knight", "False Knight"),
+            new BossEntry("GG_Mega_Moss_Charger", "Massive Moss Charger"),
+            new BossEntry("GG_Hornet_1", "Hornet Protector"),
+            new BossEntry("GG_Brooding_Mawlek", "Brooding Mawlek"),
+            // --- Пантеон Художника (раньше-середина игры) ---
+            new BossEntry("GG_Soul_Master", "Soul Master"),
+            new BossEntry("GG_Crystal_Guardian", "Crystal Guardian"),
+            new BossEntry("GG_Crystal_Guardian_2", "Enraged Guardian"),
+            new BossEntry("GG_Grimm", "Troupe Master Grimm"),
+            new BossEntry("GG_Collector", "The Collector"),
+            new BossEntry("GG_Soul_Tyrant", "Soul Tyrant"),
+            new BossEntry("GG_Dung_Defender", "Dung Defender"),
+            new BossEntry("GG_Mage_Knight", "Soul Warrior"),
+            new BossEntry("GG_Watcher_Knights", "Watcher Knights"),
+            new BossEntry("GG_Oblobbles", "Oblobbles"),
+            new BossEntry("GG_Hive_Knight", "Hive Knight"),
+            new BossEntry("GG_Nosk", "Nosk"),
+            new BossEntry("GG_Mantis_Lords", "Mantis Lords"),
+            new BossEntry("GG_Broken_Vessel", "Broken Vessel"),
+            // --- Пантеон Мудреца (середина-поздняя игра) ---
+            new BossEntry("GG_Lost_Kin", "Lost Kin"),
+            new BossEntry("GG_Failed_Champion", "Failed Champion"),
+            new BossEntry("GG_Traitor_Lord", "Traitor Lord"),
+            new BossEntry("GG_Uumuu", "Uumuu"),
+            new BossEntry("GG_Flukemarm", "Flukemarm"),
+            new BossEntry("GG_God_Tamer", "God Tamer"),
+            new BossEntry("GG_Ghost_Xero", "Xero"),
+            new BossEntry("GG_Ghost_Gorb", "Gorb"),
+            new BossEntry("GG_Ghost_Marmu", "Marmu"),
+            new BossEntry("GG_Ghost_No_Eyes", "No Eyes"),
+            new BossEntry("GG_Ghost_Markoth", "Markoth"),
+            new BossEntry("GG_Ghost_Galien", "Galien"),
+            new BossEntry("GG_Ghost_Hu", "Elder Hu"),
+            // --- Пантеон Рыцаря (поздние боссы) ---
+            new BossEntry("GG_Hornet_2", "Hornet Sentinel"),
+            new BossEntry("GG_Grey_Prince_Zote", "Grey Prince Zote"),
+            new BossEntry("GG_White_Defender", "White Defender"),
+            new BossEntry("GG_Grimm_Nightmare", "Nightmare King Grimm"),
+            new BossEntry("GG_Hollow_Knight", "Pure Vessel"),
+            // --- Пантеон Халлоунеста (финал) ---
+            new BossEntry("GG_Radiance", "The Radiance"),
+            // --- Гвоздемастеры (финалы пантеонов 1-3) ---
+            new BossEntry("GG_Nailmasters", "Brothers Oro & Mato"),
+            new BossEntry("GG_Painter", "Paintmaster Sheo"),
+            new BossEntry("GG_Sly", "Great Nailsage Sly"),
+            new BossEntry("GG_Lurker", "Pale Lurker"),
+            // --- Усложнённые варианты боёв (Ascended/Radiant) ---
+            new BossEntry("GG_Mantis_Lords_V", "Sisters of Battle"),
+            new BossEntry("GG_Nosk_Hornet", "Winged Nosk"),
+            new BossEntry("GG_Vengefly_V", "Vengefly King (Variant)"),
+            new BossEntry("GG_Gruz_Mother_V", "Gruz Mother (Variant)"),
+            new BossEntry("GG_Brooding_Mawlek_V", "Brooding Mawlek (Variant)"),
+            new BossEntry("GG_Collector_V", "The Collector (Variant)"),
+            new BossEntry("GG_Mage_Knight_V", "Soul Warrior (Variant)"),
+            new BossEntry("GG_Nosk_V", "Nosk (Variant)"),
+            new BossEntry("GG_Uumuu_V", "Uumuu (Variant)"),
+            new BossEntry("GG_Ghost_Gorb_V", "Gorb (Variant)"),
+            new BossEntry("GG_Ghost_Marmu_V", "Marmu (Variant)"),
+            new BossEntry("GG_Ghost_Markoth_V", "Markoth (Variant)"),
+            new BossEntry("GG_Ghost_No_Eyes_V", "No Eyes (Variant)"),
+            new BossEntry("GG_Ghost_Xero_V", "Xero (Variant)"),
+            // --- Хаб Godhome (не боссы, но полезно телепортироваться) ---
+            new BossEntry("GG_Atrium", "Godhome Atrium (хаб)"),
+            new BossEntry("GG_Workshop", "Godhome Workshop (верстак)"),
+            new BossEntry("GG_Boss_Door_Entrance", "Двери пантеонов"),
+        };
+
+        // Все GG_-сцены из build settings игры — для канонизации имён,
+        // введённых пользователем в любом регистре (gg_hornet_1 -> GG_Hornet_1).
+        private static readonly string[] KnownScenes = new string[]
+        {
+            "GG_Atrium", "GG_Atrium_Roof", "GG_Blue_Room", "GG_Boss_Door_Entrance",
+            "GG_Broken_Vessel", "GG_Brooding_Mawlek", "GG_Brooding_Mawlek_V",
+            "GG_Collector", "GG_Collector_V", "GG_Crystal_Guardian", "GG_Crystal_Guardian_2",
+            "GG_Door_5_Finale", "GG_Dung_Defender", "GG_End_Sequence", "GG_Engine",
+            "GG_Engine_Prime", "GG_Engine_Root", "GG_Entrance_Cutscene", "GG_Failed_Champion",
+            "GG_False_Knight", "GG_Flukemarm", "GG_Ghost_Galien", "GG_Ghost_Gorb",
+            "GG_Ghost_Gorb_V", "GG_Ghost_Hu", "GG_Ghost_Markoth", "GG_Ghost_Markoth_V",
+            "GG_Ghost_Marmu", "GG_Ghost_Marmu_V", "GG_Ghost_No_Eyes", "GG_Ghost_No_Eyes_V",
+            "GG_Ghost_Xero", "GG_Ghost_Xero_V", "GG_God_Tamer", "GG_Grey_Prince_Zote",
+            "GG_Grimm", "GG_Grimm_Nightmare", "GG_Gruz_Mother", "GG_Gruz_Mother_V",
+            "GG_Hive_Knight", "GG_Hollow_Knight", "GG_Hornet_1", "GG_Hornet_2",
+            "GG_Land_of_Storms", "GG_Lost_Kin", "GG_Lurker", "GG_Mage_Knight",
+            "GG_Mage_Knight_V", "GG_Mantis_Lords", "GG_Mantis_Lords_V", "GG_Mega_Moss_Charger",
+            "GG_Mighty_Zote", "GG_Nailmasters", "GG_Nosk", "GG_Nosk_Hornet",
+            "GG_Nosk_V", "GG_Oblobbles", "GG_Painter", "GG_Pipeway",
+            "GG_Radiance", "GG_Shortcut", "GG_Sly", "GG_Soul_Master",
+            "GG_Soul_Tyrant", "GG_Spa", "GG_Traitor_Lord", "GG_Unlock",
+            "GG_Unlock_Wastes", "GG_Unn", "GG_Uumuu", "GG_Uumuu_V",
+            "GG_Vengefly", "GG_Vengefly_V", "GG_Watcher_Knights", "GG_Waterways",
+            "GG_White_Defender", "GG_Workshop", "GG_Wyrm"
+        };
+
+        // Популярные короткие алиасы, которых нет в самих именах сцен.
+        private static readonly Dictionary<string, string> ExtraAliases = new Dictionary<string, string>
+        {
+            { "hornet", "GG_Hornet_1" },
+            { "hornet2", "GG_Hornet_2" },
+            { "hornet_sentinel", "GG_Hornet_2" },
+            { "sentinel", "GG_Hornet_2" },
+            { "false", "GG_False_Knight" },
+            { "falseknight", "GG_False_Knight" },
+            { "gruz", "GG_Gruz_Mother" },
+            { "gruzmother", "GG_Gruz_Mother" },
+            { "vengefly_king", "GG_Vengefly" },
+            { "moss_charger", "GG_Mega_Moss_Charger" },
+            { "mawlek", "GG_Brooding_Mawlek" },
+            { "vessel", "GG_Hollow_Knight" },
+            { "pure_vessel", "GG_Hollow_Knight" },
+            { "hollow_knight", "GG_Hollow_Knight" },
+            { "thk", "GG_Hollow_Knight" },
+            { "radiance", "GG_Radiance" },
+            { "nkg", "GG_Grimm_Nightmare" },
+            { "nightmare_king", "GG_Grimm_Nightmare" },
+            { "zote", "GG_Grey_Prince_Zote" },
+            { "gpz", "GG_Grey_Prince_Zote" },
+            { "sisters", "GG_Mantis_Lords_V" },
+            { "sisters_of_battle", "GG_Mantis_Lords_V" },
+            { "winged_nosk", "GG_Nosk_Hornet" },
+            { "oro", "GG_Nailmasters" },
+            { "mato", "GG_Nailmasters" },
+            { "oro_mato", "GG_Nailmasters" },
+            { "nailmasters", "GG_Nailmasters" },
+            { "sheo", "GG_Painter" },
+            { "paintmaster", "GG_Painter" },
+            { "nailsage", "GG_Sly" },
+            { "soul_warrior", "GG_Mage_Knight" },
+            { "watcher", "GG_Watcher_Knights" },
+            { "umuu", "GG_Uumuu" },
+            { "traitor", "GG_Traitor_Lord" },
+            { "abs_rad", "GG_Radiance" },
+        };
 
         public override void Initialize()
         {
@@ -76,7 +230,8 @@ namespace HK_AI_Mod
             Application.quitting += OnGameQuitting;
 
             WriteSafe(StatusJson("initialized"));
-            Log($"ИИ Экспортер 1.0 работает! Файл: {_filePath}");
+            Log($"ИИ Экспортер {GetVersion()} работает! Файл: {_filePath}");
+            Log("[ИИ] Команды: restart | teleport | boss <имя/номер> | bosses | warp");
         }
 
         private void SubscribeBossDeath()
@@ -116,6 +271,174 @@ namespace HK_AI_Mod
             }
             catch (Exception) {}
             return DEFAULT_BOSS_SCENE;
+        }
+
+        // ---------------- Выбор босса Godhome ----------------
+
+        private static string NormalizeQuery(string query)
+        {
+            if (query == null) return "";
+            string norm = query.Trim().ToLowerInvariant();
+            norm = norm.Replace(' ', '_').Replace('-', '_');
+            while (norm.Contains("__")) norm = norm.Replace("__", "_");
+            return norm.Trim('_');
+        }
+
+        // Канонизация имени сцены: пользователь может ввести "gg_hornet_1"
+        // в любом регистре — подставляем точное имя из build settings.
+        private static bool TryCanonicalizeScene(string normalized, out string scene)
+        {
+            foreach (string known in KnownScenes)
+            {
+                if (known.ToLowerInvariant() == normalized)
+                {
+                    scene = known;
+                    return true;
+                }
+            }
+            scene = null;
+            return false;
+        }
+
+        // Разбирает запрос на босса: номер в списке, имя сцены (любой регистр),
+        // короткий алиас, точное или частичное название босса.
+        private static bool TryResolveBoss(string query, out string scene, out string label)
+        {
+            scene = null;
+            label = null;
+            if (string.IsNullOrWhiteSpace(query)) return false;
+
+            string norm = NormalizeQuery(query);
+
+            // 1. Номер в реестре (1-based)
+            int index;
+            if (int.TryParse(norm, out index) && index >= 1 && index <= BossRegistry.Length)
+            {
+                scene = BossRegistry[index - 1].Scene;
+                label = BossRegistry[index - 1].Label;
+                return true;
+            }
+
+            // 2. Точное имя сцены из реестра (без учёта регистра)
+            foreach (BossEntry e in BossRegistry)
+            {
+                if (e.Scene.ToLowerInvariant() == norm)
+                {
+                    scene = e.Scene;
+                    label = e.Label;
+                    return true;
+                }
+            }
+
+            // 3. Короткий алиас (hornet, nkg, sisters, ...)
+            string aliasScene;
+            if (ExtraAliases.TryGetValue(norm, out aliasScene))
+            {
+                foreach (BossEntry e in BossRegistry)
+                {
+                    if (e.Scene == aliasScene)
+                    {
+                        scene = e.Scene;
+                        label = e.Label;
+                        return true;
+                    }
+                }
+            }
+
+            // 4. Точное название босса
+            foreach (BossEntry e in BossRegistry)
+            {
+                if (NormalizeQuery(e.Label) == norm)
+                {
+                    scene = e.Scene;
+                    label = e.Label;
+                    return true;
+                }
+            }
+
+            // 5. Имя сцены из build settings, не попавшее в реестр
+            // (GG_Spa, GG_Wyrm, GG_Engine и т.п.)
+            string canonical;
+            if (TryCanonicalizeScene(norm, out canonical))
+            {
+                scene = canonical;
+                label = canonical + " (сцена без реестра)";
+                return true;
+            }
+
+            // 6. Частичное совпадение по сцене/названию; при неоднозначности
+            // предпочитаем базовую версию босса (не (Variant) и не *_V)
+            string matched = null;
+            string matchedLabel = null;
+            foreach (BossEntry e in BossRegistry)
+            {
+                string sceneNorm = NormalizeQuery(e.Scene);
+                if (!sceneNorm.Contains(norm) && !NormalizeQuery(e.Label).Contains(norm))
+                    continue;
+                if (matched != null)
+                {
+                    // Второй кандидат: сузим до базовой версии, если возможно
+                    bool curIsVariant = matched.EndsWith("_V") || matchedLabel.Contains("(Variant)");
+                    bool newIsVariant = e.Scene.EndsWith("_V") || e.Label.Contains("(Variant)");
+                    if (newIsVariant) continue;          // вариант хуже базовой версии
+                    if (curIsVariant) { matched = e.Scene; matchedLabel = e.Label; continue; }
+                    return false;                        // две базовые версии — неоднозначно
+                }
+                matched = e.Scene;
+                matchedLabel = e.Label;
+            }
+            if (matched != null)
+            {
+                scene = matched;
+                label = matchedLabel;
+                return true;
+            }
+
+            // 7. Незнакомое имя вида gg_* — передаём как есть, вдруг сцена есть
+            if (norm.StartsWith("gg_"))
+            {
+                scene = query.Trim();
+                label = scene + " (неизвестная сцена, попытка загрузки)";
+                return true;
+            }
+
+            return false;
+        }
+
+        private void WriteBossList()
+        {
+            try
+            {
+                var sb = new System.Text.StringBuilder();
+                sb.Append("{\"target_scene\": \"").Append(ReadTargetScene()).Append("\", \"count\": ").Append(BossRegistry.Length).Append(", \"bosses\": [");
+                for (int i = 0; i < BossRegistry.Length; i++)
+                {
+                    if (i > 0) sb.Append(", ");
+                    sb.Append("{\"index\": ").Append(i + 1)
+                      .Append(", \"scene\": \"").Append(BossRegistry[i].Scene)
+                      .Append("\", \"label\": \"").Append(BossRegistry[i].Label).Append("\"}");
+                }
+                sb.Append("]}");
+                string listPath = Path.Combine(Path.GetTempPath(), "hk_ai_bosses.json");
+                File.WriteAllText(listPath, sb.ToString());
+                Log($"[ИИ] Список боссов выгружен: {listPath}");
+            }
+            catch (Exception e)
+            {
+                Log($"[ИИ] Не удалось выгрузить список боссов: {e.Message}");
+            }
+        }
+
+        private string CurrentSceneName()
+        {
+            try
+            {
+                return UnityEngine.SceneManagement.SceneManager.GetActiveScene().name ?? "";
+            }
+            catch (Exception)
+            {
+                return "";
+            }
         }
 
         private void OnTick(float unscaledDelta)
@@ -283,29 +606,80 @@ namespace HK_AI_Mod
                     _restartPending = false;
                     return;
                 }
+
+                string raw = File.ReadAllText(_cmdPath).Trim();
+                if (raw.Length == 0) return;
+                string cmd = raw.ToLowerInvariant();
+
+                // Справка по списку боссов — работает даже в главном меню.
+                if (cmd == "bosses")
+                {
+                    WriteBossList();
+                    TryDeleteCmd();
+                    return;
+                }
+
                 if (_inMenuScene) return;
 
-                string cmd = File.ReadAllText(_cmdPath).Trim().ToLower();
-                if (cmd != "restart")
+                if (cmd == "warp")
+                {
+                    WarpHeroToGate();
+                    TryDeleteCmd();
+                    return;
+                }
+
+                bool isRestart = cmd == "restart";
+                bool isTeleport = cmd == "teleport";
+                bool isBossSelect = cmd == "boss" || cmd.StartsWith("boss ");
+
+                if (!isRestart && !isTeleport && !isBossSelect)
                 {
                     TryDeleteCmd();
                     return;
                 }
+
                 if (_restartPending)
                 {
                     TryDeleteCmd();
                     return;
                 }
-                _restartPending = true;
-                string targetScene = ReadTargetScene();
-                Log($"[ИИ] Быстрый рестарт: переход в сцену '{targetScene}'");
 
+                // Целевая сцена: из аргумента "boss <x>" или из конфиг-файла.
+                string targetScene = ReadTargetScene();
+                if (isBossSelect)
+                {
+                    string query = cmd.Length > 5 ? cmd.Substring(5).Trim() : "";
+                    string resolvedScene, resolvedLabel;
+                    if (!TryResolveBoss(query, out resolvedScene, out resolvedLabel))
+                    {
+                        Log($"[ИИ] Босс не распознан: '{query}'. Отправь команду 'bosses' для списка.");
+                        TryDeleteCmd();
+                        return;
+                    }
+                    targetScene = resolvedScene;
+                    // Запоминаем выбранного босса, чтобы рестарты и Python
+                    // продолжали работать с этой же ареной.
+                    WriteBossConfig(targetScene);
+                    Log($"[ИИ] Выбран босс: {resolvedLabel} ({resolvedScene})");
+                }
+                else
+                {
+                    // restart/teleport тоже понимают алиасы (HK_BOSS_SCENE="hornet")
+                    string resolvedScene, resolvedLabel;
+                    if (TryResolveBoss(targetScene, out resolvedScene, out resolvedLabel))
+                        targetScene = resolvedScene;
+                }
+
+                _restartPending = true;
                 _watchdogTimer = 0f;
+
+                string gate = ReadTargetGateName();
+                Log($"[ИИ] {(isBossSelect ? "Телепорт к боссу" : "Быстрый рестарт")}: переход в сцену '{targetScene}' через гейт '{gate}'");
 
                 GameManager.instance.BeginSceneTransition(new GameManager.SceneLoadInfo
                 {
                     SceneName = targetScene,
-                    EntryGateName = "door1",
+                    EntryGateName = gate,
                     WaitForSceneTransitionCameraFade = true,
                     Visualization = GameManager.SceneLoadVisualizations.Default,
                     AlwaysUnloadUnusedAssets = false
@@ -314,7 +688,54 @@ namespace HK_AI_Mod
             }
             catch (Exception e)
             {
-                Log($"[ИИ] Ошибка команды рестарта: {e}");
+                Log($"[ИИ] Ошибка команды: {e}");
+            }
+        }
+
+        private void WriteBossConfig(string scene)
+        {
+            try
+            {
+                File.WriteAllText(_sceneConfigPath, scene);
+            }
+            catch (Exception) {}
+        }
+
+        // Возвращает героя к входу арены текущей сцены без перезагрузки сцены.
+        private void WarpHeroToGate()
+        {
+            try
+            {
+                HeroController hero = HeroController.instance;
+                if (hero == null)
+                {
+                    Log("[ИИ] Warp: героя нет на сцене");
+                    return;
+                }
+
+                TransitionPoint gate = FindTransitionGate(hero.transform, ReadTargetGateName());
+                if (gate != null)
+                    hero.transform.SetPosition2D(gate.transform.position.x, gate.transform.position.y + 1f);
+                else
+                    Log("[ИИ] Warp: гейт не найден, герой остаётся на месте");
+
+                if (hero.cState != null && hero.cState.transitioning)
+                    ReflectionHelper.CallMethod(hero, "FinishedEnteringScene", true, false);
+
+                if (Time.timeScale <= 0f) Time.timeScale = 1f;
+
+                try
+                {
+                    var heroRenderer = hero.GetComponentInChildren<Renderer>();
+                    if (heroRenderer != null) heroRenderer.enabled = true;
+                }
+                catch (Exception) {}
+
+                Log("[ИИ] Warp: герой возвращён к гейту арены");
+            }
+            catch (Exception e)
+            {
+                Log($"[ИИ] Ошибка warp: {e}");
             }
         }
 
@@ -340,7 +761,8 @@ namespace HK_AI_Mod
 
         private string StatusJson(string status)
         {
-            return "{\"status\": \"" + status + "\", \"restart_pending\": " + (_restartPending ? 1 : 0) + "}";
+            return "{\"status\": \"" + status + "\", \"restart_pending\": " + (_restartPending ? 1 : 0)
+                + ", \"scene\": \"" + CurrentSceneName() + "\"}";
         }
 
         private bool IsAttackAnimation(string animName)
@@ -652,7 +1074,7 @@ namespace HK_AI_Mod
                         boss_is_attacking = true;
                     }
 
-                    string data = $"{{\"status\": \"fight\", \"restart_pending\": {(_restartPending ? 1 : 0)}, \"hp\": {hp}, \"max_hp\": {max_hp}, \"mana\": {mana}, \"boss_hp\": {bossHp}, \"boss_dead\": {(_bossDead ? 1 : 0)}, " +
+                    string data = $"{{\"status\": \"fight\", \"restart_pending\": {(_restartPending ? 1 : 0)}, \"scene\": \"{CurrentSceneName()}\", \"hp\": {hp}, \"max_hp\": {max_hp}, \"mana\": {mana}, \"boss_hp\": {bossHp}, \"boss_dead\": {(_bossDead ? 1 : 0)}, " +
                         $"\"x\": {x.ToString("F2", CultureInfo.InvariantCulture)}, " +
                         $"\"y\": {y.ToString("F2", CultureInfo.InvariantCulture)}, " +
                         $"\"boss_x\": {bossX.ToString("F2", CultureInfo.InvariantCulture)}, " +

@@ -11,6 +11,7 @@ import os
 
 from ai_environment import HollowKnightEnv
 from ai_controller import HollowKnightController
+from bosses import resolve_query, set_gate
 from screen_capture import USE_SCREEN_CAPTURE
 
 
@@ -40,7 +41,12 @@ STAT_NAMES = [
 IDX = {name: i for i, name in enumerate(STAT_NAMES)}
 STATS_SIZE = len(STAT_NAMES)
 
-BOSS_SCENE = os.environ.get("HK_BOSS_SCENE", "GG_False_Knight")
+# HK_BOSS_SCENE понимает имя сцены (GG_False_Knight), алиас (hornet, nkg)
+# или номер из реестра боссов (см. bosses.py / python teleport.py --list).
+_RAW_BOSS_SCENE = os.environ.get("HK_BOSS_SCENE", "GG_False_Knight")
+_RESOLVED_BOSS = resolve_query(_RAW_BOSS_SCENE)
+BOSS_SCENE, BOSS_SCENE_LABEL = _RESOLVED_BOSS if _RESOLVED_BOSS else (_RAW_BOSS_SCENE, _RAW_BOSS_SCENE)
+ENTRY_GATE = os.environ.get("HK_ENTRY_GATE", "door1")
 # FRAME_SKIP больше не используется: шаг синхронизируется по свежей телеметрии
 # (см. wait_for_fresh_telemetry в ai_environment.py). Оставлено для совместимости.
 FRAME_SKIP = max(1, int(os.environ.get("HK_FRAME_SKIP", "4")))
@@ -52,7 +58,9 @@ class HollowKnightGym(gym.Env):
         
         self.game_env = HollowKnightEnv()
         self.controller = HollowKnightController()
+        print(f"[GYM] Босс: {BOSS_SCENE_LABEL} ({BOSS_SCENE}), гейт: {ENTRY_GATE}")
         self.controller.set_boss_scene(BOSS_SCENE)
+        set_gate(ENTRY_GATE)
         
         self.action_space = spaces.Discrete(16)
         
