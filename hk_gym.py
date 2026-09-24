@@ -58,7 +58,6 @@ class HollowKnightGym(gym.Env):
         
         self.game_env = HollowKnightEnv()
         self.controller = HollowKnightController()
-        print(f"[GYM] Босс: {BOSS_SCENE_LABEL} ({BOSS_SCENE}), гейт: {ENTRY_GATE}")
         self.controller.set_boss_scene(BOSS_SCENE)
         set_gate(ENTRY_GATE)
         

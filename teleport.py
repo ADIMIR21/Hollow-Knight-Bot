@@ -183,6 +183,7 @@ def interactive_loop(auto_train=False):
             print_boss_list()
             continue
         if low == "r":
+            print("[ТЕЛЕПОРТ] Рестарт боя...")
             request_restart()
             if wait_for_scene(current_scene(), timeout=30.0):
                 print("[ТЕЛЕПОРТ] Бой перезапущен.")
@@ -190,6 +191,7 @@ def interactive_loop(auto_train=False):
                 print("[ТЕЛЕПОРТ] Бой не перезапустился.")
             continue
         if low == "w":
+            print("[ТЕЛЕПОРТ] Варп к гейту арены...")
             request_warp()
             continue
         if low in ("l", "ls", "--list"):
@@ -220,9 +222,11 @@ def main():
 
     if args.restart:
         request_restart()
+        print("[ТЕЛЕПОРТ] Команда рестарта отправлена.")
         return
     if args.warp:
         request_warp()
+        print("[ТЕЛЕПОРТ] Команда варпа отправлена.")
         return
     if args.boss:
         if have_mod:

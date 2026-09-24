@@ -216,16 +216,12 @@ def write_file(path, text):
 
 def send_command(cmd):
     """Пишет команду в hk_ai_cmd.txt (мод опрашивает файл каждый тик)."""
-    ok = write_file(CMD_FILE, cmd)
-    if ok:
-        print(f"[BOSS] Команда отправлена: {cmd!r}")
-    return ok
+    return write_file(CMD_FILE, cmd)
 
 
 def set_boss_scene(scene_name):
     """Задаёт целевую сцену для рестартов (hk_ai_boss.txt)."""
-    if write_file(BOSS_SCENE_FILE, str(scene_name).strip()):
-        print(f"[BOSS] Целевая сцена босса: {scene_name.strip()}")
+    return write_file(BOSS_SCENE_FILE, str(scene_name).strip())
 
 
 def set_gate(gate_name):
