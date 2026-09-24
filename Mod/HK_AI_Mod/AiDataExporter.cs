@@ -9,13 +9,12 @@ namespace HK_AI_Mod
 {
     public class AiDataExporter : Mod
     {
-        public override string GetVersion() => "1.0";
+        public override string GetVersion() => "1.1";
 
         private string _filePath = "";
         private string _cmdPath = "";
         private string _sceneConfigPath = "";
         private string _gateConfigPath = "";
-        private int _frameCounter = 0;
 
         private HealthManager? _currentBoss = null;
         private int _lastPlayerHp = 9;
@@ -416,9 +415,9 @@ namespace HK_AI_Mod
 
         private void OnHeroUpdate()
         {
-            _frameCounter++;
-            if (_frameCounter < 3) return;
-            _frameCounter = 0;
+            // v1.1: телеметрия каждый HeroUpdate (~60 записей/сек при 60fps).
+            // Python-сторона синхронизируется по mtime файла и успевает за игрой,
+            // что поднимает потолок скорости обучения с ~20 до ~60 шагов/сек.
 
             PollCommand();
 

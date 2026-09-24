@@ -1,5 +1,6 @@
 import os
 import time
+from collections import deque
 
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import CheckpointCallback, BaseCallback, CallbackList
@@ -66,6 +67,53 @@ class VecNormalizeSaveCallback(BaseCallback):
         return True
 
 
+class WinRateLoggingCallback(BaseCallback):
+    """
+    Обновление 4: вин-рейт за последние N эпизодов и причины завершения.
+    Эпизод считаем завершённым по info["episode"] (его добавляет Monitor),
+    исход берём из reward_parts, который кладёт среда.
+    """
+
+    def __init__(self, window=100, verbose=0):
+        super().__init__(verbose)
+        self.window = window
+        self._results = deque(maxlen=window)  # 1.0 победа, 0.0 не-победа
+        self.total_episodes = 0
+        self.total_victories = 0
+        self._reasons = deque(maxlen=window)  # "victory" / "death" / "timeout"
+
+    def _on_step(self) -> bool:
+        for info in self.locals.get("infos", []):
+            if "episode" not in info:
+                continue
+            parts = info.get("reward_parts") or {}
+            if parts.get("victory", 0.0) > 0:
+                outcome, reason = 1.0, "victory"
+            elif parts.get("death", 0.0) < 0:
+                outcome, reason = 0.0, "death"
+            else:
+                outcome, reason = 0.0, "timeout"
+            self._results.append(outcome)
+            self._reasons.append(reason)
+            self.total_episodes += 1
+            if outcome > 0:
+                self.total_victories += 1
+        return True
+
+    def _on_rollout_end(self) -> bool:
+        if not self._results:
+            return True
+        self.logger.record("custom/win_rate", sum(self._results) / len(self._results))
+        self.logger.record("custom/episodes", self.total_episodes)
+        self.logger.record("custom/victories", self.total_victories)
+        for reason in ("victory", "death", "timeout"):
+            self.logger.record(
+                f"custom/last100_{reason}",
+                self._reasons.count(reason) / len(self._reasons),
+            )
+        return True
+
+
 def make_model(env):
     return PPO(
         "MlpPolicy",
@@ -73,7 +121,10 @@ def make_model(env):
         verbose=1,
         tensorboard_log=LOGS_DIR,
         learning_rate=linear_schedule(3e-4),
-        n_steps=2048,
+        # Обновление 5: 2048 -> 1024. При ~20-60 шагах/сек один роллаут
+        # из 2048 шагов занимал 0.5-2 минуты; апдейт политики чаще —
+        # заметнее прогресс в начале обучения.
+        n_steps=1024,
         batch_size=128,
         n_epochs=10,
         ent_coef=0.01,
@@ -141,6 +192,9 @@ def main():
                     "learning_rate": lambda progress_remaining: 3e-4 * progress_remaining,
                     "clip_range": 0.2,
                 },
+                # Обновление 5: в файле модели зашит n_steps=2048, kwarg
+                # применяется ПОСЛЕ data в SB3 и перекрывает его.
+                n_steps=1024,
             )
             print("[СИСТЕМА] Модель успешно загружена.")
         except Exception as e:
@@ -161,11 +215,13 @@ def main():
     )
 
     reward_logging_callback = RewardComponentLoggingCallback()
+    win_rate_callback = WinRateLoggingCallback(window=100)
 
     callback_list = CallbackList([
         checkpoint_callback,
         vecnorm_save_callback,
         reward_logging_callback,
+        win_rate_callback,
     ])
 
     print("\n[СИСТЕМА] ИИ готов к обучению.")

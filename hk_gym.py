@@ -410,8 +410,11 @@ class HollowKnightGym(gym.Env):
             self._last_episode_was_victory = True
 
         if current_hp <= 0 and self.last_hp > 0:
-            reward -= 200.0
-            reward_parts["death"] -= 200.0
+            # Обновление 6: штраф за смерть поднят с -200. Максимальный shaping
+            # за эпизод ~3000+ (урон по боссу) — при -200 политике было выгодно
+            # "размениваться". -500 делает смерть до убийства гарантированно плохой.
+            reward -= 500.0
+            reward_parts["death"] -= 500.0
             terminated = True
             self.controller.reset_all()
 
