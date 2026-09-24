@@ -23,13 +23,42 @@ class HollowKnightEnv:
         print("[ENV] хк успешно найден!")
 
     def get_telemetry(self):
-        for attempt in range(3):
+        # Обновление 3: ретраи БЕЗ сна. Мод пишет через File.Replace —
+        # в момент замены файл недоступен лишь считанные микросекунды,
+        # спать по 0.02с на каждую неудачную попытку не нужно.
+        for attempt in range(10):
             try:
                 with open(PATH_TO_TELEMETRY, 'r') as f:
                     return json.load(f)
             except (OSError, json.JSONDecodeError):
-                time.sleep(0.02)
+                pass
         return None
+
+    def get_telemetry_mtime(self):
+        """Штамп последней записи телеметрии (mtime файла) или None."""
+        try:
+            return os.path.getmtime(PATH_TO_TELEMETRY)
+        except OSError:
+            return None
+
+    def wait_for_fresh_telemetry(self, last_mtime, timeout=0.15):
+        """
+        Обновление 2: ждём появления НОВОЙ записи в файле телеметрии
+        (по изменению mtime) вместо фиксированных снов.
+
+        Возвращает mtime новых данных, либо прежний last_mtime,
+        если за timeout ничего не пришло (меню/пауза — работаем по старым данным).
+        """
+        if last_mtime is None:
+            last_mtime = self.get_telemetry_mtime()
+        deadline = time.perf_counter() + timeout
+        while True:
+            mtime = self.get_telemetry_mtime()
+            if mtime is not None and mtime != last_mtime:
+                return mtime
+            if time.perf_counter() >= deadline:
+                return last_mtime
+            time.sleep(0.001)
 
     def get_observation(self):
         frame = None

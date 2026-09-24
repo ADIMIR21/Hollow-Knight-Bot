@@ -13,6 +13,20 @@ from ai_environment import HollowKnightEnv
 from ai_controller import HollowKnightController
 from screen_capture import USE_SCREEN_CAPTURE
 
+
+def _enable_precise_sleep():
+    """Обновление 3 (хвост): на Windows time.sleep() грубый (~15.6мс такт
+    системного таймера). timeBeginPeriod(1) делает сны точными до ~1мс."""
+    if os.name == 'nt':
+        try:
+            import ctypes
+            ctypes.windll.winmm.timeBeginPeriod(1)
+        except Exception:
+            pass
+
+
+_enable_precise_sleep()
+
 SHOW_WINDOWS = False
 
 STAT_NAMES = [
@@ -27,6 +41,8 @@ IDX = {name: i for i, name in enumerate(STAT_NAMES)}
 STATS_SIZE = len(STAT_NAMES)
 
 BOSS_SCENE = os.environ.get("HK_BOSS_SCENE", "GG_False_Knight")
+# FRAME_SKIP больше не используется: шаг синхронизируется по свежей телеметрии
+# (см. wait_for_fresh_telemetry в ai_environment.py). Оставлено для совместимости.
 FRAME_SKIP = max(1, int(os.environ.get("HK_FRAME_SKIP", "4")))
 FRAME_STACK = max(1, int(os.environ.get("HK_FRAME_STACK", "4")))
 
@@ -72,6 +88,7 @@ class HollowKnightGym(gym.Env):
         self._no_boss_frames = 0
         self._running = True
         self._first_reset = True
+        self._telemetry_mtime = self.game_env.get_telemetry_mtime()
         self._console_thread = threading.Thread(target=self._console_listener, daemon=True)
         self._console_thread.start()
         
@@ -254,6 +271,7 @@ class HollowKnightGym(gym.Env):
                     self._wait_for_fight_scene(20.0)
 
             time.sleep(0.5)
+            self._telemetry_mtime = self.game_env.get_telemetry_mtime()
             obs = self._get_obs()
             self._obs_deque.clear()
             for _ in range(FRAME_STACK):
@@ -312,11 +330,17 @@ class HollowKnightGym(gym.Env):
             time.sleep(0.003)
             self.controller.set_action(action)
         
-        time.sleep(0.005)
-        
-        for _ in range(FRAME_SKIP - 1):
+        # Обновление 2: вместо фиксированных снов (5мс + 3x16мс, а на деле
+        # из-за гранулярности таймера Windows ~60-90мс) ждём СВЕЖУЮ запись
+        # телеметрии от мода. Шаг идёт ровно в темпе игры.
+        # Если новых данных нет (меню/пауза) — короткий фолбэк-сон,
+        # чтобы не гонять пустые шаги.
+        new_mtime = self.game_env.wait_for_fresh_telemetry(self._telemetry_mtime, timeout=0.15)
+        if new_mtime != self._telemetry_mtime:
+            self._telemetry_mtime = new_mtime
+        else:
             time.sleep(0.016)
-        
+
         obs = self._get_obs()
         self._obs_deque.append(obs.copy())
         stacked_obs = np.concatenate(list(self._obs_deque)).astype(np.float32)
