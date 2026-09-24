@@ -137,6 +137,42 @@ python train.py
 | `HK_FRAME_SKIP` | `4` | Сколько шагов игры держится действие |
 | `HK_FRAME_STACK` | `4` | Сколько последних наблюдений в стеке |
 
+### Журнал прогресса обучения
+
+Все метрики, которые уходят в TensorBoard и печатаются в консоль, дублируются в текстовый файл **`logs/progress.txt`** (UTF-8, дописывается при каждом запуске — при падении обучения уже записанный прогресс не теряется):
+
+- строка `EPISODE ...` на каждый завершённый эпизод: исход (`outcome=victory` / `death` / `timeout`), награда, длина, счётчик побед и вин-рейт по окну 100 эпизодов;
+- таблица метрик после каждого роллаута (`n_steps = 1024` шага) — ровно тот блок, что печатается в консоль: `custom/victories`, `custom/win_rate`, `custom/last100_*`, `reward_breakdown/*`, `rollout/*`, `train/*`. При `verbose=1` его пишет сам логгер Stable-Baselines3 через `HumanOutputFormat`, при `verbose=0` значения собирает колбэк.
+
+Пример:
+
+```
+# Hollow Knight Bot — журнал прогресса обучения
+# Создан: 2026-09-24 19:02:11
+# Далее файл дописывает train.py (ProgressFileCallback)
+
+[2026-09-24 19:02:11] EPISODE #21 step=45148 outcome=victory reward=1521.98 len=1735 | wins=4/21 win_rate(100)=0.190 death=0.810 timeout=0.000
+------------------------------------
+| custom/            |             |
+|    episodes        | 21          |
+|    victories       | 4           |
+|    win_rate        | 0.19        |
+|    last100_victory | 0.19        |
+|    last100_death   | 0.81        |
+| reward_breakdown/  |             |
+|    victory         | 47.6        |
+| rollout/           |             |
+|    ep_len_mean     | 1.73e+03    |
+|    ep_rew_mean     | 1.52e+03    |
+| train/             |             |
+|    loss            | -0.0973     |
+------------------------------------
+```
+
+Пишет его `ProgressFileCallback` в `train.py`. В `CallbackList` он обязан идти **последним** — иначе в файл не попадут метрики остальных колбэков того же роллаута.
+
+Смотреть в реальном времени: `Get-Content logs\progress.txt -Wait -Tail 40` (PowerShell).
+
 ### Отладка телеметрии
 
 ```bash
