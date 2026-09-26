@@ -1,43 +1,35 @@
-"""Godhome boss registry and low-level command protocol for the HK_AI_Mod.
-
-The registry mirrors BossRegistry in Mod/HK_AI_Mod/AiDataExporter.cs.
-Scenes are taken from the game's build settings (hollow_knight_Data/globalgamemanagers).
-Variants with the _V suffix are harder versions of the fights (Ascended/Radiant),
+"""Реестр — зеркало BossRegistry в Mod/HK_AI_Mod/AiDataExporter.cs.
+Сцены взяты из build settings игры (hollow_knight_Data/globalgamemanagers).
+Варианты с суффиксом _V — усложнённые версии боёв (Ascended/Radiant),
 GG_Mantis_Lords_V = Sisters of Battle, GG_Nosk_Hornet = Winged Nosk.
 
-Protocol (files in %TEMP%, same as the mod):
-  hk_ai_cmd.txt   — command: restart | teleport | boss <query> | bosses | warp
-  hk_ai_boss.txt  — target boss scene (the mod overwrites it itself on "boss <x>")
-  hk_ai_gate.txt  — arena entrance gate name (defaults to door_dreamEnter)
-  hk_ai_data.json — telemetry
+Протокол — именованный пайп ``\\\\.\\pipe\\hk_ai_mod`` (см. hk_pipe.py):
+  Python -> Мод: restart | teleport | set_boss <сцена> | set_gate <гейт>
+                 | boss <запрос> | bosses | warp
+  Мод -> Python: телеметрия боя (содержит поле "scene") плюс одноразовые
+                 события boss_list / boss_selected / command_error.
+Файлы в %TEMP% (hk_ai_cmd.txt, hk_ai_data.json и прочие) больше не используются.
 """
 
-import os
-import tempfile
 import time
-import json
 
-CMD_FILE = os.path.join(tempfile.gettempdir(), "hk_ai_cmd.txt")
-BOSS_SCENE_FILE = os.path.join(tempfile.gettempdir(), "hk_ai_boss.txt")
-GATE_FILE = os.path.join(tempfile.gettempdir(), "hk_ai_gate.txt")
-BOSS_LIST_FILE = os.path.join(tempfile.gettempdir(), "hk_ai_bosses.json")
-TELEMETRY_FILE = os.path.join(tempfile.gettempdir(), "hk_ai_data.json")
+from hk_pipe import REQUIRED_PROTOCOL, get_shared_client
 
 DEFAULT_SCENE = "GG_False_Knight"
-# Godhome arenas accept the hero through the scene's single TransitionPoint —
-# door_dreamEnter (mod v1 finds an existing gate itself anyway).
+# Арены Godhome принимают героя через единственный TransitionPoint сцены —
+# door_dreamEnter (мод всё равно подбирает существующий гейт сам).
 DEFAULT_GATE = "door_dreamEnter"
 
-# (scene, label) — order and labels match the mod's registry.
+# (scene, label) — порядок и подписи совпадают с реестром мода.
 BOSS_LIST = [
-    # Pantheon of the Master (early bosses)
+    # Пантеон Мастера (ранние боссы)
     ("GG_Vengefly", "Vengefly King"),
     ("GG_Gruz_Mother", "Gruz Mother"),
     ("GG_False_Knight", "False Knight"),
     ("GG_Mega_Moss_Charger", "Massive Moss Charger"),
     ("GG_Hornet_1", "Hornet Protector"),
     ("GG_Brooding_Mawlek", "Brooding Mawlek"),
-    # Pantheon of the Artist (early-mid game)
+    # Пантеон Художника (раньше-середина игры)
     ("GG_Soul_Master", "Soul Master"),
     ("GG_Crystal_Guardian", "Crystal Guardian"),
     ("GG_Crystal_Guardian_2", "Enraged Guardian"),
@@ -52,7 +44,7 @@ BOSS_LIST = [
     ("GG_Nosk", "Nosk"),
     ("GG_Mantis_Lords", "Mantis Lords"),
     ("GG_Broken_Vessel", "Broken Vessel"),
-    # Pantheon of the Sage (mid-late game)
+    # Пантеон Мудреца (середина-поздняя игра)
     ("GG_Lost_Kin", "Lost Kin"),
     ("GG_Failed_Champion", "Failed Champion"),
     ("GG_Traitor_Lord", "Traitor Lord"),
@@ -66,20 +58,20 @@ BOSS_LIST = [
     ("GG_Ghost_Markoth", "Markoth"),
     ("GG_Ghost_Galien", "Galien"),
     ("GG_Ghost_Hu", "Elder Hu"),
-    # Pantheon of the Knight (late bosses)
+    # Пантеон Рыцаря (поздние боссы)
     ("GG_Hornet_2", "Hornet Sentinel"),
     ("GG_Grey_Prince_Zote", "Grey Prince Zote"),
     ("GG_White_Defender", "White Defender"),
     ("GG_Grimm_Nightmare", "Nightmare King Grimm"),
     ("GG_Hollow_Knight", "Pure Vessel"),
-    # Pantheon of Hallownest (finale)
+    # Пантеон Халлоунеста (финал)
     ("GG_Radiance", "The Radiance"),
-    # Nailmasters (Pantheon 1-3 finales)
+    # Гвоздемастеры (финалы пантеонов 1-3)
     ("GG_Nailmasters", "Brothers Oro & Mato"),
     ("GG_Painter", "Paintmaster Sheo"),
     ("GG_Sly", "Great Nailsage Sly"),
     ("GG_Lurker", "Pale Lurker"),
-    # Harder fight variants (Ascended/Radiant)
+    # Усложнённые варианты боёв (Ascended/Radiant)
     ("GG_Mantis_Lords_V", "Sisters of Battle"),
     ("GG_Nosk_Hornet", "Winged Nosk"),
     ("GG_Vengefly_V", "Vengefly King (Variant)"),
@@ -94,15 +86,15 @@ BOSS_LIST = [
     ("GG_Ghost_Markoth_V", "Markoth (Variant)"),
     ("GG_Ghost_No_Eyes_V", "No Eyes (Variant)"),
     ("GG_Ghost_Xero_V", "Xero (Variant)"),
-    # Godhome hubs (not bosses, but useful to warp to)
-    ("GG_Atrium", "Godhome Atrium (hub)"),
-    ("GG_Workshop", "Godhome Workshop (bench)"),
-    ("GG_Boss_Door_Entrance", "Pantheon Doors"),
+    # Хаб Godhome (не боссы, но полезно телепортироваться)
+    ("GG_Atrium", "Godhome Atrium (хаб)"),
+    ("GG_Workshop", "Godhome Workshop (верстак)"),
+    ("GG_Boss_Door_Entrance", "Двери пантеонов"),
 ]
 
 _SCENE_TO_LABEL = {scene: label for scene, label in BOSS_LIST}
 
-# Popular short aliases — mirror of ExtraAliases in the mod.
+# Популярные короткие алиасы — зеркало ExtraAliases в моде.
 _EXTRA_ALIASES = {
     "hornet": "GG_Hornet_1",
     "hornet2": "GG_Hornet_2",
@@ -143,7 +135,7 @@ _EXTRA_ALIASES = {
 
 
 def normalize(query):
-    """Normalizes the query to lowercase with underscores."""
+    """Приводит запрос к нижнему регистру с подчёркиваниями."""
     if query is None:
         return ""
     norm = str(query).strip().lower()
@@ -155,16 +147,16 @@ def normalize(query):
 
 
 def resolve_query(query):
-    """Resolves a boss query locally (for menus/validation).
+    """Разбирает запрос на босса локально (для меню/валидации).
 
-    Supports a list number, scene name (any case), an alias,
-    an exact label and a partial label. Returns (scene, label) or None.
+    Поддерживает номер в списке, имя сцены (любой регистр), алиас,
+    точное название и часть названия. Возвращает (scene, label) или None.
     """
     norm = normalize(query)
     if not norm:
         return None
 
-    # 1. List number
+    # 1. Номер в списке
     if norm.isdigit():
         index = int(norm)
         if 1 <= index <= len(BOSS_LIST):
@@ -172,24 +164,24 @@ def resolve_query(query):
             return scene, label
         return None
 
-    # 2. Exact scene name
+    # 2. Точное имя сцены
     if norm in _SCENE_TO_LABEL:
         for scene, label in BOSS_LIST:
             if scene.lower() == norm:
                 return scene, label
 
-    # 3. Alias
+    # 3. Алиас
     scene = _EXTRA_ALIASES.get(norm)
     if scene:
         return scene, _SCENE_TO_LABEL.get(scene, scene)
 
-    # 4. Exact boss label
+    # 4. Точное название босса
     for scene, label in BOSS_LIST:
         if normalize(label) == norm:
             return scene, label
 
-    # 5. Partial match — on ambiguity prefer the
-    #    base version of the boss (not (Variant) and not *_V)
+    # 5. Частичное совпадение — при неоднозначности отдаём предпочтение
+    #    базовой версии босса (не (Variant) и не *_V)
     matches = []
     for scene, label in BOSS_LIST:
         if norm in normalize(scene) or norm in normalize(label):
@@ -204,72 +196,91 @@ def resolve_query(query):
     return None
 
 
-# ---------------- Exchange protocol with the mod ----------------
-
-def write_file(path, text):
-    try:
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(text)
-        return True
-    except OSError as e:
-        print(f"[BOSS] Failed to write {path}: {e}")
-        return False
-
+# ---------------- Протокол обмена с модом (именованный пайп) ----------------
 
 def send_command(cmd):
-    """Writes a command to hk_ai_cmd.txt (the mod polls the file every tick)."""
-    return write_file(CMD_FILE, cmd)
+    """Отправляет команду моду. True — строка ушла в пайп."""
+    return get_shared_client().send_command(cmd)
 
 
 def set_boss_scene(scene_name):
-    """Sets the target scene for restarts (hk_ai_boss.txt)."""
-    return write_file(BOSS_SCENE_FILE, str(scene_name).strip())
+    """Задаёт целевую сцену для рестартов (мод понимает алиасы: hornet, nkg)."""
+    return send_command("set_boss " + str(scene_name).strip())
 
 
 def set_gate(gate_name):
-    """Sets the arena entrance gate (hk_ai_gate.txt); empty string → DEFAULT_GATE."""
-    write_file(GATE_FILE, str(gate_name).strip() or DEFAULT_GATE)
+    """Задаёт входной гейт арены (по умолчанию door_dreamEnter — вход Godhome)."""
+    return send_command("set_gate " + (str(gate_name).strip() or DEFAULT_GATE))
 
 
 def request_boss(query):
-    """Teleport to the selected boss: the mod resolves the name itself and remembers the scene."""
-    return send_command(f"boss {query}")
+    """Телепорт к выбранному боссу: мод сам резолвит имя и запоминает сцену."""
+    return send_command("boss " + str(query).strip())
 
 
 def request_restart():
-    """Quick restart of the fight in the target scene."""
+    """Быстрый рестарт боя в целевой сцене."""
     return send_command("restart")
 
 
 def request_warp():
-    """Return the hero to the arena gate without reloading the scene."""
+    """Вернуть героя к гейту арены без перезагрузки сцены."""
     return send_command("warp")
 
 
 def request_boss_list():
-    """Ask the mod to dump the full boss list to hk_ai_bosses.json."""
+    """Попросить мод прислать полный список боссов событием boss_list."""
     return send_command("bosses")
 
 
-def read_boss_list_from_mod():
-    """Reads the mod's dump of hk_ai_bosses.json (command 'bosses')."""
-    try:
-        with open(BOSS_LIST_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, json.JSONDecodeError):
+def read_boss_list_from_mod(timeout=3.0):
+    """Ждёт выгрузку реестра от мода (событие boss_list).
+
+    Событие кэшируется клиентом по статусу, поэтому ответ находится даже
+    если мод успел ответить раньше, чем мы начали ждать.
+    """
+    return get_shared_client().wait_for_status("boss_list", timeout=timeout)
+
+
+def fetch_boss_list(timeout=3.0):
+    """Запрашивает реестр у мода и дожидается именно его ответа.
+
+    Возвращает словарь события boss_list или None по таймауту.
+    """
+    client = get_shared_client()
+    before = client.get_status_seq("boss_list")
+    if not client.send_command("bosses"):
         return None
+    return client.wait_for_status("boss_list", timeout=timeout, after_seq=before)
 
 
 def read_telemetry():
-    try:
-        with open(TELEMETRY_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return None
+    """Последняя телеметрия мода (None, если связи нет)."""
+    return get_shared_client().get_telemetry()
+
+
+def is_connected(timeout=5.0):
+    """Подключён ли пайп мода (ждём до timeout секунд)."""
+    return get_shared_client().wait_connected(timeout)
+
+
+def wait_hello(timeout=3.0):
+    """Ждёт hello-сообщение мода (в нём версия протокола). None по таймауту."""
+    return get_shared_client().wait_hello(timeout)
+
+
+def mod_protocol():
+    """Версия протокола мода из hello или None."""
+    return get_shared_client().protocol
+
+
+def mod_version():
+    """Версия мода из hello или None."""
+    return get_shared_client().mod_version
 
 
 def current_scene():
-    """Current scene from telemetry, or None."""
+    """Текущая сцена из телеметрии или None."""
     data = read_telemetry()
     if data is None:
         return None
@@ -277,9 +288,9 @@ def current_scene():
 
 
 def wait_for_scene(expected_scene=None, timeout=30.0, on_progress=None):
-    """Waits until telemetry shows the target scene and a live fight.
+    """Ждёт, пока телеметрия покажет целевую сцену и живой бой.
 
-    Returns True if the scene loaded and the fight came up.
+    Возвращает True, если сцена загрузилась и бой поднялся.
     """
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -295,11 +306,11 @@ def wait_for_scene(expected_scene=None, timeout=30.0, on_progress=None):
                     and float(data.get("boss_hp", 0)) > 0 \
                     and int(data.get("restart_pending", 0)) == 0:
                 return True
-        time.sleep(0.3)
+        time.sleep(0.05)
     return False
 
 
 def mod_has_scene_field():
-    """Whether the telemetry has a scene field."""
+    """Есть ли поле scene в телеметрии."""
     data = read_telemetry()
     return data is not None and "scene" in data

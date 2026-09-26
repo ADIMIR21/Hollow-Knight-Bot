@@ -1,65 +1,67 @@
-import time
+# -*- coding: utf-8 -*-
+"""Отладчик телеметрии мода HK_AI_Mod через именованный пайп.
+
+Подключается к \\\\.\\pipe\\hk_ai_mod как второй клиент (мод держит до 4
+инстансов, поэтому может работать параллельно с тренировкой) и печатает
+каждое новое сообщение мода.
+"""
 import json
 import os
 import sys
-import tempfile
+import time
 
-FILE_PATH = os.path.join(tempfile.gettempdir(), "hk_ai_data.json")
+from hk_pipe import HKPipeClient, PIPE_PATH
 
-print(f"Watching file: {FILE_PATH}")
-print("Press Ctrl + C to exit\n")
+print(f"Подключаюсь к пайпу: {PIPE_PATH}")
+print("Для выхода нажмите Ctrl + C\n")
+
+client = HKPipeClient(verbose=False)
+
+if not client.wait_connected(timeout=30.0):
+    print("ОШИБКА: мод не ответил за 30 секунд.")
+    print("Проверь: игра запущена? HK_AI_Mod.dll установлен в Mods? Другая программа не заняла пайп?")
+    sys.exit(1)
+
+print("Подключено к моду! Читаю телеметрию...\n")
 
 attempt = 0
-clear = 0 
-old_content = None
+last_seq = -1
+clear = 0
 
 try:
     while True:
-        attempt += 1
-        
-        if not os.path.exists(FILE_PATH):
-            print(f"[{attempt}] ERROR: The file was never created by the game.")
+        seq = client.get_seq()
+        if seq != last_seq:
+            last_seq = seq
+            attempt += 1
+            data = client.get_last_message() or {}
+
+            status = data.get("status")
+            if data.get("event"):
+                # Одноразовое событие (boss_list / boss_selected / command_error).
+                # В наблюдения RL оно не попадает, поэтому печатаем его здесь.
+                print(f"[{attempt}] (Событие) {status} -> "
+                      f"{json.dumps(data, ensure_ascii=False)}")
+            elif status == "fight":
+                print(f"[{attempt}] HP: {data.get('hp')}/{data.get('max_hp')} | "
+                      f"Душа: {data.get('mana')} | Босс: {data.get('boss_hp')} HP | "
+                      f"X: {data.get('x')}, Y: {data.get('y')} | "
+                      f"Босс атакует: {data.get('boss_is_attacking')} | "
+                      f"restart_pending: {data.get('restart_pending')}")
+            else:
+                print(f"[{attempt}] (Статус) -> {status}")
+
             clear += 1
-            if clear == 20:
+            if clear == 200:
                 os.system('cls' if os.name == 'nt' else 'clear')
-                print("Clearing the terminal")
-                print(f"Watching file: {FILE_PATH}")
-                print("Press Ctrl + C to exit\n")
-                clear = 0 
+                print(f"Подключено к {PIPE_PATH}. Для выхода Ctrl+C\n")
+                clear = 0
                 attempt = 0
-            time.sleep(0.5)
-            continue
-
-        try:
-            with open(FILE_PATH, 'r', encoding='utf-8') as f:
-                content = f.read()
-                if old_content == content:
-                    time.sleep(0.05)
-                    attempt -= 1
-                    continue
-                old_content = content
-            
-            if not content.strip():
-                print(f"[{attempt}] File is empty, most likely (caught it during the C# rewrite)")
-                time.sleep(0.02)
-                continue
-
-            try:
-                data = json.loads(content)
-                if "status" in data:
-                    print(f"[{attempt}] (Status) -> {data['status']}")
-                else:
-                    print(f"[{attempt}] (Position) -> HP: {data.get('hp')} | X: {data.get('x')}, Y: {data.get('y')}")
-            
-            except json.JSONDecodeError:
-                print(f"[{attempt}] managed to pull the text out: {content}")
-
-        except PermissionError:
-            print(f"[{attempt}] File is locked by the game")
-            time.sleep(0.01) 
-
-        time.sleep(0.05)
+        else:
+            # Новых сообщений нет (меню/пауза/мод молчит) — короткий сон.
+            time.sleep(0.01)
 
 except KeyboardInterrupt:
-    print("\nStopping.")
+    print("\nОстанавливаю.")
+    client.stop()
     sys.exit(0)

@@ -1,7 +1,11 @@
 using System;
-using System.IO;
-using System.Globalization;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using System.Text;
+using System.Threading;
+using HKPipeInterop;
 using UnityEngine;
 using Modding;
 
@@ -9,17 +13,47 @@ namespace HK_AI_Mod
 {
     public class AiDataExporter : Mod
     {
-        // IMPORTANT: the version is deliberately frozen at "v1" - do NOT change it with every
-        // mod update. It exists only so the ModLog shows which build
-        // the game loaded. Keep the change history in the README, not in this string.
+        // ВАЖНО: версия намеренно зафиксирована как "v1" — НЕ меняй её при каждом изменении
+        // мода. Она нужна только для того, чтобы в ModLog было видно, какая сборка
+        // загружена игрой. Историю изменений ведём в README, а не в этой строке.
         public override string GetVersion() => "v1";
 
-        private string _filePath = "";
-        private string _cmdPath = "";
-        private string _sceneConfigPath = "";
-        private string _gateConfigPath = "";
-        // scene -> the entry gate that REALLY exists in the scene (learned when the scene loads)
-        private string _gateMapPath = "";
+        // ---------------- Транспорт: именованный пайп (протокол 3) ----------------
+        // Сервер: \\.\pipe\hk_ai_mod (duplex, построчный обмен), поднимается
+        // напрямую через kernel32 — см. Win32Pipe.cs и объяснение там же, почему
+        // нельзя взять System.IO.Pipes.NamedPipeServerStream (в Mono игры все его
+        // конструкторы — заглушки с NotImplementedException).
+        //   Мод   -> Python: строки JSON — hello при подключении, затем телеметрия,
+        //                     плюс одноразовые события (список боссов, подтверждения).
+        //   Python -> Мод: текстовые команды (см. HandleCommand):
+        //                     restart [scene] [gate] | teleport | set_boss <scene>
+        //                     set_gate <gate> | boss <запрос> | bosses | warp
+        // Пайп заменяет прежнюю связку файлов %TEMP%\hk_ai_data.json / hk_ai_cmd.txt
+        // / hk_ai_boss.txt / hk_ai_gate.txt / hk_ai_bosses.json: без гонок за файл,
+        // без лишних снов на Python-стороне и без ожидания опроса файла модом.
+        private const string PIPE_NAME = "hk_ai_mod";
+        private const int MAX_PIPE_CLIENTS = 4;
+        private const int PIPE_POLL_MS = 25;
+        private const int PROTOCOL_VERSION = 3;
+        private const string MOD_VERSION = "v1";
+        private const int MAX_OUTBOX = 256;
+
+        // Одноразовые события (список боссов, подтверждение выбора) в отличие от
+        // телеметрии не перетираются свежим кадром: их получает каждый подключённый
+        // клиент ровно один раз — по монотонному id, который помнит с момента connect.
+        private readonly List<KeyValuePair<long, string>> _outbox = new List<KeyValuePair<long, string>>();
+        private long _outboxSeq = 0;
+
+        private readonly object _sync = new object();
+        private string _latestJson = "{\"status\": \"booting\", \"restart_pending\": 0}";
+        private long _seq = 0;
+        private volatile bool _shuttingDown = false;
+        private readonly ConcurrentQueue<string> _incomingCommands = new ConcurrentQueue<string>();
+
+        private string _targetScene = DEFAULT_BOSS_SCENE;
+        private string _targetGate = DEFAULT_ENTRY_GATE;
+        // scene -> входной гейт, который РЕАЛЬНО существует в сцене (выучивается при
+        // загрузке сцены, чтобы переход в незагруженную сцену тоже попал в её гейт).
         private readonly Dictionary<string, string> _sceneGates = new Dictionary<string, string>();
 
         private HealthManager? _currentBoss = null;
@@ -37,26 +71,26 @@ namespace HK_AI_Mod
         private const int ATTACK_STICKY_MIN_FRAMES = 2;
 
         private bool _restartPending = false;
-        // Deferred restart: the command is accepted, but the scene transition does not run
-        // right away - it waits until the game is not busy with its own victory/death sequence
-        // (otherwise the game's white fade stays stuck on screen, see the comment at TryPerformPendingTransition).
+        // Отложенный рестарт: команда принята, но переход сцены выполняется не сразу,
+        // а когда игра не занята своим сценарием победы/смерти (иначе белый фейд
+        // игры остаётся висеть на экране, см. комментарий у TryPerformPendingTransition).
         private bool _restartRequested = false;
         private float _restartRequestedAt = 0f;
         private string _restartTargetScene = "";
         private string _restartGate = "";
-        // If the scene has already changed since the request - the game's own end-of-fight
-        // sequence (death/arena exit) has finished playing, so there is nothing left to wait for.
+        // Если после запроса сцена уже сменилась — собственный сценарий конца боя
+        // (смерть/выход арены) доигран, и ждать больше нечего.
         private bool _sceneChangedSinceRequest = false;
         private string _deferReasonLastLogged = "";
         private const float RESTART_FORCE_TIMEOUT = 10f;
-        // Fade watchdog: the game can clear a stuck fade by itself (CameraController.FadeInFailSafe),
-        // but in this game build the coroutine is never started anywhere - so we do it ourselves.
+        // Сторож фейда: игра умеет сама гасить залипший фейд (CameraController.FadeInFailSafe),
+        // но в этой сборке игры корутина нигде не запускается — делаем это сами.
         private string _fadeStateLastLogged = "";
         private float _fadeNotNormalSince = -1f;
         private int _fadeRescueAttempts = 0;
         private const float FADE_STUCK_TIMEOUT = 1.5f;
-        // 'FadingOut' - an intermediate state: if the game is already settled (scene loaded,
-        // the hero is not transitioning) and the fade is still in it, there is little point in waiting.
+        // 'FadingOut' — промежуточное состояние: если игра уже спокойна (сцена загружена,
+        // герой не в переходе), а фейд всё ещё в нём, ждать долго нечего.
         private const float FADE_STUCK_FADINGOUT_TIMEOUT = 1.0f;
         private bool _inMenuScene = true;
         private bool _bossDead = false;
@@ -64,13 +98,15 @@ namespace HK_AI_Mod
         private float _watchdogTimer = 0f;
         private int _forcedEntryAttempts = 0;
         private const string DEFAULT_BOSS_SCENE = "GG_False_Knight";
-        // Godhome arenas are entered through the gate door_dreamEnter (the only
-        // TransitionPoint in GG_* boss scenes). The config from hk_ai_gate.txt takes precedence.
+        // Арены Godhome входят в сцену через гейт door_dreamEnter — это единственный
+        // TransitionPoint в GG_* сценах боссов (проверено вживую в GG_False_Knight и
+        // GG_Hornet_1). Мод всё равно сверяет его с реальными TransitionPoint сцены,
+        // а явно заданный set_gate важнее.
         private const string DEFAULT_ENTRY_GATE = "door_dreamEnter";
 
-        // ---------------- Godhome boss registry (pantheons) ----------------
-        // Scenes taken from the game's build settings (hollow_knight_Data/globalgamemanagers).
-        // Variants with the _V suffix - harder versions of the fights (Ascended/Radiant),
+        // ---------------- Реестр боссов Godhome (пантеоны) ----------------
+        // Сцены взяты из build settings игры (hollow_knight_Data/globalgamemanagers).
+        // Варианты с суффиксом _V — усложнённые версии боёв (Ascended/Radiant),
         // GG_Mantis_Lords_V = Sisters of Battle, GG_Nosk_Hornet = Winged Nosk.
         public struct BossEntry
         {
@@ -86,14 +122,14 @@ namespace HK_AI_Mod
 
         private static readonly BossEntry[] BossRegistry = new BossEntry[]
         {
-            // --- Pantheon of the Master (early bosses) ---
+            // --- Пантеон Мастера (ранние боссы) ---
             new BossEntry("GG_Vengefly", "Vengefly King"),
             new BossEntry("GG_Gruz_Mother", "Gruz Mother"),
             new BossEntry("GG_False_Knight", "False Knight"),
             new BossEntry("GG_Mega_Moss_Charger", "Massive Moss Charger"),
             new BossEntry("GG_Hornet_1", "Hornet Protector"),
             new BossEntry("GG_Brooding_Mawlek", "Brooding Mawlek"),
-            // --- Pantheon of the Artist (early-mid game) ---
+            // --- Пантеон Художника (раньше-середина игры) ---
             new BossEntry("GG_Soul_Master", "Soul Master"),
             new BossEntry("GG_Crystal_Guardian", "Crystal Guardian"),
             new BossEntry("GG_Crystal_Guardian_2", "Enraged Guardian"),
@@ -108,7 +144,7 @@ namespace HK_AI_Mod
             new BossEntry("GG_Nosk", "Nosk"),
             new BossEntry("GG_Mantis_Lords", "Mantis Lords"),
             new BossEntry("GG_Broken_Vessel", "Broken Vessel"),
-            // --- Pantheon of the Sage (mid-late game) ---
+            // --- Пантеон Мудреца (середина-поздняя игра) ---
             new BossEntry("GG_Lost_Kin", "Lost Kin"),
             new BossEntry("GG_Failed_Champion", "Failed Champion"),
             new BossEntry("GG_Traitor_Lord", "Traitor Lord"),
@@ -122,20 +158,20 @@ namespace HK_AI_Mod
             new BossEntry("GG_Ghost_Markoth", "Markoth"),
             new BossEntry("GG_Ghost_Galien", "Galien"),
             new BossEntry("GG_Ghost_Hu", "Elder Hu"),
-            // --- Pantheon of the Knight (late bosses) ---
+            // --- Пантеон Рыцаря (поздние боссы) ---
             new BossEntry("GG_Hornet_2", "Hornet Sentinel"),
             new BossEntry("GG_Grey_Prince_Zote", "Grey Prince Zote"),
             new BossEntry("GG_White_Defender", "White Defender"),
             new BossEntry("GG_Grimm_Nightmare", "Nightmare King Grimm"),
             new BossEntry("GG_Hollow_Knight", "Pure Vessel"),
-            // --- Pantheon of Hallownest (finale) ---
+            // --- Пантеон Халлоунеста (финал) ---
             new BossEntry("GG_Radiance", "The Radiance"),
-            // --- Nailmasters (Pantheon 1-3 finales) ---
+            // --- Гвоздемастеры (финалы пантеонов 1-3) ---
             new BossEntry("GG_Nailmasters", "Brothers Oro & Mato"),
             new BossEntry("GG_Painter", "Paintmaster Sheo"),
             new BossEntry("GG_Sly", "Great Nailsage Sly"),
             new BossEntry("GG_Lurker", "Pale Lurker"),
-            // --- Harder fight variants (Ascended/Radiant) ---
+            // --- Усложнённые варианты боёв (Ascended/Radiant) ---
             new BossEntry("GG_Mantis_Lords_V", "Sisters of Battle"),
             new BossEntry("GG_Nosk_Hornet", "Winged Nosk"),
             new BossEntry("GG_Vengefly_V", "Vengefly King (Variant)"),
@@ -150,14 +186,14 @@ namespace HK_AI_Mod
             new BossEntry("GG_Ghost_Markoth_V", "Markoth (Variant)"),
             new BossEntry("GG_Ghost_No_Eyes_V", "No Eyes (Variant)"),
             new BossEntry("GG_Ghost_Xero_V", "Xero (Variant)"),
-            // --- Godhome hubs (not bosses, but useful to warp to) ---
-            new BossEntry("GG_Atrium", "Godhome Atrium (hub)"),
-            new BossEntry("GG_Workshop", "Godhome Workshop (bench)"),
-            new BossEntry("GG_Boss_Door_Entrance", "Pantheon Doors"),
+            // --- Хаб Godhome (не боссы, но полезно телепортироваться) ---
+            new BossEntry("GG_Atrium", "Godhome Atrium (хаб)"),
+            new BossEntry("GG_Workshop", "Godhome Workshop (верстак)"),
+            new BossEntry("GG_Boss_Door_Entrance", "Двери пантеонов"),
         };
 
-        // All GG_ scenes from the game's build settings - used to canonicalize names
-        // typed by the user in any case (gg_hornet_1 -> GG_Hornet_1).
+        // Все GG_-сцены из build settings игры — для канонизации имён,
+        // введённых пользователем в любом регистре (gg_hornet_1 -> GG_Hornet_1).
         private static readonly string[] KnownScenes = new string[]
         {
             "GG_Atrium", "GG_Atrium_Roof", "GG_Blue_Room", "GG_Boss_Door_Entrance",
@@ -182,7 +218,7 @@ namespace HK_AI_Mod
             "GG_White_Defender", "GG_Workshop", "GG_Wyrm"
         };
 
-        // Popular short aliases that do not appear in the scene names themselves.
+        // Популярные короткие алиасы, которых нет в самих именах сцен.
         private static readonly Dictionary<string, string> ExtraAliases = new Dictionary<string, string>
         {
             { "hornet", "GG_Hornet_1" },
@@ -224,19 +260,18 @@ namespace HK_AI_Mod
 
         public override void Initialize()
         {
-            _filePath = Path.Combine(Path.GetTempPath(), "hk_ai_data.json");
-            _cmdPath = Path.Combine(Path.GetTempPath(), "hk_ai_cmd.txt");
-            _sceneConfigPath = Path.Combine(Path.GetTempPath(), "hk_ai_boss.txt");
-            _gateConfigPath = Path.Combine(Path.GetTempPath(), "hk_ai_gate.txt");
-            _gateMapPath = Path.Combine(Path.GetTempPath(), "hk_ai_gates.txt");
-            LoadGateMap();
+            _targetScene = DEFAULT_BOSS_SCENE;
+            _targetGate = DEFAULT_ENTRY_GATE;
 
             UnityEngine.SceneManagement.SceneManager.activeSceneChanged += (oldScene, newScene) =>
             {
                 bool isMenu = newScene.name != null && newScene.name.Contains("Menu");
                 _inMenuScene = isMenu;
                 if (isMenu)
-                    WriteSafe(StatusJson("main_menu"));
+                {
+                    _restartPending = false;
+                    Publish(StatusJson("main_menu"));
+                }
                 else
                 {
                     _currentBoss = null;
@@ -251,11 +286,9 @@ namespace HK_AI_Mod
                     if (_restartRequested) _sceneChangedSinceRequest = true;
                     SubscribeBossDeath();
                     LearnSceneGate(newScene.name);
-                    WriteSafe(StatusJson("loading_scene"));
+                    Publish(StatusJson("loading_scene"));
                 }
             };
-
-            try { if (File.Exists(_cmdPath)) File.Delete(_cmdPath); } catch (Exception) {}
 
             var host = new GameObject("HK_AI_Mod_Host");
             UnityEngine.Object.DontDestroyOnLoad(host);
@@ -265,9 +298,12 @@ namespace HK_AI_Mod
             ModHooks.HeroUpdateHook += OnHeroUpdate;
             Application.quitting += OnGameQuitting;
 
-            WriteSafe(StatusJson("initialized"));
-            Log($"AI Exporter {GetVersion()} is running! File: {_filePath}");
-            Log("[AI] Commands: restart | teleport | boss <name/number> | bosses | warp");
+            var pipeThread = new Thread(PipeListenerLoop) { IsBackground = true, Name = "HK_AI_PipeServer" };
+            pipeThread.Start();
+
+            Publish(StatusJson("initialized"));
+            Log($"[ИИ] Экспортер {MOD_VERSION} работает! Пайп: \\\\.\\pipe\\{PIPE_NAME}");
+            Log("[ИИ] Команды: restart | teleport | set_boss <сцена> | set_gate <гейт> | boss <запрос> | bosses | warp");
         }
 
         private void SubscribeBossDeath()
@@ -291,25 +327,274 @@ namespace HK_AI_Mod
         private void OnBossesDeadHandler()
         {
             _bossDead = true;
-            Log("[AI] Boss is dead (BossSceneController event)");
+            Log("[ИИ] Босс мёртв (событие BossSceneController)");
         }
 
-        private string ReadTargetScene()
+        private void OnTick(float unscaledDelta)
+        {
+            DrainCommands();
+            TryPerformPendingTransition();
+            TransitionWatchdogTick(unscaledDelta);
+            FadeWatchdogTick();
+        }
+
+        private void DrainCommands()
+        {
+            while (_incomingCommands.TryDequeue(out string line))
+            {
+                try { HandleCommand(line); }
+                catch (Exception e) { Log("[ИИ] Ошибка команды: " + e); }
+            }
+        }
+
+        private void HandleCommand(string raw)
+        {
+            string line = (raw ?? "").Trim();
+            if (line.Length == 0) return;
+
+            string[] parts = line.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+            string cmd = parts[0].ToLowerInvariant();
+            string rest = line.Substring(parts[0].Length).Trim();
+
+            switch (cmd)
+            {
+                case "set_boss":
+                    if (parts.Length >= 2) SetTargetScene(parts[1]);
+                    break;
+
+                case "set_gate":
+                    if (parts.Length >= 2)
+                    {
+                        _targetGate = parts[1];
+                        Log($"[ИИ] Точка входа: {_targetGate}");
+                    }
+                    break;
+
+                // "boss <запрос>" — выбрать босса пантеона и телепортироваться к нему.
+                case "boss":
+                    SelectBoss(rest);
+                    break;
+
+                // "bosses" — выгрузить реестр. Работает даже в главном меню.
+                case "bosses":
+                    PublishEvent(BossListJson());
+                    Log($"[ИИ] Список боссов отправлен в пайп ({BossRegistry.Length} записей)");
+                    break;
+
+                // "warp" — вернуть героя к гейту арены без перезагрузки сцены.
+                case "warp":
+                    WarpHeroToGate();
+                    break;
+
+                case "teleport":
+                case "restart":
+                    if (parts.Length >= 2) SetTargetScene(parts[1]);
+                    if (parts.Length >= 3) _targetGate = parts[2];
+                    TryRestart();
+                    break;
+
+                default:
+                    Log($"[ИИ] Неизвестная команда: '{line}'");
+                    PublishEvent(CommandErrorJson(line, "неизвестная команда"));
+                    break;
+            }
+        }
+
+        // Целевая сцена может прийти алиасом ("hornet", "nkg") или номером
+        // реестра — разворачиваем её так же, как команда "boss".
+        private void SetTargetScene(string scene)
+        {
+            string resolved, label;
+            if (TryResolveBoss(scene, out resolved, out label))
+            {
+                _targetScene = resolved;
+                Log($"[ИИ] Целевая сцена босса: {_targetScene} ({label})");
+            }
+            else
+            {
+                _targetScene = scene;
+                Log($"[ИИ] Целевая сцена босса: {_targetScene} (не распознана, передаю как есть)");
+            }
+        }
+
+        private void SelectBoss(string query)
+        {
+            string scene, label;
+            if (!TryResolveBoss(query, out scene, out label))
+            {
+                Log($"[ИИ] Босс не распознан: '{query}'. Отправь команду 'bosses' для списка.");
+                PublishEvent(CommandErrorJson("boss " + query, "босс не распознан"));
+                return;
+            }
+
+            _targetScene = scene;
+            Log($"[ИИ] Выбран босс: {label} ({scene})");
+            PublishEvent("{\"status\": \"boss_selected\", \"scene\": \"" + scene
+                + "\", \"label\": \"" + label + "\"}");
+            TryRestart();
+        }
+
+        // Команда рестарта/телепорта только принимается. Сам переход делает
+        // TryPerformPendingTransition, когда игра освободится: если дёрнуть сцену
+        // посреди сценария смерти или белого выхода арены, фейд камеры остаётся
+        // на экране, а герой — в transitioning (см. ResolveEntryGate).
+        private void TryRestart()
+        {
+            if (_inMenuScene)
+            {
+                Log("[ИИ] Рестарт проигнорирован: мы в меню");
+                return;
+            }
+            if (_restartPending) return;
+
+            _restartPending = true;
+            _restartRequested = true;
+            _restartRequestedAt = Time.time;
+            _restartTargetScene = _targetScene;
+            _sceneChangedSinceRequest = false;
+            _deferReasonLastLogged = "";
+
+            string gate = ResolveEntryGate(_targetScene);
+            _restartGate = gate;
+            Log($"[ИИ] Быстрый рестарт: цель '{_targetScene}', гейт '{gate}' — команда принята, переход выполню, когда игра освободится");
+        }
+
+        private void TransitionWatchdogTick(float unscaledDelta)
+        {
+            if (_watchdogTimer <= 0f) return;
+            _watchdogTimer -= unscaledDelta;
+            if (_watchdogTimer > 0f) return;
+
+            try
+            {
+                GameManager gm = GameManager.instance;
+                if (gm == null || _inMenuScene) return;
+
+                if (gm.IsLoadingSceneTransition)
+                {
+                    _watchdogTimer = 1.5f;
+                    return;
+                }
+
+                HeroController hero = HeroController.instance;
+                bool heroFrozen = hero != null && hero.cState != null && hero.cState.transitioning;
+
+                if (!heroFrozen)
+                {
+                    if (gm.IsInSceneTransition)
+                        ReflectionHelper.SetField(gm, "<IsInSceneTransition>k__BackingField", false);
+                    return;
+                }
+
+                if (Time.timeScale <= 0f)
+                    Time.timeScale = 1f;
+
+                TransitionPoint gate = null;
+                string gateName = _targetGate;
+                try
+                {
+                    var registry = TransitionPoint.TransitionPoints;
+                    if (registry != null)
+                    {
+                        foreach (TransitionPoint tp in registry)
+                        {
+                            if (tp != null && tp.name == gateName)
+                            {
+                                gate = tp;
+                                break;
+                            }
+                        }
+                    }
+                }
+                catch (Exception) {}
+                if (gate == null && _forcedEntryAttempts == 0)
+                {
+                    try
+                    {
+                        var names = new System.Text.StringBuilder();
+                        var registry = TransitionPoint.TransitionPoints;
+                        if (registry != null)
+                            foreach (TransitionPoint tp in registry)
+                                names.Append(tp != null ? tp.name : "null").Append("; ");
+                        Log($"[ИИ] Активные гейты сцены: {names}");
+                    }
+                    catch (Exception) {}
+                }
+                if (gate == null)
+                    gate = FindTransitionGate(hero.transform, gateName);
+                Log($"[ИИ] Герой завис в transitioning. Гейт '{gateName}' найден: {gate != null}{(gate != null ? $" ({gate.name})" : "")}, попытка #{_forcedEntryAttempts}");
+
+                if (gate != null && _forcedEntryAttempts == 0)
+                {
+                    _forcedEntryAttempts++;
+                    hero.StartCoroutine(hero.EnterScene(gate, 0f));
+                    _watchdogTimer = 3f;
+                    return;
+                }
+
+                _forcedEntryAttempts++;
+                if (gate != null)
+                {
+                    Vector2 gp = gate.transform.position;
+                    hero.transform.SetPosition2D(gp.x, gp.y + 1f);
+                }
+                ReflectionHelper.CallMethod(hero, "FinishedEnteringScene", true, false);
+                gm.FinishedEnteringScene();
+                gm.FadeSceneIn();
+
+                try
+                {
+                    var heroRenderer = hero.GetComponentInChildren<Renderer>();
+                    if (heroRenderer != null) heroRenderer.enabled = true;
+                }
+                catch (Exception) {}
+                Log("[ИИ] Герой выставлен у гейта вручную и разблокирован");
+            }
+            catch (Exception e)
+            {
+                Log($"[ИИ] Ошибка watchdog перехода: {e}");
+            }
+        }
+
+        private static TransitionPoint FindTransitionGate(UnityEngine.Transform heroTransform, string gateName)
         {
             try
             {
-                if (File.Exists(_sceneConfigPath))
+                var scene = UnityEngine.SceneManagement.SceneManager.GetActiveScene();
+                GameObject[] roots = scene.GetRootGameObjects();
+                foreach (GameObject root in roots)
                 {
-                    string scene = File.ReadAllText(_sceneConfigPath).Trim();
-                    if (!string.IsNullOrEmpty(scene))
-                        return scene;
+                    if (root.name == gateName)
+                    {
+                        TransitionPoint tp = root.GetComponent<TransitionPoint>();
+                        if (tp != null) return tp;
+                    }
+                    TransitionPoint[] all = root.GetComponentsInChildren<TransitionPoint>(true);
+                    foreach (TransitionPoint tp in all)
+                    {
+                        if (tp != null && tp.name == gateName)
+                            return tp;
+                    }
+                }
+                foreach (var loaded in UnityEngine.SceneManagement.SceneManager.GetAllScenes())
+                {
+                    if (!loaded.isLoaded || loaded == scene) continue;
+                    foreach (GameObject root in loaded.GetRootGameObjects())
+                    {
+                        TransitionPoint[] all = root.GetComponentsInChildren<TransitionPoint>(true);
+                        foreach (TransitionPoint tp in all)
+                        {
+                            if (tp != null && tp.name == gateName)
+                                return tp;
+                        }
+                    }
                 }
             }
             catch (Exception) {}
-            return DEFAULT_BOSS_SCENE;
+            return null;
         }
 
-        // ---------------- Choosing a Godhome boss ----------------
+        // ---------------- Выбор босса Godhome ----------------
 
         private static string NormalizeQuery(string query)
         {
@@ -320,8 +605,8 @@ namespace HK_AI_Mod
             return norm.Trim('_');
         }
 
-        // Canonicalizing a scene name: the user may type "gg_hornet_1"
-        // in any case - we substitute the exact name from the build settings.
+        // Канонизация имени сцены: пользователь может ввести "gg_hornet_1"
+        // в любом регистре — подставляем точное имя из build settings.
         private static bool TryCanonicalizeScene(string normalized, out string scene)
         {
             foreach (string known in KnownScenes)
@@ -336,8 +621,8 @@ namespace HK_AI_Mod
             return false;
         }
 
-        // Resolves a boss request: a number in the list, a scene name (any case),
-        // a short alias, or an exact or partial boss name.
+        // Разбирает запрос на босса: номер в списке, имя сцены (любой регистр),
+        // короткий алиас, точное или частичное название босса.
         private static bool TryResolveBoss(string query, out string scene, out string label)
         {
             scene = null;
@@ -346,7 +631,7 @@ namespace HK_AI_Mod
 
             string norm = NormalizeQuery(query);
 
-            // 1. Number in the registry (1-based)
+            // 1. Номер в реестре (1-based)
             int index;
             if (int.TryParse(norm, out index) && index >= 1 && index <= BossRegistry.Length)
             {
@@ -355,7 +640,7 @@ namespace HK_AI_Mod
                 return true;
             }
 
-            // 2. Exact scene name from the registry (case-insensitive)
+            // 2. Точное имя сцены из реестра (без учёта регистра)
             foreach (BossEntry e in BossRegistry)
             {
                 if (e.Scene.ToLowerInvariant() == norm)
@@ -366,7 +651,7 @@ namespace HK_AI_Mod
                 }
             }
 
-            // 3. Short alias (hornet, nkg, sisters, ...)
+            // 3. Короткий алиас (hornet, nkg, sisters, ...)
             string aliasScene;
             if (ExtraAliases.TryGetValue(norm, out aliasScene))
             {
@@ -381,7 +666,7 @@ namespace HK_AI_Mod
                 }
             }
 
-            // 4. Exact boss name
+            // 4. Точное название босса
             foreach (BossEntry e in BossRegistry)
             {
                 if (NormalizeQuery(e.Label) == norm)
@@ -392,18 +677,18 @@ namespace HK_AI_Mod
                 }
             }
 
-            // 5. A scene name from the build settings that is not in the registry
-            // (GG_Spa, GG_Wyrm, GG_Engine, etc.)
+            // 5. Имя сцены из build settings, не попавшее в реестр
+            // (GG_Spa, GG_Wyrm, GG_Engine и т.п.)
             string canonical;
             if (TryCanonicalizeScene(norm, out canonical))
             {
                 scene = canonical;
-                label = canonical + " (scene not in registry)";
+                label = canonical + " (сцена без реестра)";
                 return true;
             }
 
-            // 6. Partial match on scene/name; when ambiguous we
-            // prefer the base version of the boss (not (Variant) and not *_V)
+            // 6. Частичное совпадение по сцене/названию; при неоднозначности
+            // предпочитаем базовую версию босса (не (Variant) и не *_V)
             string matched = null;
             string matchedLabel = null;
             foreach (BossEntry e in BossRegistry)
@@ -413,12 +698,12 @@ namespace HK_AI_Mod
                     continue;
                 if (matched != null)
                 {
-                    // Second candidate: narrow it down to the base version if possible
+                    // Второй кандидат: сузим до базовой версии, если возможно
                     bool curIsVariant = matched.EndsWith("_V") || matchedLabel.Contains("(Variant)");
                     bool newIsVariant = e.Scene.EndsWith("_V") || e.Label.Contains("(Variant)");
-                    if (newIsVariant) continue;          // a variant is worse than the base version
+                    if (newIsVariant) continue;          // вариант хуже базовой версии
                     if (curIsVariant) { matched = e.Scene; matchedLabel = e.Label; continue; }
-                    return false;                        // two base versions - ambiguous
+                    return false;                        // две базовые версии — неоднозначно
                 }
                 matched = e.Scene;
                 matchedLabel = e.Label;
@@ -430,42 +715,18 @@ namespace HK_AI_Mod
                 return true;
             }
 
-            // 7. An unfamiliar gg_* name - pass it through as-is, maybe the scene exists
+            // 7. Незнакомое имя вида gg_* — передаём как есть, вдруг сцена есть
             if (norm.StartsWith("gg_"))
             {
                 scene = query.Trim();
-                label = scene + " (unknown scene, attempting load)";
+                label = scene + " (неизвестная сцена, попытка загрузки)";
                 return true;
             }
 
             return false;
         }
 
-        private void WriteBossList()
-        {
-            try
-            {
-                var sb = new System.Text.StringBuilder();
-                sb.Append("{\"target_scene\": \"").Append(ReadTargetScene()).Append("\", \"count\": ").Append(BossRegistry.Length).Append(", \"bosses\": [");
-                for (int i = 0; i < BossRegistry.Length; i++)
-                {
-                    if (i > 0) sb.Append(", ");
-                    sb.Append("{\"index\": ").Append(i + 1)
-                      .Append(", \"scene\": \"").Append(BossRegistry[i].Scene)
-                      .Append("\", \"label\": \"").Append(BossRegistry[i].Label).Append("\"}");
-                }
-                sb.Append("]}");
-                string listPath = Path.Combine(Path.GetTempPath(), "hk_ai_bosses.json");
-                File.WriteAllText(listPath, sb.ToString());
-                Log($"[AI] Boss list exported: {listPath}");
-            }
-            catch (Exception e)
-            {
-                Log($"[AI] Failed to export the boss list: {e.Message}");
-            }
-        }
-
-        private string CurrentSceneName()
+        private static string CurrentSceneName()
         {
             try
             {
@@ -477,18 +738,27 @@ namespace HK_AI_Mod
             }
         }
 
-        private void OnTick(float unscaledDelta)
+        // Реестр уходит в пайп событием, а не файлом %TEMP%/hk_ai_bosses.json.
+        private string BossListJson()
         {
-            PollCommand();
-            TryPerformPendingTransition();
-            TransitionWatchdogTick(unscaledDelta);
-            FadeWatchdogTick();
+            var sb = new System.Text.StringBuilder();
+            sb.Append("{\"status\": \"boss_list\", \"target_scene\": \"").Append(_targetScene)
+              .Append("\", \"count\": ").Append(BossRegistry.Length).Append(", \"bosses\": [");
+            for (int i = 0; i < BossRegistry.Length; i++)
+            {
+                if (i > 0) sb.Append(", ");
+                sb.Append("{\"index\": ").Append(i + 1)
+                  .Append(", \"scene\": \"").Append(BossRegistry[i].Scene)
+                  .Append("\", \"label\": \"").Append(BossRegistry[i].Label).Append("\"}");
+            }
+            sb.Append("]}");
+            return sb.ToString();
         }
 
-        // ---------------- Scene gates ----------------
+        // ---------------- Гейты сцены ----------------
 
-        // All TransitionPoints actually present in the scene (accounting for additive loading:
-        // the registry can contain gates from other scenes as well).
+        // Все TransitionPoint, реально лежащие в сцене (с учётом аддитивной загрузки:
+        // в реестре бывают гейты и других сцен).
         private List<string> CollectSceneGates(string sceneName)
         {
             List<string> result = new List<string>();
@@ -522,12 +792,12 @@ namespace HK_AI_Mod
             return result;
         }
 
-        // GameManager.EnterHero(additiveGateSearch: true) looks for EntryGateName specifically
-        // among the TransitionPoints of the LOADED scene, and on a miss it executes
+        // GameManager.EnterHero(additiveGateSearch: true) ищет EntryGateName именно
+        // среди TransitionPoint ЗАГРУЖАЕМОЙ сцены и при промахе делает
         // `Debug.LogError("Searching in next scene for TransitionGate failed."); return;`
-        // - meaning neither EnterScene, nor FinishedEnteringScene, nor FadeSceneIn.
-        // The hero stays in transitioning forever, and the fade (the white one after death/
-        // arena exit) stays stuck on screen. Therefore the gate must actually exist in the scene.
+        // — то есть ни EnterScene, ни FinishedEnteringScene, ни FadeSceneIn.
+        // Герой навсегда остаётся в transitioning, а фейд (белый после смерти/выхода
+        // из арены) остаётся висеть на экране. Поэтому гейт обязан существовать в сцене.
         private string PickEntryGate(List<string> gates, string configured)
         {
             if (gates == null || gates.Count == 0) return null;
@@ -548,22 +818,21 @@ namespace HK_AI_Mod
                 List<string> gates = CollectSceneGates(sceneName);
                 if (gates.Count == 0) return;
 
-                string learned = PickEntryGate(gates, ReadTargetGateName());
+                string learned = PickEntryGate(gates, _targetGate);
                 if (string.IsNullOrEmpty(learned)) return;
 
                 string previous;
                 if (_sceneGates.TryGetValue(sceneName, out previous) && previous == learned) return;
 
                 _sceneGates[sceneName] = learned;
-                SaveGateMap();
-                Log($"[AI] Gates of scene '{sceneName}': {string.Join(", ", gates.ToArray())} | entry -> '{learned}'");
+                Log($"[ИИ] Гейты сцены '{sceneName}': {string.Join(", ", gates.ToArray())} | вход -> '{learned}'");
             }
             catch (Exception) {}
         }
 
         private string ResolveEntryGate(string targetScene)
         {
-            string configured = ReadTargetGateName();
+            string configured = _targetGate;
             try
             {
                 List<string> loaded = CollectSceneGates(targetScene);
@@ -586,38 +855,7 @@ namespace HK_AI_Mod
             return DEFAULT_ENTRY_GATE;
         }
 
-        private void LoadGateMap()
-        {
-            try
-            {
-                if (!File.Exists(_gateMapPath)) return;
-                foreach (string line in File.ReadAllLines(_gateMapPath))
-                {
-                    int split = line.IndexOf('=');
-                    if (split <= 0) continue;
-                    string scene = line.Substring(0, split).Trim();
-                    string gate = line.Substring(split + 1).Trim();
-                    if (scene.Length > 0 && gate.Length > 0)
-                        _sceneGates[scene] = gate;
-                }
-                Log($"[AI] Learned scene gates: {_sceneGates.Count} ({_gateMapPath})");
-            }
-            catch (Exception) {}
-        }
-
-        private void SaveGateMap()
-        {
-            try
-            {
-                var sb = new System.Text.StringBuilder();
-                foreach (KeyValuePair<string, string> pair in _sceneGates)
-                    sb.Append(pair.Key).Append('=').Append(pair.Value).Append('\n');
-                File.WriteAllText(_gateMapPath, sb.ToString());
-            }
-            catch (Exception) {}
-        }
-
-        // ---------------- Deferred restart ----------------
+        // ---------------- Отложенный рестарт ----------------
 
         private bool IsHeroDying(HeroController hero)
         {
@@ -625,14 +863,14 @@ namespace HK_AI_Mod
             {
                 if (hero == null || hero.cState == null) return true;
                 if (hero.cState.dead || hero.cState.hazardDeath) return true;
-                // The scene has already changed since the request - the game's own end-of-fight sequence has finished.
+                // Сцена уже сменилась после запроса — собственный сценарий конца боя доигран.
                 if (_sceneChangedSinceRequest) return false;
-                // HP is zeroed out on death in Godhome (without setting cState.dead), but in the hall
-                // it can stay at zero even after a Dream Return, so we only treat this stop factor
-                // while the hero is in the target arena.
-                // controlReqlinquished is deliberately NOT used: in the Godhome hub it stays true
-                // even for a live hero at full hp (in the log hp=9, controlReqlinquished=True),
-                // which is why restarts used to hit the 10-second deadline.
+                // Хп обнуляется при смерти в Godhome (не выставляя cState.dead), но в зале
+                // оно может остаться нулевым и после дрим-возврата, поэтому стоп-фактор
+                // считаем только пока герой в целевой арене.
+                // controlReqlinquished намеренно НЕ используется: в хабе Godhome он висит
+                // и у живого героя с полным хп (в логе hp=9, controlReqlinquished=True),
+                // из-за чего рестарт упирался в 10-секундный дедлайн.
                 if (CurrentSceneName() == _restartTargetScene)
                 {
                     PlayerData pd = PlayerData.instance;
@@ -649,17 +887,17 @@ namespace HK_AI_Mod
             {
                 PlayerData pd = PlayerData.instance;
                 int hp = (pd != null) ? pd.health : -1;
-                return $"hero is in the death/Dream Return sequence (hp={hp}, dead={hero.cState.dead}, "
-                     + $"scene {UnityEngine.SceneManagement.SceneManager.GetActiveScene().name})";
+                return $"герой в сценарии смерти/возврата (hp={hp}, dead={hero.cState.dead}, "
+                     + $"сцена {UnityEngine.SceneManagement.SceneManager.GetActiveScene().name})";
             }
             catch (Exception)
             {
-                return "hero is busy with a game sequence";
+                return "герой занят сценарием игры";
             }
         }
 
-        // The arena's white transition out of the fight (victory over the boss): BossSceneController.EndSceneDelayed()
-        // first plays "GG TRANSITION OUT STATUE", and only then leaves the scene.
+        // Белый выход арены из боя (победа над боссом): BossSceneController.EndSceneDelayed()
+        // сначала проигрывает "GG TRANSITION OUT STATUE", и только потом уходит из сцены.
         private static bool IsArenaExitRunning()
         {
             try
@@ -704,16 +942,16 @@ namespace HK_AI_Mod
 
                 string deferReason = null;
                 if (!forced && IsHeroDying(hero))
-                    deferReason = DescribeHeroState(hero);       // death/Dream Return sequence
+                    deferReason = DescribeHeroState(hero);       // сценарий смерти/дрим-возврата
                 else if (!forced && IsArenaExitRunning())
-                    deferReason = "arena is playing its white transition out of the fight";
+                    deferReason = "арена проигрывает свой белый выход из боя";
 
                 if (deferReason != null)
                 {
                     if (_deferReasonLastLogged != deferReason)
                     {
                         _deferReasonLastLogged = deferReason;
-                        Log($"[AI] Restart deferred: {deferReason} - waiting for the game to finish the sequence");
+                        Log($"[ИИ] Рестарт отложен: {deferReason} — жду, пока игра закончит сценарий");
                     }
                     return;
                 }
@@ -721,12 +959,12 @@ namespace HK_AI_Mod
                 _deferReasonLastLogged = "";
 
                 if (forced)
-                    Log($"[AI] Waited {waited:F1}s - forcing the transition (the game never became idle)");
+                    Log($"[ИИ] Ждал {waited:F1}с — форсирую переход (состояние игры так и не освободилось)");
 
                 string gate = _restartGate;
                 if (string.IsNullOrEmpty(gate)) gate = ResolveEntryGate(_restartTargetScene);
 
-                Log($"[AI] Quick restart: transitioning to scene '{_restartTargetScene}' through gate '{gate}' (waited {waited:F2}s)");
+                Log($"[ИИ] Быстрый рестарт: переход в сцену '{_restartTargetScene}' через гейт '{gate}' (ожидание {waited:F2}с)");
 
                 _restartRequested = false;
                 _restartGate = "";
@@ -744,16 +982,16 @@ namespace HK_AI_Mod
             catch (Exception e)
             {
                 _restartRequested = false;
-                Log($"[AI] Deferred transition error: {e}");
+                Log($"[ИИ] Ошибка отложенного перехода: {e}");
             }
         }
 
-        // ---------------- Fade watchdog ----------------
+        // ---------------- Сторож фейда ----------------
 
-        // The game's fades (including the white RESPAWN FADE/Dream Return) live on the DDOL object
-        // GameCameras. If the scene is yanked out in the middle of such a sequence, the fade stays
-        // in an opaque state, and the standard FadeInFailSafe in this game build is
-        // never started anywhere. So we clear the stuck fade ourselves - with the same event the game uses.
+        // Фейды игры (в т.ч. белый RESPAWN FADE/Dream Return) живут на DDOL-объекте
+        // GameCameras. Если сцену выдернуть из середины такого сценария, фейд остаётся
+        // в непрозрачном состоянии, а штатный FadeInFailSafe в этой сборке игры не
+        // запускается нигде. Поэтому гасим залипание сами — тем же событием, что и игра.
         private void FadeWatchdogTick()
         {
             try
@@ -767,7 +1005,7 @@ namespace HK_AI_Mod
                 if (state != _fadeStateLastLogged)
                 {
                     if (state != "Normal")
-                        Log($"[AI] Camera fade -> '{state}' (scene {CurrentSceneName()})");
+                        Log($"[ИИ] Фейд камеры -> '{state}' (сцена {CurrentSceneName()})");
                     _fadeStateLastLogged = state;
                 }
 
@@ -778,8 +1016,8 @@ namespace HK_AI_Mod
                     return;
                 }
 
-                // We only wait when the game is genuinely idle: during a legitimate
-                // transition the fade is also not "Normal", and we must not meddle with it.
+                // Ждём только когда игра реально ничем не занята: во время честного
+                // перехода фейд тоже не "Normal", и лезть в него нельзя.
                 if (!IsGameSettled(GameManager.instance, HeroController.instance))
                 {
                     _fadeNotNormalSince = -1f;
@@ -803,279 +1041,43 @@ namespace HK_AI_Mod
 
                 _fadeRescueAttempts++;
                 _fadeNotNormalSince = Time.unscaledTime;
-                Log($"[AI] Fade got stuck in '{state}' for {stuck:F1}s (attempt {_fadeRescueAttempts}) - sending FADE SCENE IN");
+                Log($"[ИИ] Фейд залип в '{state}' на {stuck:F1}с (попытка {_fadeRescueAttempts}) — отправляю FADE SCENE IN");
                 gc.cameraFadeFSM.Fsm.Event("FADE SCENE IN");
             }
             catch (Exception) {}
         }
 
-        private void TransitionWatchdogTick(float unscaledDelta)
+        private static string CommandErrorJson(string command, string reason)
         {
-            if (_watchdogTimer <= 0f) return;
-            _watchdogTimer -= unscaledDelta;
-            if (_watchdogTimer > 0f) return;
-
-            try
-            {
-                GameManager gm = GameManager.instance;
-                if (gm == null || _inMenuScene) return;
-
-                if (gm.IsLoadingSceneTransition)
-                {
-                    _watchdogTimer = 1.5f;
-                    return;
-                }
-
-                HeroController hero = HeroController.instance;
-                bool heroFrozen = hero != null && hero.cState != null && hero.cState.transitioning;
-
-                if (!heroFrozen)
-                {
-                    if (gm.IsInSceneTransition)
-                        ReflectionHelper.SetField(gm, "<IsInSceneTransition>k__BackingField", false);
-                    return;
-                }
-
-                if (Time.timeScale <= 0f)
-                    Time.timeScale = 1f;
-
-                TransitionPoint gate = null;
-                string gateName = ReadTargetGateName();
-                try
-                {
-                    var registry = TransitionPoint.TransitionPoints;
-                    if (registry != null)
-                    {
-                        foreach (TransitionPoint tp in registry)
-                        {
-                            if (tp != null && tp.name == gateName)
-                            {
-                                gate = tp;
-                                break;
-                            }
-                        }
-                    }
-                }
-                catch (Exception) {}
-                if (gate == null && _forcedEntryAttempts == 0)
-                {
-                    try
-                    {
-                        var names = new System.Text.StringBuilder();
-                        var registry = TransitionPoint.TransitionPoints;
-                        if (registry != null)
-                            foreach (TransitionPoint tp in registry)
-                                names.Append(tp != null ? tp.name : "null").Append("; ");
-                        Log($"[AI] Active scene gates: {names}");
-                    }
-                    catch (Exception) {}
-                }
-                if (gate == null)
-                    gate = FindTransitionGate(hero.transform, gateName);
-                Log($"[AI] Hero is stuck in transitioning. Gate '{gateName}' found: {gate != null}{(gate != null ? $" ({gate.name})" : "")}, attempt #{_forcedEntryAttempts}");
-
-                if (gate != null && _forcedEntryAttempts == 0)
-                {
-                    _forcedEntryAttempts++;
-                    hero.StartCoroutine(hero.EnterScene(gate, 0f));
-                    _watchdogTimer = 3f;
-                    return;
-                }
-
-                _forcedEntryAttempts++;
-                if (gate != null)
-                {
-                    Vector2 gp = gate.transform.position;
-                    hero.transform.SetPosition2D(gp.x, gp.y + 1f);
-                }
-                ReflectionHelper.CallMethod(hero, "FinishedEnteringScene", true, false);
-                gm.FinishedEnteringScene();
-                gm.FadeSceneIn();
-
-                try
-                {
-                    var heroRenderer = hero.GetComponentInChildren<Renderer>();
-                    if (heroRenderer != null) heroRenderer.enabled = true;
-                }
-                catch (Exception) {}
-                Log("[AI] Hero was manually placed at the gate and unblocked");
-            }
-            catch (Exception e)
-            {
-                Log($"[AI] Transition watchdog error: {e}");
-            }
+            string safeCommand = (command ?? "").Replace("\"", "'");
+            string safeReason = (reason ?? "").Replace("\"", "'");
+            return "{\"status\": \"command_error\", \"command\": \"" + safeCommand
+                + "\", \"reason\": \"" + safeReason + "\"}";
         }
 
-        private string ReadTargetGateName()
-        {
-            try
-            {
-                if (File.Exists(_gateConfigPath))
-                {
-                    string gate = File.ReadAllText(_gateConfigPath).Trim();
-                    if (!string.IsNullOrEmpty(gate))
-                        return gate;
-                }
-            }
-            catch (Exception) {}
-            return DEFAULT_ENTRY_GATE;
-        }
-
-        private static TransitionPoint FindTransitionGate(UnityEngine.Transform heroTransform, string gateName)
-        {
-            try
-            {
-                var scene = UnityEngine.SceneManagement.SceneManager.GetActiveScene();
-                GameObject[] roots = scene.GetRootGameObjects();
-                foreach (GameObject root in roots)
-                {
-                    if (root.name == gateName)
-                    {
-                        TransitionPoint tp = root.GetComponent<TransitionPoint>();
-                        if (tp != null) return tp;
-                    }
-                    TransitionPoint[] all = root.GetComponentsInChildren<TransitionPoint>(true);
-                    foreach (TransitionPoint tp in all)
-                    {
-                        if (tp != null && tp.name == gateName)
-                            return tp;
-                    }
-                }
-                foreach (var loaded in UnityEngine.SceneManagement.SceneManager.GetAllScenes())
-                {
-                    if (!loaded.isLoaded || loaded == scene) continue;
-                    foreach (GameObject root in loaded.GetRootGameObjects())
-                    {
-                        TransitionPoint[] all = root.GetComponentsInChildren<TransitionPoint>(true);
-                        foreach (TransitionPoint tp in all)
-                        {
-                            if (tp != null && tp.name == gateName)
-                                return tp;
-                        }
-                    }
-                }
-            }
-            catch (Exception) {}
-            return null;
-        }
-
-        private void PollCommand()
-        {
-            try
-            {
-                if (!File.Exists(_cmdPath))
-                {
-                    _restartPending = false;
-                    return;
-                }
-
-                string raw = File.ReadAllText(_cmdPath).Trim();
-                if (raw.Length == 0) return;
-                string cmd = raw.ToLowerInvariant();
-
-                // The boss list command works even in the main menu.
-                if (cmd == "bosses")
-                {
-                    WriteBossList();
-                    TryDeleteCmd();
-                    return;
-                }
-
-                if (_inMenuScene) return;
-
-                if (cmd == "warp")
-                {
-                    WarpHeroToGate();
-                    TryDeleteCmd();
-                    return;
-                }
-
-                bool isRestart = cmd == "restart";
-                bool isTeleport = cmd == "teleport";
-                bool isBossSelect = cmd == "boss" || cmd.StartsWith("boss ");
-
-                if (!isRestart && !isTeleport && !isBossSelect)
-                {
-                    TryDeleteCmd();
-                    return;
-                }
-
-                if (_restartPending)
-                {
-                    TryDeleteCmd();
-                    return;
-                }
-
-                // Target scene: from the "boss <x>" argument or from the config file.
-                string targetScene = ReadTargetScene();
-                if (isBossSelect)
-                {
-                    string query = cmd.Length > 5 ? cmd.Substring(5).Trim() : "";
-                    string resolvedScene, resolvedLabel;
-                    if (!TryResolveBoss(query, out resolvedScene, out resolvedLabel))
-                    {
-                        Log($"[AI] Boss not recognized: '{query}'. Send the 'bosses' command for the list.");
-                        TryDeleteCmd();
-                        return;
-                    }
-                    targetScene = resolvedScene;
-                    // Remember the selected boss so that restarts and Python
-                    // keep working with the same arena.
-                    WriteBossConfig(targetScene);
-                    Log($"[AI] Boss selected: {resolvedLabel} ({resolvedScene})");
-                }
-                else
-                {
-                    // restart/teleport also understand aliases (HK_BOSS_SCENE="hornet")
-                    string resolvedScene, resolvedLabel;
-                    if (TryResolveBoss(targetScene, out resolvedScene, out resolvedLabel))
-                        targetScene = resolvedScene;
-                }
-
-                _restartPending = true;
-                _restartRequested = true;
-                _restartRequestedAt = Time.time;
-                _restartTargetScene = targetScene;
-                _sceneChangedSinceRequest = false;
-                _deferReasonLastLogged = "";
-
-                string gate = ResolveEntryGate(targetScene);
-                _restartGate = gate;
-                Log($"[AI] {(isBossSelect ? "Teleport to boss" : "Quick restart")}: target '{targetScene}', gate '{gate}' - command accepted, the transition will run once the game is free");
-                TryDeleteCmd();
-            }
-            catch (Exception e)
-            {
-                Log($"[AI] Command error: {e}");
-            }
-        }
-
-        private void WriteBossConfig(string scene)
-        {
-            try
-            {
-                File.WriteAllText(_sceneConfigPath, scene);
-            }
-            catch (Exception) {}
-        }
-
-        // Returns the hero to the current scene's arena entrance without reloading the scene.
+        // Возвращает героя к входу арены текущей сцены без перезагрузки сцены.
         private void WarpHeroToGate()
         {
             try
             {
-                HeroController hero = HeroController.instance;
-                if (hero == null)
+                if (_inMenuScene)
                 {
-                    Log("[AI] Warp: no hero in the scene");
+                    Log("[ИИ] Warp проигнорирован: мы в меню");
                     return;
                 }
 
-                TransitionPoint gate = FindTransitionGate(hero.transform, ReadTargetGateName());
+                HeroController hero = HeroController.instance;
+                if (hero == null)
+                {
+                    Log("[ИИ] Warp: героя нет на сцене");
+                    return;
+                }
+
+                TransitionPoint gate = FindTransitionGate(hero.transform, _targetGate);
                 if (gate != null)
                     hero.transform.SetPosition2D(gate.transform.position.x, gate.transform.position.y + 1f);
                 else
-                    Log("[AI] Warp: gate not found, the hero stays in place");
+                    Log("[ИИ] Warp: гейт не найден, герой остаётся на месте");
 
                 if (hero.cState != null && hero.cState.transitioning)
                     ReflectionHelper.CallMethod(hero, "FinishedEnteringScene", true, false);
@@ -1089,31 +1091,205 @@ namespace HK_AI_Mod
                 }
                 catch (Exception) {}
 
-                Log("[AI] Warp: hero returned to the arena gate");
+                Log("[ИИ] Warp: герой возвращён к гейту арены");
             }
             catch (Exception e)
             {
-                Log($"[AI] Warp error: {e}");
+                Log($"[ИИ] Ошибка warp: {e}");
             }
         }
 
-        private void TryDeleteCmd()
+        // ---------------- Пайп-сервер ----------------
+
+        // Слот на клиента. Поток блокируется в ConnectNamedPipe, пока клиент не
+        // подключится, а затем сам его обслуживает (PumpClient).
+        private void PipeListenerLoop()
         {
-            for (int attempt = 0; attempt < 3; attempt++)
+            for (int slot = 0; slot < MAX_PIPE_CLIENTS; slot++)
             {
+                int slotId = slot;
+                var thread = new Thread(() => PipeSlotLoop(slotId))
+                {
+                    IsBackground = true,
+                    Name = "HK_AI_PipeSlot" + slotId
+                };
+                thread.Start();
+            }
+        }
+
+        private void PipeSlotLoop(int slot)
+        {
+            byte[] readBuf = new byte[4096];
+            var lineBuf = new StringBuilder();
+            var events = new List<string>();
+            var payload = new StringBuilder();
+
+            while (!_shuttingDown)
+            {
+                IntPtr pipe = Win32Pipe.Create(@"\\.\pipe\" + PIPE_NAME, MAX_PIPE_CLIENTS, 65536, 8192);
+                if (pipe == IntPtr.Zero)
+                {
+                    if (!_shuttingDown)
+                        Log($"[ИИ] Пайп-слот {slot}: CreateNamedPipe не удался (ошибка {Win32Pipe.LastError()})");
+                    Thread.Sleep(1000);
+                    continue;
+                }
+
                 try
                 {
-                    File.Delete(_cmdPath);
-                    return;
+                    if (!Win32Pipe.Connect(pipe))
+                    {
+                        if (!_shuttingDown)
+                        {
+                            Log($"[ИИ] Пайп-слот {slot}: ConnectNamedPipe не удался (ошибка {Win32Pipe.LastError()})");
+                            Thread.Sleep(1000);
+                        }
+                        continue;
+                    }
+
+                    Log($"[ИИ] Пайп-слот {slot}: клиент подключился");
+                    byte[] hello = Utf8("{\"status\": \"pipe_hello\", \"protocol\": " + PROTOCOL_VERSION
+                        + ", \"mod_version\": \"" + MOD_VERSION + "\"}\n");
+                    if (Win32Pipe.Write(pipe, hello, hello.Length))
+                        PumpClient(pipe, readBuf, lineBuf, events, payload);
                 }
-                catch (IOException)
+                catch (Exception e)
                 {
-                    System.Threading.Thread.Sleep(30);
+                    if (!_shuttingDown)
+                        Log($"[ИИ] Пайп-слот {slot}: ошибка — {e.Message}");
                 }
-                catch (Exception)
+                finally
                 {
-                    return;
+                    Win32Pipe.Close(pipe);
                 }
+            }
+        }
+
+        // Обслуживание одного клиента. Всё на одном потоке: сначала пишем
+        // накопившееся, затем опрашиваем и читаем команды. На хэндле никогда не
+        // висит незавершённая операция, поэтому запись не может повиснуть на
+        // незавершённом чтении (именно это убивало прежнюю реализацию).
+        private void PumpClient(IntPtr pipe, byte[] readBuf, StringBuilder lineBuf,
+            List<string> events, StringBuilder payload)
+        {
+            long lastSeq = -1;
+            long lastOutboxId;
+            // События, накопившиеся до подключения, не переигрываем:
+            // клиента интересуют только ответы на его собственные команды.
+            lock (_sync) { lastOutboxId = _outboxSeq; }
+
+            while (!_shuttingDown)
+            {
+                events.Clear();
+                string toSend = null;
+
+                lock (_sync)
+                {
+                    // 1) Одноразовые события: каждый клиент получает их ровно раз.
+                    if (_outboxSeq != lastOutboxId)
+                    {
+                        foreach (KeyValuePair<long, string> ev in _outbox)
+                            if (ev.Key > lastOutboxId) events.Add(ev.Value);
+                        lastOutboxId = _outboxSeq;
+                    }
+
+                    // 2) Телеметрия: только самый свежий кадр, старые не копим.
+                    if (_seq != lastSeq)
+                    {
+                        lastSeq = _seq;
+                        toSend = _latestJson;
+                    }
+
+                    if (events.Count == 0 && toSend == null)
+                        Monitor.Wait(_sync, PIPE_POLL_MS);
+                }
+
+                if (events.Count > 0 || toSend != null)
+                {
+                    payload.Length = 0;
+                    for (int i = 0; i < events.Count; i++)
+                        payload.Append(events[i]).Append('\n');
+                    if (toSend != null)
+                        payload.Append(toSend).Append('\n');
+
+                    byte[] bytes = Utf8(payload.ToString());
+                    if (!Win32Pipe.Write(pipe, bytes, bytes.Length))
+                        return; // клиент отвалился
+                }
+
+                // Неблокирующее вычитывание команд клиента.
+                if (!DrainCommands(pipe, readBuf, lineBuf))
+                    return;
+            }
+        }
+
+        // PeekNamedPipe говорит, сколько байт готово, и только после этого читаем —
+        // ReadFile не может подвиснуть в ожидании данных.
+        private bool DrainCommands(IntPtr pipe, byte[] readBuf, StringBuilder lineBuf)
+        {
+            while (true)
+            {
+                uint available;
+                if (!Win32Pipe.Peek(pipe, out available))
+                    return false; // разрыв: клиент закрылся
+
+                if (available == 0)
+                    return true;
+
+                int toRead = (int)Math.Min(available, (uint)readBuf.Length);
+                int n = Win32Pipe.Read(pipe, readBuf, toRead);
+                if (n <= 0)
+                    return false;
+
+                lineBuf.Append(Encoding.UTF8.GetString(readBuf, 0, n));
+
+                while (true)
+                {
+                    string text = lineBuf.ToString();
+                    int idx = text.IndexOf('\n');
+                    if (idx < 0) break;
+                    string line = text.Substring(0, idx).TrimEnd('\r').Trim();
+                    lineBuf.Remove(0, idx + 1);
+                    if (line.Length > 0)
+                        _incomingCommands.Enqueue(line);
+                }
+
+                if (lineBuf.Length > 65536) // поток мусора без переводов строк — сбрасываем
+                    lineBuf.Remove(0, lineBuf.Length - 1024);
+            }
+        }
+
+        private static byte[] Utf8(string text)
+        {
+            return Encoding.UTF8.GetBytes(text);
+        }
+
+        private void Publish(string json)
+        {
+            lock (_sync)
+            {
+                _latestJson = json;
+                _seq++;
+                Monitor.PulseAll(_sync);
+            }
+        }
+
+        // Одноразовое событие: в отличие от телеметрии не перетирается свежим
+        // кадром, а доставляется каждому подключённому клиенту ровно один раз.
+        // Метка "event": 1 говорит клиенту, что это не телеметрия, — иначе
+        // событие подменило бы последний кадр наблюдений в Python.
+        private void PublishEvent(string json)
+        {
+            string marked = (json != null && json.StartsWith("{\"status\""))
+                ? "{\"event\": 1, " + json.Substring(1)
+                : json;
+            lock (_sync)
+            {
+                _outboxSeq++;
+                _outbox.Add(new KeyValuePair<long, string>(_outboxSeq, marked));
+                while (_outbox.Count > MAX_OUTBOX)
+                    _outbox.RemoveAt(0);
+                Monitor.PulseAll(_sync);
             }
         }
 
@@ -1195,11 +1371,9 @@ namespace HK_AI_Mod
 
         private void OnHeroUpdate()
         {
-            // Telemetry is written every HeroUpdate (~60 records/sec at 60fps).
-            // The Python side syncs on the file's mtime and keeps up with the game,
-            // which raises the training speed ceiling from ~20 to ~60 steps/sec.
-
-            PollCommand();
+            // v1.2: телеметрия каждый HeroUpdate (~60 записей/сек при 60fps) публикуется
+            // в пайп \\.\pipe\hk_ai_mod. Python-сторона читает построчно и синхронизирует
+            // шаги по факту прихода новой записи — без снов и опроса mtime файла.
 
             try
             {
@@ -1271,7 +1445,7 @@ namespace HK_AI_Mod
                             _lastBossVelX = 0f;
                             _lastBossVelY = 0f;
                             _lastBossHpKnown = bestHp;
-                            Log($"[AI] Boss chosen: {bestCandidate.gameObject.name} (hp={bestHp})");
+                            Log($"[ИИ] Босс выбран: {bestCandidate.gameObject.name} (hp={bestHp})");
                         }
                     }
 
@@ -1289,7 +1463,7 @@ namespace HK_AI_Mod
                                     if (hm.isDead || hm.hp <= 0)
                                     {
                                         _bossDead = true;
-                                        Log("[AI] Boss is dead (HealthManager.isDead)");
+                                        Log("[ИИ] Босс мёртв (HealthManager.isDead)");
                                         break;
                                     }
                                 }
@@ -1303,7 +1477,7 @@ namespace HK_AI_Mod
                         if (_currentBoss.hp <= 0 || _currentBoss.isDead)
                         {
                             _bossDead = true;
-                            Log("[AI] Boss is dead (current HealthManager)");
+                            Log("[ИИ] Босс мёртв (текущий HealthManager)");
                         }
                     }
 
@@ -1316,7 +1490,7 @@ namespace HK_AI_Mod
                                 if (hm != null && hm.hp > 20 && (hm.isDead || hm.hp <= 0))
                                 {
                                     _bossDead = true;
-                                    Log($"[AI] Boss is dead (HM scan: {hm.gameObject.name})");
+                                    Log($"[ИИ] Босс мёртв (перебор HM: {hm.gameObject.name})");
                                     break;
                                 }
                             }
@@ -1380,7 +1554,7 @@ namespace HK_AI_Mod
                                 if (_seenFsmStates.Add(logKey))
                                 {
                                     bool classifiedAsAttack = IsAttackFsmState(stateName);
-                                    Log($"[FSM] '{fsm.FsmName}' -> state '{stateName}' | attack={classifiedAsAttack}");
+                                    Log($"[FSM] '{fsm.FsmName}' -> состояние '{stateName}' | атака={classifiedAsAttack}");
                                 }
 
                                 if (IsAttackFsmState(stateName))
@@ -1392,7 +1566,7 @@ namespace HK_AI_Mod
                                 if (!_bossDead && stateName == "Death Anim Start")
                                 {
                                     _bossDead = true;
-                                    Log("[AI] Boss is dead (FSM Death Anim Start)");
+                                    Log("[ИИ] Босс мёртв (FSM Death Anim Start)");
                                 }
                             }
                         }
@@ -1457,44 +1631,21 @@ namespace HK_AI_Mod
                         $"\"near_hazard\": {(near_hazard ? 1 : 0)}, " +
                         $"\"boss_state\": \"{boss_state}\"" +
                         $"}}";
-                    
-                    WriteSafe(data);
+
+                    Publish(data);
                 }
             }
             catch (Exception)
             {
-                WriteSafe(StatusJson("waiting_for_hero_body"));
+                Publish(StatusJson("waiting_for_hero_body"));
             }
-        }
-
-        private void WriteSafe(string json)
-        {
-            try
-            {
-                string tmpPath = _filePath + ".tmp";
-                using (FileStream fs = new FileStream(tmpPath, FileMode.Create, FileAccess.Write, FileShare.ReadWrite))
-                using (StreamWriter sw = new StreamWriter(fs))
-                {
-                    sw.Write(json);
-                }
-                if (File.Exists(_filePath))
-                    File.Replace(tmpPath, _filePath, null);
-                else
-                    File.Move(tmpPath, _filePath);
-            }
-            catch (Exception) {}
         }
 
         private void OnGameQuitting()
         {
-            try
-            {
-                if (!string.IsNullOrEmpty(_filePath) && File.Exists(_filePath))
-                {
-                    File.Delete(_filePath);
-                }
-            }
-            catch (Exception){}
+            _shuttingDown = true;
+            try { Publish(StatusJson("quitting")); } catch (Exception) {}
+            lock (_sync) { Monitor.PulseAll(_sync); }
         }
     }
 

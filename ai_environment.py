@@ -1,64 +1,57 @@
 import os
-import json
 import time
 import cv2
 import numpy as np
 from screen_capture import ScreenCaptureAgent, USE_SCREEN_CAPTURE
-import tempfile
+from hk_pipe import get_shared_client
 
-PATH_TO_TELEMETRY = os.path.join(tempfile.gettempdir(), "hk_ai_data.json") 
 AI_VISION_SIZE = (256, 256)
 
-ENABLE_PREVIEW = False 
+ENABLE_PREVIEW = False
 
 class HollowKnightEnv:
     def __init__(self):
         self.use_screen_capture = USE_SCREEN_CAPTURE
         if self.use_screen_capture:
             self.camera = ScreenCaptureAgent()
-            print("[ENV] Screen capture ENABLED")
+            print("[ENV] Захват экрана ВКЛЮЧЕН")
         else:
             self.camera = None
-            print("[ENV] Screen capture DISABLED (using telemetry)")
-        print("[ENV] Hollow Knight found successfully!")
+            print("[ENV] Захват экрана ОТКЛЮЧЕН (используется телеметрия)")
+
+        # Обновление 4: телеметрия идёт через именованный пайп \\.\pipe\hk_ai_mod.
+        # Фон стримится построчно в отдельном потоке с авто-реконнектом —
+        # никаких гонок за файл в %TEMP% и ретраев открытия. Клиент общий на
+        # процесс, поэтому команды bosses.py идут по тому же соединению.
+        self.pipe = get_shared_client()
+        print("[ENV] Жду пайп мода (\\\\.\\pipe\\hk_ai_mod)...")
+        if self.pipe.wait_connected(timeout=20.0):
+            print("[ENV] Мод на связи!")
+        else:
+            print("[ENV] ВНИМАНИЕ: мод не ответил за 20с. Игра запущена? Мод HK_AI_Mod.dll установлен?")
+            print("[ENV] Продолжаю: клиент продолжит подключаться в фоне.")
+
+        print("[ENV] хк успешно найден!")
 
     def get_telemetry(self):
-        # Update 3: retries WITHOUT sleeping. The mod writes via File.Replace —
-        # at the moment of replacement the file is unavailable for only a few microseconds,
-        # sleeping 0.02s after every failed attempt is unnecessary.
-        for attempt in range(10):
-            try:
-                with open(PATH_TO_TELEMETRY, 'r') as f:
-                    return json.load(f)
-            except (OSError, json.JSONDecodeError):
-                pass
-        return None
+        # Последнее сообщение мода (None, если связи ещё нет).
+        return self.pipe.get_telemetry()
 
     def get_telemetry_mtime(self):
-        """Timestamp of the last telemetry write (file mtime) or None."""
-        try:
-            return os.path.getmtime(PATH_TO_TELEMETRY)
-        except OSError:
+        """Штамп последней записи телеметрии (счётчик сообщений пайпа) или None."""
+        if not self.pipe.is_connected:
             return None
+        return self.pipe.get_seq()
 
-    def wait_for_fresh_telemetry(self, last_mtime, timeout=0.15):
+    def wait_for_fresh_telemetry(self, last_seq, timeout=0.15):
         """
-        Update 2: wait for a NEW entry to appear in the telemetry file
-        (by mtime change) instead of fixed sleeps.
+        Обновление 4: ждём НОВОЕ сообщение в пайпе (по счётчику seq) вместо
+        фиксированных снов. Шаг идёт ровно в темпе игры.
 
-        Returns the mtime of the new data, or the previous last_mtime,
-        if nothing arrived within timeout (menu/pause — we work with the old data).
+        Возвращает seq новых данных, либо прежний last_seq,
+        если за timeout ничего не пришло (меню/пауза — работаем по старым данным).
         """
-        if last_mtime is None:
-            last_mtime = self.get_telemetry_mtime()
-        deadline = time.perf_counter() + timeout
-        while True:
-            mtime = self.get_telemetry_mtime()
-            if mtime is not None and mtime != last_mtime:
-                return mtime
-            if time.perf_counter() >= deadline:
-                return last_mtime
-            time.sleep(0.001)
+        return self.pipe.wait_for_fresh(last_seq, timeout)
 
     def get_observation(self):
         frame = None
@@ -76,9 +69,9 @@ def main():
     if ENABLE_PREVIEW:
         cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
         cv2.resizeWindow(window_name, AI_VISION_SIZE[0], AI_VISION_SIZE[1])
-        print("[SYSTEM] Preview ENABLED. Press 'q' in the broadcast window to exit.")
+        print("[СИСТЕМА] Предпросмотр ВКЛЮЧЕН. Нажми 'q' в окне трансляции для выхода.")
     else:
-        print("[SYSTEM] Preview DISABLED. Press Ctrl+C in the console to exit.")
+        print("[СИСТЕМА] Предпросмотр ВЫКЛЮЧЕН. Нажми Ctrl+C в консоли для выхода.")
     
     last_x, last_y = 0.0, 0.0
     last_hp, last_mana, last_boss_hp = 0, 0, 0
@@ -112,16 +105,16 @@ def main():
                     hp != last_hp or mana != last_mana or boss_hp != last_boss_hp):
                     
                     os.system('cls' if os.name == 'nt' else 'clear')
-                    print(f"=== AI BRAIN ===")
-                    print(f"PLAYER:   {hp}/{max_hp} HP | SOUL: {mana}/99 MP")
-                    print(f"BOSS:     {boss_hp} HP | State: {boss_state}")
-                    print(f"POSITION: X: {current_x:.2f} | Y: {current_y:.2f}")
-                    print(f"SPEED:    VX: {vel_x:.2f} | VY: {vel_y:.2f}")
-                    print(f"STATUS:   Grounded={grounded} | Attack={is_attacking} | Dash={is_dashing}")
-                    print(f"          Jump={is_jumping} | Fall={is_falling} | Recoil={is_recoiling}")
-                    print(f"BOSS ATTACKING: {boss_is_attacking} | Nearby hazard: {near_hazard}")
-                    print(f"TOOK DAMAGE: {was_hit}")
-                    print(f"VISION:   Frame {AI_VISION_SIZE[0]}x{AI_VISION_SIZE[1]} in memory")
+                    print(f"=== МОЗГИ ИИ ===")
+                    print(f"ИГРОК:    {hp}/{max_hp} HP | ДУША: {mana}/99 MP")
+                    print(f"БОСС:     {boss_hp} HP | Состояние: {boss_state}")
+                    print(f"ПОЗИЦИЯ:  X: {current_x:.2f} | Y: {current_y:.2f}")
+                    print(f"СКОРОСТЬ: VX: {vel_x:.2f} | VY: {vel_y:.2f}")
+                    print(f"СТАТУС:   Земля={grounded} | Атака={is_attacking} | Рывок={is_dashing}")
+                    print(f"          Прыжок={is_jumping} | Падение={is_falling} | Отдача={is_recoiling}")
+                    print(f"БОСС АТАКУЕТ: {boss_is_attacking} | Опасность рядом: {near_hazard}")
+                    print(f"ПОЛУЧИЛ УРОН: {was_hit}")
+                    print(f"ГЛАЗА:    Кадр {AI_VISION_SIZE[0]}x{AI_VISION_SIZE[1]} в памяти")
                     print(f"=============================")
                     
                     last_x, last_y = current_x, current_y
@@ -135,11 +128,11 @@ def main():
                 time.sleep(0.01)
                 
     except KeyboardInterrupt:
-        print("\n[SYSTEM] Stopping...")
+        print("\n[СИСТЕМА] Остановка...")
         
     if ENABLE_PREVIEW:
         cv2.destroyAllWindows()
-    print("[SYSTEM] Work finished.")
+    print("[СИСТЕМА] Работа завершена.")
 
 if __name__ == "__main__":
     main()

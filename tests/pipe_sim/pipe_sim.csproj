@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <AssemblyName>hkpipesim</AssemblyName>
+    <RootNamespace>hkpipesim</RootNamespace>
+  </PropertyGroup>
+
+  <!-- Тот же самый Win32-слой, что и в моде: стенд проверяет боевой код, а не
+       его пересказ. Именно так ловится расхождение между макетом и игрой. -->
+  <ItemGroup>
+    <Compile Include="..\..\Mod\HK_AI_Mod\Win32Pipe.cs" Link="Win32Pipe.cs" />
+  </ItemGroup>
+
+</Project>
