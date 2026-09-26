@@ -1,6 +1,6 @@
 """Телепорт к боссам пантеона (Godhome) — выбор босса и запуск обучения.
 
-Требует мод HK_AI_Mod v1.2+ в игре (права на команды boss/teleport/bosses/warp).
+Требует мод HK_AI_Mod в игре (права на команды boss/teleport/bosses/warp).
 
 Использование:
   python teleport.py                  — интерактивное меню выбора босса;
@@ -62,8 +62,8 @@ def check_mod():
         print("           Запусти игру (мод пишет %TEMP%/hk_ai_data.json) и попробуй снова.")
         return False
     if not mod_has_scene_field():
-        print("[ТЕЛЕПОРТ] В телеметрии нет поля 'scene' — стоит старый мод (v1.1).")
-        print("           Обнови DLL до v1.2: dotnet build Mod/HK_AI_Mod/HK_AI_Mod.csproj -c Release")
+        print("[ТЕЛЕПОРТ] В телеметрии нет поля 'scene' — стоит старый мод.")
+        print("           Обнови DLL: dotnet build Mod/HK_AI_Mod/HK_AI_Mod.csproj -c Release")
         print("           и скопируй bin/Release/net472/HK_AI_Mod.dll в папку Mods.")
         return False
     return True
@@ -117,18 +117,18 @@ def teleport_to(query, timeout=45.0):
     else:
         print("[ТЕЛЕПОРТ] Бой не поднялся за отведённое время.")
         print("           Проверь ModLog (мод пишет активные гейты сцены и выбранный вход) — "
-              "мод v1.3 подбирает существующий гейт сам, вручную править нужно редко: hk_ai_gate.txt.")
+              "мод подбирает существующий гейт сам, вручную править нужно редко: hk_ai_gate.txt.")
     return ok, scene
 
 
 def legacy_fallback(query):
-    """Фолбэк для старого мода v1.1: пишем сцену в конфиг и шлём restart."""
+    """Фолбэк для старого мода: пишем сцену в конфиг и шлём restart."""
     resolved = resolve_query(query)
     if resolved is None:
         print(f"[ТЕЛЕПОРТ] Босс не распознан: {query!r}.")
         return None
     scene, label = resolved
-    print(f"[ТЕЛЕПОРТ] Старый мод v1.1: задаю сцену {scene} и рестарт.")
+    print(f"[ТЕЛЕПОРТ] Старый мод: задаю сцену {scene} и рестарт.")
     set_boss_scene(scene)
     request_restart()
     ok = wait_for_scene(scene, timeout=45.0)
@@ -245,10 +245,10 @@ def main():
         interactive_loop(auto_train=args.train)
         return
 
-    print("[ТЕЛЕПОРТ] Интерактивный режим требует мод v1.2 и запущенную игру.")
-    print("           Можно попробовать фолбэк для старого мода v1.1.")
+    print("[ТЕЛЕПОРТ] Интерактивный режим требует мод и запущенную игру.")
+    print("           Можно попробовать фолбэк для старого мода.")
     try:
-        query = input("boss (фолбэк v1.1)> ").strip()
+        query = input("boss > ").strip()
     except (EOFError, KeyboardInterrupt):
         return
     if query and query.lower() not in ("q", "quit"):

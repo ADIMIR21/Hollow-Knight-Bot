@@ -1,6 +1,6 @@
 """Реестр боссов Godhome и низкоуровневый протокол команд для мода HK_AI_Mod.
 
-Реестр — зеркало BossRegistry в Mod/HK_AI_Mod/AiDataExporter.cs (v1.2).
+Реестр — зеркало BossRegistry в Mod/HK_AI_Mod/AiDataExporter.cs.
 Сцены взяты из build settings игры (hollow_knight_Data/globalgamemanagers).
 Варианты с суффиксом _V — усложнённые версии боёв (Ascended/Radiant),
 GG_Mantis_Lords_V = Sisters of Battle, GG_Nosk_Hornet = Winged Nosk.
@@ -9,7 +9,7 @@ GG_Mantis_Lords_V = Sisters of Battle, GG_Nosk_Hornet = Winged Nosk.
   hk_ai_cmd.txt   — команда: restart | teleport | boss <запрос> | bosses | warp
   hk_ai_boss.txt  — целевая сцена босса (мод сам перезаписывает её при "boss <x>")
   hk_ai_gate.txt  — имя входного гейта арены (по умолчанию door_dreamEnter)
-  hk_ai_data.json — телеметрия (с v1.2 содержит поле "scene")
+  hk_ai_data.json — телеметрия
 """
 
 import os
@@ -25,7 +25,7 @@ TELEMETRY_FILE = os.path.join(tempfile.gettempdir(), "hk_ai_data.json")
 
 DEFAULT_SCENE = "GG_False_Knight"
 # Арены Godhome принимают героя через единственный TransitionPoint сцены —
-# door_dreamEnter (мод v1.3 всё равно подбирает существующий гейт сам).
+# door_dreamEnter (мод v1 всё равно подбирает существующий гейт сам).
 DEFAULT_GATE = "door_dreamEnter"
 
 # (scene, label) — порядок и подписи совпадают с реестром мода.
@@ -227,7 +227,7 @@ def set_boss_scene(scene_name):
 
 
 def set_gate(gate_name):
-    """Задаёт входной гейт арены (hk_ai_gate.txt), по умолчанию door1."""
+    """Задаёт входной гейт арены (hk_ai_gate.txt); пустая строка → DEFAULT_GATE."""
     write_file(GATE_FILE, str(gate_name).strip() or DEFAULT_GATE)
 
 
@@ -269,7 +269,7 @@ def read_telemetry():
 
 
 def current_scene():
-    """Текущая сцена из телеметрии (мод v1.2+) или None."""
+    """Текущая сцена из телеметрии или None."""
     data = read_telemetry()
     if data is None:
         return None
@@ -300,6 +300,6 @@ def wait_for_scene(expected_scene=None, timeout=30.0, on_progress=None):
 
 
 def mod_has_scene_field():
-    """Есть ли поле scene в телеметрии (признак мода v1.2+)."""
+    """Есть ли поле scene в телеметрии."""
     data = read_telemetry()
     return data is not None and "scene" in data
