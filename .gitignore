@@ -8,3 +8,5 @@ all.txt
 tests/pipe_sim/bin/
 tests/pipe_sim/obj/
 tests/pipe_sim/bosses.json
+tests/mono_il/bin/
+tests/mono_il/obj/
