@@ -247,6 +247,19 @@ class HollowKnightGym(gym.Env):
         print("[RESET] The fight scene did not come up within the allotted time. Falling back to the macro.")
         return False
 
+    def _fight_in_progress(self):
+        """
+        Is a live fight already running right now? Then there is nothing to reload: both the
+        boss and the knight are alive and no restart is pending. Used after a step-limit
+        truncation, where reloading the arena would only cut the fight in half.
+        """
+        telemetry = self.game_env.get_telemetry()
+        return (telemetry is not None
+                and telemetry.get("status") == "fight"
+                and int(telemetry.get("restart_pending", 0)) == 0
+                and float(telemetry.get("hp", 0)) > 0
+                and float(telemetry.get("boss_hp", 0)) > 0)
+
     def _wait_for_fight_scene(self, timeout):
         deadline = time.time() + timeout
         while time.time() < deadline:
@@ -287,7 +300,13 @@ class HollowKnightGym(gym.Env):
 
             self.controller.reset_all()
 
-            if self._first_reset:
+            if reset_reason == "step limit" and self._fight_in_progress():
+                # The step cap is only a bookkeeping boundary of the episode, not a fight
+                # outcome: nobody won and nobody died. Reloading the arena here used to cut a
+                # live fight in half, so a truncated episode simply continues in place - the
+                # same boss, the same HP, a fresh episode counter.
+                print("[RESET] Step limit reached: continuing the same fight without a restart.")
+            elif self._first_reset:
                 self._first_reset = False
                 if not self._wait_for_fight_scene(10.0):
                     print("[RESET] Auto-teleporting to the arena...")
@@ -409,8 +428,10 @@ class HollowKnightGym(gym.Env):
         fps = 1.0 / (time_since_last_step + 0.0001)
         self.last_time = current_time
 
+        step_limit = False
         if self.episode_step > 3000:
             truncated = True
+            step_limit = True
             self.controller.reset_all()
             self._episode_reason = "step limit"
 
@@ -486,4 +507,10 @@ class HollowKnightGym(gym.Env):
             cv2.imshow("AI Dashboard", stats_img)
             cv2.waitKey(1) 
         
-        return stacked_obs, reward, terminated, truncated, {"reward_parts": reward_parts}
+        # "step_limit" tells the training callbacks that this episode boundary is only the
+        # bookkeeping cap of a fight that is still going on (nobody won, nobody died): such a
+        # window must not be counted as an episode outcome.
+        return stacked_obs, reward, terminated, truncated, {
+            "reward_parts": reward_parts,
+            "step_limit": step_limit,
+        }

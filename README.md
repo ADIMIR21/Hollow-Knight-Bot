@@ -90,7 +90,7 @@ The mod must be loaded into the game for the framework to work!
 3. Victory: `HK_VICTORY_FRAMES` (default 3) consecutive frames with `boss_hp<=0` and `boss_dead=1` -> **+1000**, `terminated`
 4. Player death: `hp<=0` -> **-500**, `terminated`
 5. Empty episode (no boss in the scene): aborted after 150 frames, so as not to wait 3000 steps outside the arena
-6. Episode cap: 3000 steps -> `truncated`
+6. Episode cap: 3000 steps -> `truncated`, **without reloading the arena**: nobody won and nobody died, so the bot keeps fighting the same boss from the same state with a fresh episode counter. The cap is only a bookkeeping window (it exists so a fight where nobody wins and nobody dies cannot run forever and blind the training metrics); such windows are written to the journal as `WINDOW` and do not count towards the win rate
 
 ## Reward function
 

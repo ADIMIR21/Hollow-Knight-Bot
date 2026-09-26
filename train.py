@@ -137,6 +137,10 @@ class WinRateLoggingCallback(BaseCallback):
         for info in self.locals.get("infos", []):
             if "episode" not in info:
                 continue
+            if info.get("step_limit"):
+                # The step cap only cuts the bookkeeping window - the fight goes on - so this is
+                # not an episode outcome and must not dilute the win rate.
+                continue
             parts = info.get("reward_parts") or {}
             if parts.get("victory", 0.0) > 0:
                 outcome, reason = 1.0, "victory"
@@ -256,11 +260,21 @@ class ProgressFileCallback(BaseCallback):
                 continue
             parts = info.get("reward_parts") or {}
             reason = self._classify(parts)
+            episode = info["episode"] or {}
+            if reason == "timeout" and info.get("step_limit"):
+                # Not an episode: the step cap cut the bookkeeping window while the fight is
+                # still going on. Logged separately so the journal stays complete, but the
+                # counters (and the win rate) only see real fight outcomes.
+                self._append(
+                    f"[{self._stamp()}] WINDOW step={self.num_timesteps} "
+                    f"reward={float(episode.get('r', 0.0)):.2f} "
+                    f"len={episode.get('l', 0)} | step limit reached, the fight continues\n"
+                )
+                continue
             self._reasons.append(reason)
             self.total_episodes += 1
             if reason == "victory":
                 self.total_victories += 1
-            episode = info["episode"] or {}
             window = len(self._reasons)
             self._append(
                 f"[{self._stamp()}] EPISODE #{self.total_episodes} "
