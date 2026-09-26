@@ -1,7 +1,11 @@
-# Деплой мода HK_AI_Mod в игру (запускать при ЗАКРЫТОЙ игре).
+﻿# Деплой мода HK_AI_Mod в игру (запускать при ЗАКРЫТОЙ игре).
 # Использование:
 #   powershell -ExecutionPolicy Bypass -File deploy_mod.ps1
 #   powershell -ExecutionPolicy Bypass -File deploy_mod.ps1 -Build   # пересобрать перед деплоем
+#
+# ВАЖНО: файл должен оставаться в UTF-8 **с BOM**. Windows PowerShell 5.1 без BOM читает
+# кириллицу как CP1251, из-за чего падает с "Missing closing '}'" на первом же блоке.
+# Если правил файл редактором, который срезает BOM — верни его обратно.
 
 param(
     [switch]$Build
@@ -64,4 +68,4 @@ if (-not (Test-Path $modsDir)) {
 }
 Copy-Item $dll (Join-Path $modsDir "HK_AI_Mod.dll") -Force
 Write-Host "Деплой выполнен: $modsDir\HK_AI_Mod.dll" -ForegroundColor Green
-Write-Host "Запусти игру и проверь ModLog — версия мода должна быть 1.2."
+Write-Host "Запусти игру и проверь ModLog — версия мода должна быть v1."

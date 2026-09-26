@@ -8,7 +8,7 @@ GG_Mantis_Lords_V = Sisters of Battle, GG_Nosk_Hornet = Winged Nosk.
 Протокол (файлы в %TEMP%, как у мода):
   hk_ai_cmd.txt   — команда: restart | teleport | boss <запрос> | bosses | warp
   hk_ai_boss.txt  — целевая сцена босса (мод сам перезаписывает её при "boss <x>")
-  hk_ai_gate.txt  — имя входного гейта арены (по умолчанию door1)
+  hk_ai_gate.txt  — имя входного гейта арены (по умолчанию door_dreamEnter)
   hk_ai_data.json — телеметрия (с v1.2 содержит поле "scene")
 """
 
@@ -24,7 +24,9 @@ BOSS_LIST_FILE = os.path.join(tempfile.gettempdir(), "hk_ai_bosses.json")
 TELEMETRY_FILE = os.path.join(tempfile.gettempdir(), "hk_ai_data.json")
 
 DEFAULT_SCENE = "GG_False_Knight"
-DEFAULT_GATE = "door1"
+# Арены Godhome принимают героя через единственный TransitionPoint сцены —
+# door_dreamEnter (мод v1.3 всё равно подбирает существующий гейт сам).
+DEFAULT_GATE = "door_dreamEnter"
 
 # (scene, label) — порядок и подписи совпадают с реестром мода.
 BOSS_LIST = [

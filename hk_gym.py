@@ -46,11 +46,17 @@ STATS_SIZE = len(STAT_NAMES)
 _RAW_BOSS_SCENE = os.environ.get("HK_BOSS_SCENE", "GG_False_Knight")
 _RESOLVED_BOSS = resolve_query(_RAW_BOSS_SCENE)
 BOSS_SCENE, BOSS_SCENE_LABEL = _RESOLVED_BOSS if _RESOLVED_BOSS else (_RAW_BOSS_SCENE, _RAW_BOSS_SCENE)
-ENTRY_GATE = os.environ.get("HK_ENTRY_GATE", "door1")
+ENTRY_GATE = os.environ.get("HK_ENTRY_GATE", "door_dreamEnter")
 # FRAME_SKIP больше не используется: шаг синхронизируется по свежей телеметрии
 # (см. wait_for_fresh_telemetry в ai_environment.py). Оставлено для совместимости.
 FRAME_SKIP = max(1, int(os.environ.get("HK_FRAME_SKIP", "4")))
 FRAME_STACK = max(1, int(os.environ.get("HK_FRAME_STACK", "4")))
+
+# Победа подтверждается по boss_dead — это уже игровое событие (HealthManager.isDead /
+# OnBossesDead / FSM "Death Anim Start"), а не догадка по hp, поэтому хватает пары кадров.
+# Раньше стояло 20 кадров: рестарт запаздывал и попадал в белый выход арены, из-за чего
+# мод вынужден был ждать полный дрим-возврат в зал (+6-10 секунд на каждый эпизод).
+VICTORY_CONFIRM_FRAMES = max(1, int(os.environ.get("HK_VICTORY_FRAMES", "3")))
 
 class HollowKnightGym(gym.Env):
     def __init__(self):
@@ -93,6 +99,9 @@ class HollowKnightGym(gym.Env):
         self._last_episode_was_victory = False
         self._boss_death_frames = 0
         self._no_boss_frames = 0
+        # Замер сбросов: причина конца эпизода + накопленная статистика времени сброса
+        self._episode_reason = "старт"
+        self._reset_stats = {}
         self._running = True
         self._first_reset = True
         self._telemetry_mtime = self.game_env.get_telemetry_mtime()
@@ -221,7 +230,10 @@ class HollowKnightGym(gym.Env):
             return False
         
         print("[RESET] Быстрый рестарт принят, жду загрузку сцены боя...")
-        deadline = time.time() + 25.0
+        # Мод v1.3 выполняет переход не мгновенно, а когда игра освободится:
+        # после смерти арена сначала штатно уходит в Hall of Gods (белый дрим-возврат),
+        # и только потом мод переводит героя обратно в бой. Отсюда запас по времени.
+        deadline = time.time() + 40.0
         saw_loading = False
         while time.time() < deadline:
             time.sleep(0.3)
@@ -257,8 +269,28 @@ class HollowKnightGym(gym.Env):
         print("[RESET] Бой не поднялся. Зайди в арену вручную.")
         return False
 
+    def _log_reset_timing(self, reason, seconds):
+        """Сколько реально стоит сброс: видно, окупаются ли оптимизации перехода сцены."""
+        entry = self._reset_stats.setdefault(reason, [0, 0.0, 0.0])
+        entry[0] += 1
+        entry[1] += seconds
+        entry[2] = max(entry[2], seconds)
+        print(f"[ТАЙМИНГ] сброс ({reason}): {seconds:.2f}с | {reason}: n={entry[0]}, "
+              f"среднее {entry[1] / entry[0]:.2f}с, максимум {entry[2]:.2f}с")
+
+        total_n = sum(v[0] for v in self._reset_stats.values())
+        if total_n % 10 != 0:
+            return
+        total_t = sum(v[1] for v in self._reset_stats.values())
+        parts = ", ".join(f"{k}: n={v[0]} ср.{v[1] / v[0]:.1f}с"
+                          for k, v in sorted(self._reset_stats.items(), key=lambda kv: -kv[1][1]))
+        print(f"[ТАЙМИНГ] итого {total_n} сбросов = {total_t:.0f}с ({total_t / total_n:.2f}с в среднем) | {parts}")
+
     def reset(self, seed=None, options=None):
             super().reset(seed=seed)
+
+            reset_reason = self._episode_reason
+            reset_started = time.time()
 
             self.controller.reset_all()
 
@@ -302,6 +334,8 @@ class HollowKnightGym(gym.Env):
             self._last_phi = self._potential(float(obs[IDX["hp"]]), float(obs[IDX["boss_hp"]]))
             
             stacked_obs = np.concatenate(list(self._obs_deque)).astype(np.float32)
+            self._log_reset_timing(reset_reason, time.time() - reset_started)
+            self._episode_reason = "неизвестно"
             return stacked_obs, {}
 
     def _potential(self, hp, boss_hp):
@@ -385,6 +419,7 @@ class HollowKnightGym(gym.Env):
         if self.episode_step > 3000:
             truncated = True
             self.controller.reset_all()
+            self._episode_reason = "лимит шагов"
 
         reward -= 0.05
         reward_parts["step_penalty"] -= 0.05
@@ -408,13 +443,15 @@ class HollowKnightGym(gym.Env):
         if self._no_boss_frames >= 150:
             truncated = True
             self.controller.reset_all()
+            self._episode_reason = "босс пропал"
 
-        if self._boss_death_frames >= 20 and current_boss_hp <= 0 and self._last_boss_dead >= 0.5:
+        if self._boss_death_frames >= VICTORY_CONFIRM_FRAMES and current_boss_hp <= 0 and self._last_boss_dead >= 0.5:
             reward += 1000.0
             reward_parts["victory"] += 1000.0
             terminated = True
             self.controller.reset_all()
             self._last_episode_was_victory = True
+            self._episode_reason = "победа"
 
         if current_hp <= 0 and self.last_hp > 0:
             # Обновление 6: штраф за смерть поднят с -200. Максимальный shaping
@@ -424,6 +461,7 @@ class HollowKnightGym(gym.Env):
             reward_parts["death"] -= 500.0
             terminated = True
             self.controller.reset_all()
+            self._episode_reason = "смерть"
 
         self.last_hp = current_hp
         self.last_boss_hp = current_boss_hp
