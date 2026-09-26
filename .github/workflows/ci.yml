@@ -1,0 +1,57 @@
+name: CI
+
+# What runs here is everything that does not need the game:
+#   * every Python file is compiled (syntax and encoding),
+#   * the pure-Python units: the boss registry and its query resolver,
+#   * the C# <-> Python registry parity (the mod is the source of truth),
+#   * the named-pipe harness on Windows: the mock mod, the stuck-client selftest and the
+#     integration checks against the same Win32Pipe.cs the mod uses.
+# The mod itself (Mod/HK_AI_Mod) is deliberately NOT built: its .csproj references the game's
+# Assembly-CSharp.dll, which is neither shipped nor downloadable (see README, "Building and
+# installing the mod").
+
+on:
+  push:
+    branches: [master, dev]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  units:
+    name: Python units and registry parity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Compile every Python file (needs no dependencies)
+        run: python -m compileall -q .
+
+      - name: Units (registry, resolver) and C# <-> Python parity
+        run: python -m unittest discover -s tests -p "test_*.py" -v
+
+  pipe-harness:
+    name: Named-pipe harness (mock mod, 36 checks)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Build the mock, run the selftest and the integration checks
+        shell: pwsh
+        run: |
+          # Not 'Stop': the checks write to stderr on failure and that must be reported by the
+          # harness exit code, not turned into a PowerShell error.
+          $ErrorActionPreference = 'Continue'
+          python tests/run_pipe_harness.py
+          exit $LASTEXITCODE

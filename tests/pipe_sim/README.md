@@ -94,6 +94,19 @@ Requires .NET SDK 8+ (the harness projects are set to `RollForward=LatestMajor`,
 they also run on a machine that only has .NET 6/10, without installing the .NET 8
 runtime) and Python 3.10+.
 
+One command does all three steps below, plus the stuck-client selftest — this is what CI runs:
+
+```powershell
+python tests/run_pipe_harness.py
+```
+
+It generates the registry, builds the mock, runs `--selftest-stuck`, then starts the mock with
+its stdin held open (the mock exits on stdin EOF, which is why the manual recipe below needs the
+mock to keep running in its own terminal), waits for it to report its registry, runs the checks
+and shuts the mock down.
+
+Manually, if you want to poke at the mock yourself:
+
 ```powershell
 # 1. Boss registry from bosses.py in the boss_list event format
 python tests/pipe_sim/gen_boss_list.py

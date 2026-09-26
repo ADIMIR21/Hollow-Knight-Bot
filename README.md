@@ -1,5 +1,7 @@
 # Hollow Knight AI Bot 🤖
 
+[![CI](https://github.com/ADIMIR21/Hollow-Knight-Bot/actions/workflows/ci.yml/badge.svg)](https://github.com/ADIMIR21/Hollow-Knight-Bot/actions/workflows/ci.yml)
+
 **Hollow Knight AI Bot** is a project on training artificial intelligence (Deep Reinforcement Learning) to fight bosses in the game **Hollow Knight** using the **PPO** (Proximal Policy Optimization) algorithm.
 
 ## Architecture
@@ -261,6 +263,20 @@ python teleport.py --verify  # compare the Python and mod boss registries over t
 ```
 
 The pipe is the only channel between the game and Python, so if the framework "does not see" the game: make sure the deployed build is the pipe build (see "Building and installing the mod"), and check the ModLog - on startup the mod prints the pipe name it listens on. The transport can also be exercised without the game: `tests/pipe_sim/` is a mock mod plus an integration test (see `tests/pipe_sim/README.md`).
+
+## Tests and CI
+
+Everything below runs without the game and without the pip dependencies (torch, vgamepad, ...), so it also runs in CI.
+
+```bash
+python -m unittest discover -s tests -p "test_*.py" -v   # units: registry, resolver, C# <-> Python parity
+python tests/run_pipe_harness.py                         # the whole pipe harness in one command
+```
+
+- **Units** (`tests/test_bosses.py`) - the boss registry and `resolve_query`: lookup by number / scene / alias / exact title, the ambiguity rule (a partial match prefers the base fight over the Ascended/Radiant `_V` variant), plus the invariants that keep the menu honest: unique scenes and labels, aliases pointing at real scenes, `DEFAULT_GATE == door_dreamEnter`
+- **Registry parity** (`tests/test_registry_parity.py`) - reads `Mod/HK_AI_Mod/AiDataExporter.cs` and compares it with `bosses.py` entry by entry, in order: the mod's `BossRegistry`, `ExtraAliases`, `DEFAULT_BOSS_SCENE` and `DEFAULT_ENTRY_GATE`. The mod is the source of truth for what the game accepts, so a drift on either side (a boss added, renamed or lost in translation) is a failing test instead of a teleport into a scene the mod does not know
+- **Pipe harness** (`tests/run_pipe_harness.py`) - generates the registry the mock serves, builds it with `dotnet`, runs `--selftest-stuck` (a client that stops reading must not eat a slot: the stuck write is cancelled and the slot is freed) and then the 36 integration checks against the mock over real Win32 named pipes. One command instead of three: the mock exits as soon as its stdin reaches EOF, so the runner keeps that stdin open, waits for the mock to report its registry and shuts it down afterwards. Windows only
+- **CI** (`.github/workflows/ci.yml`) - on every push to `master`/`dev` and on every pull request: `ubuntu-latest` compiles every `.py` file (`compileall`, which also catches a broken encoding) and runs the units; `windows-latest` runs the pipe harness. The mod itself is not built in CI: its `.csproj` needs the game's `Assembly-CSharp.dll`, which is neither shipped nor downloadable
 
 ## Training parameters (PPO)
 
