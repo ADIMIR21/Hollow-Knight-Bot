@@ -11,7 +11,7 @@ import os
 
 from ai_environment import HollowKnightEnv
 from ai_controller import HollowKnightController
-from bosses import resolve_query, set_gate
+from bosses import resolve_query
 from screen_capture import USE_SCREEN_CAPTURE
 
 
@@ -57,9 +57,10 @@ class HollowKnightGym(gym.Env):
         super().__init__()
         
         self.game_env = HollowKnightEnv()
-        self.controller = HollowKnightController()
+        self.controller = HollowKnightController(self.game_env.pipe)
         self.controller.set_boss_scene(BOSS_SCENE)
-        set_gate(ENTRY_GATE)
+        # Гейт держим и в контроллере: команда рестарта несёт и сцену, и гейт.
+        self.controller.set_entry_gate(ENTRY_GATE)
         
         self.action_space = spaces.Discrete(16)
         
@@ -192,26 +193,18 @@ class HollowKnightGym(gym.Env):
         return stats
 
     def _try_fast_restart(self):
-        telemetry = self.game_env.get_telemetry()
-        for _ in range(5):
-            if telemetry is not None and "restart_pending" in telemetry:
-                break
-            time.sleep(0.2)
-            telemetry = self.game_env.get_telemetry()
-        if telemetry is None or "restart_pending" not in telemetry:
-            print("[RESET] Мод без поддержки быстрого рестарта, будет использован макрос.")
+        # Команда рестарта уходит в пайп мода; подтверждением служит
+        # restart_pending=1 в телеметрии (мод взял команду в работу).
+        sent = self.controller.request_fast_restart()
+        if not sent:
+            print("[RESET] Пайп не подключён, рестарт через мод недоступен.")
             return False
-        
-        self.controller.request_fast_restart()
         
         deadline = time.time() + 5.0
         accepted = False
         while time.time() < deadline:
             time.sleep(0.2)
             telemetry = self.game_env.get_telemetry()
-            if not self.controller.fast_restart_available():
-                accepted = True
-                break
             if telemetry is not None and telemetry.get("restart_pending", 0) == 1:
                 accepted = True
                 break

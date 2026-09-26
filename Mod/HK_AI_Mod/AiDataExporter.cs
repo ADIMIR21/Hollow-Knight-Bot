@@ -1,7 +1,12 @@
 using System;
-using System.IO;
-using System.Globalization;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using System.IO.Pipes;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 using UnityEngine;
 using Modding;
 
@@ -9,12 +14,39 @@ namespace HK_AI_Mod
 {
     public class AiDataExporter : Mod
     {
-        public override string GetVersion() => "1.2";
+        public override string GetVersion() => "1.3";
 
-        private string _filePath = "";
-        private string _cmdPath = "";
-        private string _sceneConfigPath = "";
-        private string _gateConfigPath = "";
+        // ---------------- Транспорт: именованный пайп (протокол v3) ----------------
+        // Сервер: \\.\pipe\hk_ai_mod (duplex, построчный обмен).
+        //   Мод   -> Python: строки JSON — hello при подключении, затем телеметрия,
+        //                     плюс одноразовые события (список боссов, подтверждения).
+        //   Python -> Мод: текстовые команды (см. HandleCommand):
+        //                     restart [scene] [gate] | teleport | set_boss <scene>
+        //                     set_gate <gate> | boss <запрос> | bosses | warp
+        // Пайп заменяет прежнюю связку файлов %TEMP%\hk_ai_data.json / hk_ai_cmd.txt
+        // / hk_ai_boss.txt / hk_ai_gate.txt / hk_ai_bosses.json: без гонок за файл,
+        // без лишних снов на Python-стороне и без ожидания опроса файла модом.
+        private const string PIPE_NAME = "hk_ai_mod";
+        private const int MAX_PIPE_CLIENTS = 4;
+        private const int PIPE_POLL_MS = 25;
+        private const int PROTOCOL_VERSION = 3;
+        private const string MOD_VERSION = "1.3";
+        private const int MAX_OUTBOX = 256;
+
+        // Одноразовые события (список боссов, подтверждение выбора) в отличие от
+        // телеметрии не перетираются свежим кадром: их получает каждый подключённый
+        // клиент ровно один раз — по монотонному id, который помнит с момента connect.
+        private readonly List<KeyValuePair<long, string>> _outbox = new List<KeyValuePair<long, string>>();
+        private long _outboxSeq = 0;
+
+        private readonly object _sync = new object();
+        private string _latestJson = "{\"status\": \"booting\", \"restart_pending\": 0}";
+        private long _seq = 0;
+        private volatile bool _shuttingDown = false;
+        private readonly ConcurrentQueue<string> _incomingCommands = new ConcurrentQueue<string>();
+
+        private string _targetScene = DEFAULT_BOSS_SCENE;
+        private string _targetGate = DEFAULT_ENTRY_GATE;
 
         private HealthManager? _currentBoss = null;
         private int _lastPlayerHp = 9;
@@ -195,17 +227,18 @@ namespace HK_AI_Mod
 
         public override void Initialize()
         {
-            _filePath = Path.Combine(Path.GetTempPath(), "hk_ai_data.json");
-            _cmdPath = Path.Combine(Path.GetTempPath(), "hk_ai_cmd.txt");
-            _sceneConfigPath = Path.Combine(Path.GetTempPath(), "hk_ai_boss.txt");
-            _gateConfigPath = Path.Combine(Path.GetTempPath(), "hk_ai_gate.txt");
+            _targetScene = DEFAULT_BOSS_SCENE;
+            _targetGate = DEFAULT_ENTRY_GATE;
 
             UnityEngine.SceneManagement.SceneManager.activeSceneChanged += (oldScene, newScene) =>
             {
                 bool isMenu = newScene.name != null && newScene.name.Contains("Menu");
                 _inMenuScene = isMenu;
                 if (isMenu)
-                    WriteSafe(StatusJson("main_menu"));
+                {
+                    _restartPending = false;
+                    Publish(StatusJson("main_menu"));
+                }
                 else
                 {
                     _currentBoss = null;
@@ -215,11 +248,9 @@ namespace HK_AI_Mod
                     _watchdogTimer = 2.5f;
                     _forcedEntryAttempts = 0;
                     SubscribeBossDeath();
-                    WriteSafe(StatusJson("loading_scene"));
+                    Publish(StatusJson("loading_scene"));
                 }
             };
-
-            try { if (File.Exists(_cmdPath)) File.Delete(_cmdPath); } catch (Exception) {}
 
             var host = new GameObject("HK_AI_Mod_Host");
             UnityEngine.Object.DontDestroyOnLoad(host);
@@ -229,9 +260,12 @@ namespace HK_AI_Mod
             ModHooks.HeroUpdateHook += OnHeroUpdate;
             Application.quitting += OnGameQuitting;
 
-            WriteSafe(StatusJson("initialized"));
-            Log($"ИИ Экспортер {GetVersion()} работает! Файл: {_filePath}");
-            Log("[ИИ] Команды: restart | teleport | boss <имя/номер> | bosses | warp");
+            var pipeThread = new Thread(PipeListenerLoop) { IsBackground = true, Name = "HK_AI_PipeServer" };
+            pipeThread.Start();
+
+            Publish(StatusJson("initialized"));
+            Log($"[ИИ] Экспортер {MOD_VERSION} работает! Пайп: \\\\.\\pipe\\{PIPE_NAME}");
+            Log("[ИИ] Команды: restart | teleport | set_boss <сцена> | set_gate <гейт> | boss <запрос> | bosses | warp");
         }
 
         private void SubscribeBossDeath()
@@ -258,19 +292,265 @@ namespace HK_AI_Mod
             Log("[ИИ] Босс мёртв (событие BossSceneController)");
         }
 
-        private string ReadTargetScene()
+        private void OnTick(float unscaledDelta)
+        {
+            DrainCommands();
+            TransitionWatchdogTick(unscaledDelta);
+        }
+
+        private void DrainCommands()
+        {
+            while (_incomingCommands.TryDequeue(out string line))
+            {
+                try { HandleCommand(line); }
+                catch (Exception e) { Log("[ИИ] Ошибка команды: " + e); }
+            }
+        }
+
+        private void HandleCommand(string raw)
+        {
+            string line = (raw ?? "").Trim();
+            if (line.Length == 0) return;
+
+            string[] parts = line.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+            string cmd = parts[0].ToLowerInvariant();
+            string rest = line.Substring(parts[0].Length).Trim();
+
+            switch (cmd)
+            {
+                case "set_boss":
+                    if (parts.Length >= 2) SetTargetScene(parts[1]);
+                    break;
+
+                case "set_gate":
+                    if (parts.Length >= 2)
+                    {
+                        _targetGate = parts[1];
+                        Log($"[ИИ] Точка входа: {_targetGate}");
+                    }
+                    break;
+
+                // "boss <запрос>" — выбрать босса пантеона и телепортироваться к нему.
+                case "boss":
+                    SelectBoss(rest);
+                    break;
+
+                // "bosses" — выгрузить реестр. Работает даже в главном меню.
+                case "bosses":
+                    PublishEvent(BossListJson());
+                    Log($"[ИИ] Список боссов отправлен в пайп ({BossRegistry.Length} записей)");
+                    break;
+
+                // "warp" — вернуть героя к гейту арены без перезагрузки сцены.
+                case "warp":
+                    WarpHeroToGate();
+                    break;
+
+                case "teleport":
+                case "restart":
+                    if (parts.Length >= 2) SetTargetScene(parts[1]);
+                    if (parts.Length >= 3) _targetGate = parts[2];
+                    TryRestart();
+                    break;
+
+                default:
+                    Log($"[ИИ] Неизвестная команда: '{line}'");
+                    PublishEvent(CommandErrorJson(line, "неизвестная команда"));
+                    break;
+            }
+        }
+
+        // Целевая сцена может прийти алиасом ("hornet", "nkg") или номером
+        // реестра — разворачиваем её так же, как команда "boss".
+        private void SetTargetScene(string scene)
+        {
+            string resolved, label;
+            if (TryResolveBoss(scene, out resolved, out label))
+            {
+                _targetScene = resolved;
+                Log($"[ИИ] Целевая сцена босса: {_targetScene} ({label})");
+            }
+            else
+            {
+                _targetScene = scene;
+                Log($"[ИИ] Целевая сцена босса: {_targetScene} (не распознана, передаю как есть)");
+            }
+        }
+
+        private void SelectBoss(string query)
+        {
+            string scene, label;
+            if (!TryResolveBoss(query, out scene, out label))
+            {
+                Log($"[ИИ] Босс не распознан: '{query}'. Отправь команду 'bosses' для списка.");
+                PublishEvent(CommandErrorJson("boss " + query, "босс не распознан"));
+                return;
+            }
+
+            _targetScene = scene;
+            Log($"[ИИ] Выбран босс: {label} ({scene})");
+            PublishEvent("{\"status\": \"boss_selected\", \"scene\": \"" + scene
+                + "\", \"label\": \"" + label + "\"}");
+            TryRestart();
+        }
+
+        private void TryRestart()
+        {
+            if (_inMenuScene)
+            {
+                Log("[ИИ] Рестарт проигнорирован: мы в меню");
+                return;
+            }
+            if (_restartPending) return;
+
+            _restartPending = true;
+            Log($"[ИИ] Быстрый рестарт: переход в сцену '{_targetScene}' (гейт '{_targetGate}')");
+
+            _watchdogTimer = 0f;
+
+            GameManager.instance.BeginSceneTransition(new GameManager.SceneLoadInfo
+            {
+                SceneName = _targetScene,
+                EntryGateName = _targetGate,
+                WaitForSceneTransitionCameraFade = true,
+                Visualization = GameManager.SceneLoadVisualizations.Default,
+                AlwaysUnloadUnusedAssets = false
+            });
+        }
+
+        private void TransitionWatchdogTick(float unscaledDelta)
+        {
+            if (_watchdogTimer <= 0f) return;
+            _watchdogTimer -= unscaledDelta;
+            if (_watchdogTimer > 0f) return;
+
+            try
+            {
+                GameManager gm = GameManager.instance;
+                if (gm == null || _inMenuScene) return;
+
+                if (gm.IsLoadingSceneTransition)
+                {
+                    _watchdogTimer = 1.5f;
+                    return;
+                }
+
+                HeroController hero = HeroController.instance;
+                bool heroFrozen = hero != null && hero.cState != null && hero.cState.transitioning;
+
+                if (!heroFrozen)
+                {
+                    if (gm.IsInSceneTransition)
+                        ReflectionHelper.SetField(gm, "<IsInSceneTransition>k__BackingField", false);
+                    return;
+                }
+
+                if (Time.timeScale <= 0f)
+                    Time.timeScale = 1f;
+
+                TransitionPoint gate = null;
+                string gateName = _targetGate;
+                try
+                {
+                    var registry = TransitionPoint.TransitionPoints;
+                    if (registry != null)
+                    {
+                        foreach (TransitionPoint tp in registry)
+                        {
+                            if (tp != null && tp.name == gateName)
+                            {
+                                gate = tp;
+                                break;
+                            }
+                        }
+                    }
+                }
+                catch (Exception) {}
+                if (gate == null && _forcedEntryAttempts == 0)
+                {
+                    try
+                    {
+                        var names = new System.Text.StringBuilder();
+                        var registry = TransitionPoint.TransitionPoints;
+                        if (registry != null)
+                            foreach (TransitionPoint tp in registry)
+                                names.Append(tp != null ? tp.name : "null").Append("; ");
+                        Log($"[ИИ] Активные гейты сцены: {names}");
+                    }
+                    catch (Exception) {}
+                }
+                if (gate == null)
+                    gate = FindTransitionGate(hero.transform, gateName);
+                Log($"[ИИ] Герой завис в transitioning. Гейт '{gateName}' найден: {gate != null}{(gate != null ? $" ({gate.name})" : "")}, попытка #{_forcedEntryAttempts}");
+
+                if (gate != null && _forcedEntryAttempts == 0)
+                {
+                    _forcedEntryAttempts++;
+                    hero.StartCoroutine(hero.EnterScene(gate, 0f));
+                    _watchdogTimer = 3f;
+                    return;
+                }
+
+                _forcedEntryAttempts++;
+                if (gate != null)
+                {
+                    Vector2 gp = gate.transform.position;
+                    hero.transform.SetPosition2D(gp.x, gp.y + 1f);
+                }
+                ReflectionHelper.CallMethod(hero, "FinishedEnteringScene", true, false);
+                gm.FinishedEnteringScene();
+                gm.FadeSceneIn();
+
+                try
+                {
+                    var heroRenderer = hero.GetComponentInChildren<Renderer>();
+                    if (heroRenderer != null) heroRenderer.enabled = true;
+                }
+                catch (Exception) {}
+                Log("[ИИ] Герой выставлен у гейта вручную и разблокирован");
+            }
+            catch (Exception e)
+            {
+                Log($"[ИИ] Ошибка watchdog перехода: {e}");
+            }
+        }
+
+        private static TransitionPoint FindTransitionGate(UnityEngine.Transform heroTransform, string gateName)
         {
             try
             {
-                if (File.Exists(_sceneConfigPath))
+                var scene = UnityEngine.SceneManagement.SceneManager.GetActiveScene();
+                GameObject[] roots = scene.GetRootGameObjects();
+                foreach (GameObject root in roots)
                 {
-                    string scene = File.ReadAllText(_sceneConfigPath).Trim();
-                    if (!string.IsNullOrEmpty(scene))
-                        return scene;
+                    if (root.name == gateName)
+                    {
+                        TransitionPoint tp = root.GetComponent<TransitionPoint>();
+                        if (tp != null) return tp;
+                    }
+                    TransitionPoint[] all = root.GetComponentsInChildren<TransitionPoint>(true);
+                    foreach (TransitionPoint tp in all)
+                    {
+                        if (tp != null && tp.name == gateName)
+                            return tp;
+                    }
+                }
+                foreach (var loaded in UnityEngine.SceneManagement.SceneManager.GetAllScenes())
+                {
+                    if (!loaded.isLoaded || loaded == scene) continue;
+                    foreach (GameObject root in loaded.GetRootGameObjects())
+                    {
+                        TransitionPoint[] all = root.GetComponentsInChildren<TransitionPoint>(true);
+                        foreach (TransitionPoint tp in all)
+                        {
+                            if (tp != null && tp.name == gateName)
+                                return tp;
+                        }
+                    }
                 }
             }
             catch (Exception) {}
-            return DEFAULT_BOSS_SCENE;
+            return null;
         }
 
         // ---------------- Выбор босса Godhome ----------------
@@ -405,31 +685,7 @@ namespace HK_AI_Mod
             return false;
         }
 
-        private void WriteBossList()
-        {
-            try
-            {
-                var sb = new System.Text.StringBuilder();
-                sb.Append("{\"target_scene\": \"").Append(ReadTargetScene()).Append("\", \"count\": ").Append(BossRegistry.Length).Append(", \"bosses\": [");
-                for (int i = 0; i < BossRegistry.Length; i++)
-                {
-                    if (i > 0) sb.Append(", ");
-                    sb.Append("{\"index\": ").Append(i + 1)
-                      .Append(", \"scene\": \"").Append(BossRegistry[i].Scene)
-                      .Append("\", \"label\": \"").Append(BossRegistry[i].Label).Append("\"}");
-                }
-                sb.Append("]}");
-                string listPath = Path.Combine(Path.GetTempPath(), "hk_ai_bosses.json");
-                File.WriteAllText(listPath, sb.ToString());
-                Log($"[ИИ] Список боссов выгружен: {listPath}");
-            }
-            catch (Exception e)
-            {
-                Log($"[ИИ] Не удалось выгрузить список боссов: {e.Message}");
-            }
-        }
-
-        private string CurrentSceneName()
+        private static string CurrentSceneName()
         {
             try
             {
@@ -441,264 +697,29 @@ namespace HK_AI_Mod
             }
         }
 
-        private void OnTick(float unscaledDelta)
+        // Реестр уходит в пайп событием, а не файлом %TEMP%/hk_ai_bosses.json.
+        private string BossListJson()
         {
-            PollCommand();
-            TransitionWatchdogTick(unscaledDelta);
+            var sb = new System.Text.StringBuilder();
+            sb.Append("{\"status\": \"boss_list\", \"target_scene\": \"").Append(_targetScene)
+              .Append("\", \"count\": ").Append(BossRegistry.Length).Append(", \"bosses\": [");
+            for (int i = 0; i < BossRegistry.Length; i++)
+            {
+                if (i > 0) sb.Append(", ");
+                sb.Append("{\"index\": ").Append(i + 1)
+                  .Append(", \"scene\": \"").Append(BossRegistry[i].Scene)
+                  .Append("\", \"label\": \"").Append(BossRegistry[i].Label).Append("\"}");
+            }
+            sb.Append("]}");
+            return sb.ToString();
         }
 
-        private void TransitionWatchdogTick(float unscaledDelta)
+        private static string CommandErrorJson(string command, string reason)
         {
-            if (_watchdogTimer <= 0f) return;
-            _watchdogTimer -= unscaledDelta;
-            if (_watchdogTimer > 0f) return;
-
-            try
-            {
-                GameManager gm = GameManager.instance;
-                if (gm == null || _inMenuScene) return;
-
-                if (gm.IsLoadingSceneTransition)
-                {
-                    _watchdogTimer = 1.5f;
-                    return;
-                }
-
-                HeroController hero = HeroController.instance;
-                bool heroFrozen = hero != null && hero.cState != null && hero.cState.transitioning;
-
-                if (!heroFrozen)
-                {
-                    if (gm.IsInSceneTransition)
-                        ReflectionHelper.SetField(gm, "<IsInSceneTransition>k__BackingField", false);
-                    return;
-                }
-
-                if (Time.timeScale <= 0f)
-                    Time.timeScale = 1f;
-
-                TransitionPoint gate = null;
-                string gateName = ReadTargetGateName();
-                try
-                {
-                    var registry = TransitionPoint.TransitionPoints;
-                    if (registry != null)
-                    {
-                        foreach (TransitionPoint tp in registry)
-                        {
-                            if (tp != null && tp.name == gateName)
-                            {
-                                gate = tp;
-                                break;
-                            }
-                        }
-                    }
-                }
-                catch (Exception) {}
-                if (gate == null && _forcedEntryAttempts == 0)
-                {
-                    try
-                    {
-                        var names = new System.Text.StringBuilder();
-                        var registry = TransitionPoint.TransitionPoints;
-                        if (registry != null)
-                            foreach (TransitionPoint tp in registry)
-                                names.Append(tp != null ? tp.name : "null").Append("; ");
-                        Log($"[ИИ] Активные гейты сцены: {names}");
-                    }
-                    catch (Exception) {}
-                }
-                if (gate == null)
-                    gate = FindTransitionGate(hero.transform, gateName);
-                Log($"[ИИ] Герой завис в transitioning. Гейт '{gateName}' найден: {gate != null}{(gate != null ? $" ({gate.name})" : "")}, попытка #{_forcedEntryAttempts}");
-
-                if (gate != null && _forcedEntryAttempts == 0)
-                {
-                    _forcedEntryAttempts++;
-                    hero.StartCoroutine(hero.EnterScene(gate, 0f));
-                    _watchdogTimer = 3f;
-                    return;
-                }
-
-                _forcedEntryAttempts++;
-                if (gate != null)
-                {
-                    Vector2 gp = gate.transform.position;
-                    hero.transform.SetPosition2D(gp.x, gp.y + 1f);
-                }
-                ReflectionHelper.CallMethod(hero, "FinishedEnteringScene", true, false);
-                gm.FinishedEnteringScene();
-                gm.FadeSceneIn();
-
-                try
-                {
-                    var heroRenderer = hero.GetComponentInChildren<Renderer>();
-                    if (heroRenderer != null) heroRenderer.enabled = true;
-                }
-                catch (Exception) {}
-                Log("[ИИ] Герой выставлен у гейта вручную и разблокирован");
-            }
-            catch (Exception e)
-            {
-                Log($"[ИИ] Ошибка watchdog перехода: {e}");
-            }
-        }
-
-        private string ReadTargetGateName()
-        {
-            try
-            {
-                if (File.Exists(_gateConfigPath))
-                {
-                    string gate = File.ReadAllText(_gateConfigPath).Trim();
-                    if (!string.IsNullOrEmpty(gate))
-                        return gate;
-                }
-            }
-            catch (Exception) {}
-            return DEFAULT_ENTRY_GATE;
-        }
-
-        private static TransitionPoint FindTransitionGate(UnityEngine.Transform heroTransform, string gateName)
-        {
-            try
-            {
-                var scene = UnityEngine.SceneManagement.SceneManager.GetActiveScene();
-                GameObject[] roots = scene.GetRootGameObjects();
-                foreach (GameObject root in roots)
-                {
-                    if (root.name == gateName)
-                    {
-                        TransitionPoint tp = root.GetComponent<TransitionPoint>();
-                        if (tp != null) return tp;
-                    }
-                    TransitionPoint[] all = root.GetComponentsInChildren<TransitionPoint>(true);
-                    foreach (TransitionPoint tp in all)
-                    {
-                        if (tp != null && tp.name == gateName)
-                            return tp;
-                    }
-                }
-                foreach (var loaded in UnityEngine.SceneManagement.SceneManager.GetAllScenes())
-                {
-                    if (!loaded.isLoaded || loaded == scene) continue;
-                    foreach (GameObject root in loaded.GetRootGameObjects())
-                    {
-                        TransitionPoint[] all = root.GetComponentsInChildren<TransitionPoint>(true);
-                        foreach (TransitionPoint tp in all)
-                        {
-                            if (tp != null && tp.name == gateName)
-                                return tp;
-                        }
-                    }
-                }
-            }
-            catch (Exception) {}
-            return null;
-        }
-
-        private void PollCommand()
-        {
-            try
-            {
-                if (!File.Exists(_cmdPath))
-                {
-                    _restartPending = false;
-                    return;
-                }
-
-                string raw = File.ReadAllText(_cmdPath).Trim();
-                if (raw.Length == 0) return;
-                string cmd = raw.ToLowerInvariant();
-
-                // Справка по списку боссов — работает даже в главном меню.
-                if (cmd == "bosses")
-                {
-                    WriteBossList();
-                    TryDeleteCmd();
-                    return;
-                }
-
-                if (_inMenuScene) return;
-
-                if (cmd == "warp")
-                {
-                    WarpHeroToGate();
-                    TryDeleteCmd();
-                    return;
-                }
-
-                bool isRestart = cmd == "restart";
-                bool isTeleport = cmd == "teleport";
-                bool isBossSelect = cmd == "boss" || cmd.StartsWith("boss ");
-
-                if (!isRestart && !isTeleport && !isBossSelect)
-                {
-                    TryDeleteCmd();
-                    return;
-                }
-
-                if (_restartPending)
-                {
-                    TryDeleteCmd();
-                    return;
-                }
-
-                // Целевая сцена: из аргумента "boss <x>" или из конфиг-файла.
-                string targetScene = ReadTargetScene();
-                if (isBossSelect)
-                {
-                    string query = cmd.Length > 5 ? cmd.Substring(5).Trim() : "";
-                    string resolvedScene, resolvedLabel;
-                    if (!TryResolveBoss(query, out resolvedScene, out resolvedLabel))
-                    {
-                        Log($"[ИИ] Босс не распознан: '{query}'. Отправь команду 'bosses' для списка.");
-                        TryDeleteCmd();
-                        return;
-                    }
-                    targetScene = resolvedScene;
-                    // Запоминаем выбранного босса, чтобы рестарты и Python
-                    // продолжали работать с этой же ареной.
-                    WriteBossConfig(targetScene);
-                    Log($"[ИИ] Выбран босс: {resolvedLabel} ({resolvedScene})");
-                }
-                else
-                {
-                    // restart/teleport тоже понимают алиасы (HK_BOSS_SCENE="hornet")
-                    string resolvedScene, resolvedLabel;
-                    if (TryResolveBoss(targetScene, out resolvedScene, out resolvedLabel))
-                        targetScene = resolvedScene;
-                }
-
-                _restartPending = true;
-                _watchdogTimer = 0f;
-
-                string gate = ReadTargetGateName();
-                Log($"[ИИ] {(isBossSelect ? "Телепорт к боссу" : "Быстрый рестарт")}: переход в сцену '{targetScene}' через гейт '{gate}'");
-
-                GameManager.instance.BeginSceneTransition(new GameManager.SceneLoadInfo
-                {
-                    SceneName = targetScene,
-                    EntryGateName = gate,
-                    WaitForSceneTransitionCameraFade = true,
-                    Visualization = GameManager.SceneLoadVisualizations.Default,
-                    AlwaysUnloadUnusedAssets = false
-                });
-                TryDeleteCmd();
-            }
-            catch (Exception e)
-            {
-                Log($"[ИИ] Ошибка команды: {e}");
-            }
-        }
-
-        private void WriteBossConfig(string scene)
-        {
-            try
-            {
-                File.WriteAllText(_sceneConfigPath, scene);
-            }
-            catch (Exception) {}
+            string safeCommand = (command ?? "").Replace("\"", "'");
+            string safeReason = (reason ?? "").Replace("\"", "'");
+            return "{\"status\": \"command_error\", \"command\": \"" + safeCommand
+                + "\", \"reason\": \"" + safeReason + "\"}";
         }
 
         // Возвращает героя к входу арены текущей сцены без перезагрузки сцены.
@@ -706,6 +727,12 @@ namespace HK_AI_Mod
         {
             try
             {
+                if (_inMenuScene)
+                {
+                    Log("[ИИ] Warp проигнорирован: мы в меню");
+                    return;
+                }
+
                 HeroController hero = HeroController.instance;
                 if (hero == null)
                 {
@@ -713,7 +740,7 @@ namespace HK_AI_Mod
                     return;
                 }
 
-                TransitionPoint gate = FindTransitionGate(hero.transform, ReadTargetGateName());
+                TransitionPoint gate = FindTransitionGate(hero.transform, _targetGate);
                 if (gate != null)
                     hero.transform.SetPosition2D(gate.transform.position.x, gate.transform.position.y + 1f);
                 else
@@ -739,23 +766,179 @@ namespace HK_AI_Mod
             }
         }
 
-        private void TryDeleteCmd()
+        // ---------------- Пайп-сервер ----------------
+
+        private void PipeListenerLoop()
         {
-            for (int attempt = 0; attempt < 3; attempt++)
+            while (!_shuttingDown)
             {
+                NamedPipeServerStream server = null;
                 try
                 {
-                    File.Delete(_cmdPath);
-                    return;
+                    // ВАЖНО: PipeOptions.Asynchronous. С синхронным хэндлом
+                    // (PipeOptions.None) висящий блокирующий ReadAsync держит
+                    // файловый объект пайпа, из-за чего следующий WriteLine
+                    // навсегда повисает — телеметрия умирает после первого кадра,
+                    // а команды Python не доходят. Overlapped I/O обязателен.
+                    server = new NamedPipeServerStream(
+                        PIPE_NAME, PipeDirection.InOut, MAX_PIPE_CLIENTS,
+                        PipeTransmissionMode.Byte, PipeOptions.Asynchronous,
+                        inBufferSize: 8192, outBufferSize: 65536);
+                    server.WaitForConnection();
+                    Log("[ИИ] Пайп: клиент подключился");
+
+                    Thread pump = new Thread(ClientPump) { IsBackground = true, Name = "HK_AI_PipeClient" };
+                    pump.Start(server);
+                    server = null; // владение перешло потоку ClientPump
                 }
-                catch (IOException)
+                catch (Exception e)
                 {
-                    System.Threading.Thread.Sleep(30);
+                    if (!_shuttingDown)
+                    {
+                        Log("[ИИ] Ошибка пайп-сервера: " + e.Message);
+                        Thread.Sleep(1000);
+                    }
                 }
-                catch (Exception)
+                finally
                 {
-                    return;
+                    if (server != null)
+                    {
+                        try { server.Dispose(); } catch (Exception) {}
+                    }
                 }
+            }
+        }
+
+        private void ClientPump(object state)
+        {
+            NamedPipeServerStream server = (NamedPipeServerStream)state;
+            try
+            {
+                using (server)
+                using (StreamWriter writer = new StreamWriter(server, new UTF8Encoding(false)) { AutoFlush = true, NewLine = "\n" })
+                {
+                    // hello-строка: клиент может проверить, что это наш протокол
+                    writer.WriteLine("{\"status\": \"pipe_hello\", \"protocol\": " + PROTOCOL_VERSION
+                        + ", \"mod_version\": \"" + MOD_VERSION + "\"}");
+
+                    long lastSeq = -1;
+                    long lastOutboxId;
+                    // События, накопившиеся до подключения, не переигрываем:
+                    // клиента интересуют только ответы на его собственные команды.
+                    lock (_sync) { lastOutboxId = _outboxSeq; }
+
+                    List<string> events = new List<string>();
+                    byte[] readBuf = new byte[4096];
+                    StringBuilder lineBuf = new StringBuilder();
+                    Task<int> readTask = BeginPipeRead(server, readBuf);
+
+                    while (server.IsConnected && !_shuttingDown)
+                    {
+                        string toSend = null;
+                        events.Clear();
+
+                        lock (_sync)
+                        {
+                            // 1) Одноразовые события: каждый клиент получает их ровно раз.
+                            if (_outboxSeq != lastOutboxId)
+                            {
+                                foreach (KeyValuePair<long, string> ev in _outbox)
+                                    if (ev.Key > lastOutboxId) events.Add(ev.Value);
+                                lastOutboxId = _outboxSeq;
+                            }
+
+                            // 2) Телеметрия: только самый свежий кадр, старые не копим.
+                            if (_seq != lastSeq)
+                            {
+                                lastSeq = _seq;
+                                toSend = _latestJson;
+                            }
+
+                            if (events.Count == 0 && toSend == null)
+                                Monitor.Wait(_sync, PIPE_POLL_MS);
+                        }
+
+                        for (int i = 0; i < events.Count; i++)
+                            writer.WriteLine(events[i]);
+                        if (toSend != null)
+                            writer.WriteLine(toSend);
+
+                        // Неблокирующее вычитывание команд клиента.
+                        readTask = DrainIncoming(server, readTask, readBuf, lineBuf);
+                    }
+                }
+            }
+            catch (Exception)
+            {
+                // Клиент отвалился — штатно (Python перезапустился/закрылся).
+            }
+            finally
+            {
+                try { server.Dispose(); } catch (Exception) {}
+            }
+        }
+
+        private Task<int> BeginPipeRead(NamedPipeServerStream server, byte[] buf)
+        {
+            try { return server.ReadAsync(buf, 0, buf.Length); }
+            catch (Exception) { return null; }
+        }
+
+        private Task<int> DrainIncoming(NamedPipeServerStream server, Task<int> readTask, byte[] readBuf, StringBuilder lineBuf)
+        {
+            if (readTask == null || !readTask.IsCompleted)
+                return readTask;
+
+            int n;
+            try { n = readTask.Result; }
+            catch (Exception) { throw new IOException("пайп: ошибка чтения"); }
+
+            if (n <= 0)
+                throw new IOException("пайп: клиент закрыл соединение");
+
+            lineBuf.Append(Encoding.UTF8.GetString(readBuf, 0, n));
+            while (true)
+            {
+                string text = lineBuf.ToString();
+                int idx = text.IndexOf('\n');
+                if (idx < 0) break;
+                string line = text.Substring(0, idx).TrimEnd('\r').Trim();
+                lineBuf.Remove(0, idx + 1);
+                if (line.Length > 0)
+                    _incomingCommands.Enqueue(line);
+            }
+            if (lineBuf.Length > 65536) // поток мусора без переводов строк — сбрасываем
+                lineBuf.Remove(0, lineBuf.Length - 1024);
+
+            return BeginPipeRead(server, readBuf);
+        }
+
+        private void Publish(string json)
+        {
+            lock (_sync)
+            {
+                _latestJson = json;
+                _seq++;
+                Monitor.PulseAll(_sync);
+            }
+        }
+
+        // Одноразовое событие: в отличие от телеметрии не перетирается свежим
+        // кадром, а доставляется каждому подключённому клиенту ровно один раз.
+        // Метка "event": 1 говорит клиенту, что это не телеметрия, — иначе
+        // событие подменило бы последний кадр наблюдений в Python.
+        private void PublishEvent(string json)
+        {
+            string marked = (json != null && json.StartsWith("{\"status\""))
+                ? "{\"event\": 1, " + json.Substring(1)
+                : json;
+            lock (_sync)
+            {
+                _outboxSeq++;
+                _outbox.Add(new KeyValuePair<long, string>(_outboxSeq, marked));
+                while (_outbox.Count > MAX_OUTBOX)
+                    _outbox.RemoveAt(0);
+                Monitor.PulseAll(_sync);
             }
         }
 
@@ -837,11 +1020,9 @@ namespace HK_AI_Mod
 
         private void OnHeroUpdate()
         {
-            // v1.1: телеметрия каждый HeroUpdate (~60 записей/сек при 60fps).
-            // Python-сторона синхронизируется по mtime файла и успевает за игрой,
-            // что поднимает потолок скорости обучения с ~20 до ~60 шагов/сек.
-
-            PollCommand();
+            // v1.2: телеметрия каждый HeroUpdate (~60 записей/сек при 60fps) публикуется
+            // в пайп \\.\pipe\hk_ai_mod. Python-сторона читает построчно и синхронизирует
+            // шаги по факту прихода новой записи — без снов и опроса mtime файла.
 
             try
             {
@@ -1099,44 +1280,21 @@ namespace HK_AI_Mod
                         $"\"near_hazard\": {(near_hazard ? 1 : 0)}, " +
                         $"\"boss_state\": \"{boss_state}\"" +
                         $"}}";
-                    
-                    WriteSafe(data);
+
+                    Publish(data);
                 }
             }
             catch (Exception)
             {
-                WriteSafe(StatusJson("waiting_for_hero_body"));
+                Publish(StatusJson("waiting_for_hero_body"));
             }
-        }
-
-        private void WriteSafe(string json)
-        {
-            try
-            {
-                string tmpPath = _filePath + ".tmp";
-                using (FileStream fs = new FileStream(tmpPath, FileMode.Create, FileAccess.Write, FileShare.ReadWrite))
-                using (StreamWriter sw = new StreamWriter(fs))
-                {
-                    sw.Write(json);
-                }
-                if (File.Exists(_filePath))
-                    File.Replace(tmpPath, _filePath, null);
-                else
-                    File.Move(tmpPath, _filePath);
-            }
-            catch (Exception) {}
         }
 
         private void OnGameQuitting()
         {
-            try
-            {
-                if (!string.IsNullOrEmpty(_filePath) && File.Exists(_filePath))
-                {
-                    File.Delete(_filePath);
-                }
-            }
-            catch (Exception){}
+            _shuttingDown = true;
+            try { Publish(StatusJson("quitting")); } catch (Exception) {}
+            lock (_sync) { Monitor.PulseAll(_sync); }
         }
     }
 

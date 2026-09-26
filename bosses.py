@@ -1,27 +1,21 @@
-"""Реестр боссов Godhome и низкоуровневый протокол команд для мода HK_AI_Mod.
+"""Реестр боссов Godhome и протокол команд для мода HK_AI_Mod.
 
-Реестр — зеркало BossRegistry в Mod/HK_AI_Mod/AiDataExporter.cs (v1.2).
+Реестр — зеркало BossRegistry в Mod/HK_AI_Mod/AiDataExporter.cs (v1.3).
 Сцены взяты из build settings игры (hollow_knight_Data/globalgamemanagers).
 Варианты с суффиксом _V — усложнённые версии боёв (Ascended/Radiant),
 GG_Mantis_Lords_V = Sisters of Battle, GG_Nosk_Hornet = Winged Nosk.
 
-Протокол (файлы в %TEMP%, как у мода):
-  hk_ai_cmd.txt   — команда: restart | teleport | boss <запрос> | bosses | warp
-  hk_ai_boss.txt  — целевая сцена босса (мод сам перезаписывает её при "boss <x>")
-  hk_ai_gate.txt  — имя входного гейта арены (по умолчанию door1)
-  hk_ai_data.json — телеметрия (с v1.2 содержит поле "scene")
+Протокол — именованный пайп ``\\\\.\\pipe\\hk_ai_mod`` (см. hk_pipe.py):
+  Python -> Мод: restart | teleport | set_boss <сцена> | set_gate <гейт>
+                 | boss <запрос> | bosses | warp
+  Мод -> Python: телеметрия боя (содержит поле "scene") плюс одноразовые
+                 события boss_list / boss_selected / command_error.
+Файлы в %TEMP% (hk_ai_cmd.txt, hk_ai_data.json и прочие) больше не используются.
 """
 
-import os
-import tempfile
 import time
-import json
 
-CMD_FILE = os.path.join(tempfile.gettempdir(), "hk_ai_cmd.txt")
-BOSS_SCENE_FILE = os.path.join(tempfile.gettempdir(), "hk_ai_boss.txt")
-GATE_FILE = os.path.join(tempfile.gettempdir(), "hk_ai_gate.txt")
-BOSS_LIST_FILE = os.path.join(tempfile.gettempdir(), "hk_ai_bosses.json")
-TELEMETRY_FILE = os.path.join(tempfile.gettempdir(), "hk_ai_data.json")
+from hk_pipe import REQUIRED_PROTOCOL, get_shared_client
 
 DEFAULT_SCENE = "GG_False_Knight"
 DEFAULT_GATE = "door1"
@@ -202,36 +196,26 @@ def resolve_query(query):
     return None
 
 
-# ---------------- Протокол обмена с модом ----------------
-
-def write_file(path, text):
-    try:
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(text)
-        return True
-    except OSError as e:
-        print(f"[BOSS] Не удалось записать {path}: {e}")
-        return False
-
+# ---------------- Протокол обмена с модом (именованный пайп) ----------------
 
 def send_command(cmd):
-    """Пишет команду в hk_ai_cmd.txt (мод опрашивает файл каждый тик)."""
-    return write_file(CMD_FILE, cmd)
+    """Отправляет команду моду. True — строка ушла в пайп."""
+    return get_shared_client().send_command(cmd)
 
 
 def set_boss_scene(scene_name):
-    """Задаёт целевую сцену для рестартов (hk_ai_boss.txt)."""
-    return write_file(BOSS_SCENE_FILE, str(scene_name).strip())
+    """Задаёт целевую сцену для рестартов (мод понимает алиасы: hornet, nkg)."""
+    return send_command("set_boss " + str(scene_name).strip())
 
 
 def set_gate(gate_name):
-    """Задаёт входной гейт арены (hk_ai_gate.txt), по умолчанию door1."""
-    write_file(GATE_FILE, str(gate_name).strip() or DEFAULT_GATE)
+    """Задаёт входной гейт арены, по умолчанию door1."""
+    return send_command("set_gate " + (str(gate_name).strip() or DEFAULT_GATE))
 
 
 def request_boss(query):
     """Телепорт к выбранному боссу: мод сам резолвит имя и запоминает сцену."""
-    return send_command(f"boss {query}")
+    return send_command("boss " + str(query).strip())
 
 
 def request_restart():
@@ -245,29 +229,58 @@ def request_warp():
 
 
 def request_boss_list():
-    """Попросить мод выгрузить полный список боссов в hk_ai_bosses.json."""
+    """Попросить мод прислать полный список боссов событием boss_list."""
     return send_command("bosses")
 
 
-def read_boss_list_from_mod():
-    """Читает выгрузку мода hk_ai_bosses.json (команда 'bosses')."""
-    try:
-        with open(BOSS_LIST_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, json.JSONDecodeError):
+def read_boss_list_from_mod(timeout=3.0):
+    """Ждёт выгрузку реестра от мода (событие boss_list).
+
+    Событие кэшируется клиентом по статусу, поэтому ответ находится даже
+    если мод успел ответить раньше, чем мы начали ждать.
+    """
+    return get_shared_client().wait_for_status("boss_list", timeout=timeout)
+
+
+def fetch_boss_list(timeout=3.0):
+    """Запрашивает реестр у мода и дожидается именно его ответа.
+
+    Возвращает словарь события boss_list или None по таймауту.
+    """
+    client = get_shared_client()
+    before = client.get_status_seq("boss_list")
+    if not client.send_command("bosses"):
         return None
+    return client.wait_for_status("boss_list", timeout=timeout, after_seq=before)
 
 
 def read_telemetry():
-    try:
-        with open(TELEMETRY_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return None
+    """Последняя телеметрия мода (None, если связи нет)."""
+    return get_shared_client().get_telemetry()
+
+
+def is_connected(timeout=5.0):
+    """Подключён ли пайп мода (ждём до timeout секунд)."""
+    return get_shared_client().wait_connected(timeout)
+
+
+def wait_hello(timeout=3.0):
+    """Ждёт hello-сообщение мода (в нём версия протокола). None по таймауту."""
+    return get_shared_client().wait_hello(timeout)
+
+
+def mod_protocol():
+    """Версия протокола мода из hello или None."""
+    return get_shared_client().protocol
+
+
+def mod_version():
+    """Версия мода из hello или None."""
+    return get_shared_client().mod_version
 
 
 def current_scene():
-    """Текущая сцена из телеметрии (мод v1.2+) или None."""
+    """Текущая сцена из телеметрии (мод v1.3+) или None."""
     data = read_telemetry()
     if data is None:
         return None
@@ -293,11 +306,11 @@ def wait_for_scene(expected_scene=None, timeout=30.0, on_progress=None):
                     and float(data.get("boss_hp", 0)) > 0 \
                     and int(data.get("restart_pending", 0)) == 0:
                 return True
-        time.sleep(0.3)
+        time.sleep(0.05)
     return False
 
 
 def mod_has_scene_field():
-    """Есть ли поле scene в телеметрии (признак мода v1.2+)."""
+    """Есть ли поле scene в телеметрии (признак мода v1.3+)."""
     data = read_telemetry()
     return data is not None and "scene" in data

@@ -1,15 +1,13 @@
 import os
-import json
 import time
 import cv2
 import numpy as np
 from screen_capture import ScreenCaptureAgent, USE_SCREEN_CAPTURE
-import tempfile
+from hk_pipe import get_shared_client
 
-PATH_TO_TELEMETRY = os.path.join(tempfile.gettempdir(), "hk_ai_data.json") 
 AI_VISION_SIZE = (256, 256)
 
-ENABLE_PREVIEW = False 
+ENABLE_PREVIEW = False
 
 class HollowKnightEnv:
     def __init__(self):
@@ -20,45 +18,40 @@ class HollowKnightEnv:
         else:
             self.camera = None
             print("[ENV] Захват экрана ОТКЛЮЧЕН (используется телеметрия)")
+
+        # Обновление 4: телеметрия идёт через именованный пайп \\.\pipe\hk_ai_mod.
+        # Фон стримится построчно в отдельном потоке с авто-реконнектом —
+        # никаких гонок за файл в %TEMP% и ретраев открытия. Клиент общий на
+        # процесс, поэтому команды bosses.py идут по тому же соединению.
+        self.pipe = get_shared_client()
+        print("[ENV] Жду пайп мода (\\\\.\\pipe\\hk_ai_mod)...")
+        if self.pipe.wait_connected(timeout=20.0):
+            print("[ENV] Мод на связи!")
+        else:
+            print("[ENV] ВНИМАНИЕ: мод не ответил за 20с. Игра запущена? Мод HK_AI_Mod.dll установлен?")
+            print("[ENV] Продолжаю: клиент продолжит подключаться в фоне.")
+
         print("[ENV] хк успешно найден!")
 
     def get_telemetry(self):
-        # Обновление 3: ретраи БЕЗ сна. Мод пишет через File.Replace —
-        # в момент замены файл недоступен лишь считанные микросекунды,
-        # спать по 0.02с на каждую неудачную попытку не нужно.
-        for attempt in range(10):
-            try:
-                with open(PATH_TO_TELEMETRY, 'r') as f:
-                    return json.load(f)
-            except (OSError, json.JSONDecodeError):
-                pass
-        return None
+        # Последнее сообщение мода (None, если связи ещё нет).
+        return self.pipe.get_telemetry()
 
     def get_telemetry_mtime(self):
-        """Штамп последней записи телеметрии (mtime файла) или None."""
-        try:
-            return os.path.getmtime(PATH_TO_TELEMETRY)
-        except OSError:
+        """Штамп последней записи телеметрии (счётчик сообщений пайпа) или None."""
+        if not self.pipe.is_connected:
             return None
+        return self.pipe.get_seq()
 
-    def wait_for_fresh_telemetry(self, last_mtime, timeout=0.15):
+    def wait_for_fresh_telemetry(self, last_seq, timeout=0.15):
         """
-        Обновление 2: ждём появления НОВОЙ записи в файле телеметрии
-        (по изменению mtime) вместо фиксированных снов.
+        Обновление 4: ждём НОВОЕ сообщение в пайпе (по счётчику seq) вместо
+        фиксированных снов. Шаг идёт ровно в темпе игры.
 
-        Возвращает mtime новых данных, либо прежний last_mtime,
+        Возвращает seq новых данных, либо прежний last_seq,
         если за timeout ничего не пришло (меню/пауза — работаем по старым данным).
         """
-        if last_mtime is None:
-            last_mtime = self.get_telemetry_mtime()
-        deadline = time.perf_counter() + timeout
-        while True:
-            mtime = self.get_telemetry_mtime()
-            if mtime is not None and mtime != last_mtime:
-                return mtime
-            if time.perf_counter() >= deadline:
-                return last_mtime
-            time.sleep(0.001)
+        return self.pipe.wait_for_fresh(last_seq, timeout)
 
     def get_observation(self):
         frame = None

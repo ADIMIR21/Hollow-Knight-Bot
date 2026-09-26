@@ -1,20 +1,23 @@
 import vgamepad as vg
 import time
-import os
-import tempfile
 
-CMD_FILE = os.path.join(tempfile.gettempdir(), "hk_ai_cmd.txt")
-BOSS_SCENE_FILE = os.path.join(tempfile.gettempdir(), "hk_ai_boss.txt")
 DEFAULT_BOSS_SCENE = "GG_False_Knight"
+DEFAULT_ENTRY_GATE = "door1"
 
 class HollowKnightController:
-    def __init__(self):
+    def __init__(self, pipe=None):
         print("[CONTROLLER] Подключаем геймпад...")
         self.gamepad = vg.VX360Gamepad()
         
         time.sleep(2.0)
         print("[CONTROLLER] Геймпад Xbox 360 подключился)!")
         
+        # Обновление 4: команды (рестарт/сцена/гейт) уходят в пайп мода,
+        # а не в файлы %TEMP%. Клиент пайпа общий с ai_environment.
+        self.pipe = pipe
+        self.boss_scene = DEFAULT_BOSS_SCENE
+        self.entry_gate = DEFAULT_ENTRY_GATE
+
         self.buttons = {
             "jump": vg.XUSB_BUTTON.XUSB_GAMEPAD_A,
             "attack": vg.XUSB_BUTTON.XUSB_GAMEPAD_X,
@@ -24,22 +27,30 @@ class HollowKnightController:
         }
 
     def set_boss_scene(self, scene_name):
-        try:
-            with open(BOSS_SCENE_FILE, "w") as f:
-                f.write(scene_name.strip())
-            print(f"[CONTROLLER] Целевая сцена босса: {scene_name.strip()}")
-        except OSError as e:
-            print(f"[CONTROLLER] Не удалось записать конфиг сцены: {e}")
+        self.boss_scene = (scene_name or DEFAULT_BOSS_SCENE).strip()
+        if self.pipe is not None:
+            self.pipe.send_command("set_boss " + self.boss_scene)
+        print(f"[CONTROLLER] Целевая сцена босса: {self.boss_scene}")
 
-    def request_fast_restart(self):
-        try:
-            with open(CMD_FILE, "w") as f:
-                f.write("restart")
-        except OSError as e:
-            print(f"[CONTROLLER] Не удалось отправить команду рестарта: {e}")
+    def set_entry_gate(self, gate_name):
+        """Задаёт гейт арены. Важно держать его в синхроне с модом: команда
+        рестарта всегда несёт и сцену, и гейт, поэтому расхождение здесь
+        перебило бы гейт, заданный через bosses.set_gate()."""
+        self.entry_gate = (gate_name or DEFAULT_ENTRY_GATE).strip()
+        if self.pipe is not None:
+            self.pipe.send_command("set_gate " + self.entry_gate)
+        print(f"[CONTROLLER] Точка входа: {self.entry_gate}")
 
-    def fast_restart_available(self):
-        return os.path.exists(CMD_FILE)
+    def request_fast_restart(self, scene=None, gate=None):
+        """Отправляет команду рестарта в пайп мода. True — команда ушла."""
+        scene = (scene or self.boss_scene).strip()
+        gate = (gate or self.entry_gate).strip()
+        if self.pipe is None or not self.pipe.is_connected:
+            return False
+        sent = self.pipe.send_command(f"restart {scene} {gate}")
+        if sent:
+            print(f"[CONTROLLER] Команда рестарта отправлена: {scene} ({gate})")
+        return sent
 
     def set_action(self, action_id):
             self.gamepad.left_joystick_float(x_value_float=0.0, y_value_float=0.0)
