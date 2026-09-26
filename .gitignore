@@ -2,6 +2,10 @@ __pycache__/
 logs/
 Mod/HK_AI_Mod/bin/
 Mod/HK_AI_Mod/obj/
+# The game's own assembly (Assembly-CSharp.dll and its doc XML): Team Cherry's compiled
+# code, a byte-for-byte copy of the installed game. The build takes it from the game
+# install; only a local fallback copy may live here.
+Mod/HK_AI_Mod/libs/
 HKApi/
 all.txt
 .dotnet

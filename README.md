@@ -126,7 +126,7 @@ pip install -r requirements.txt
 dotnet build Mod/HK_AI_Mod/HK_AI_Mod.csproj -c Release
 ```
 
-The project script locates the game by itself (Steam registry or standard paths on drives A: through Z:). Copy the built DLL into the mods folder:
+The project locates the game by itself (Steam registry or standard paths on drives A: through Z:) and takes the game's `Assembly-CSharp.dll` from that install - the repository does not ship it, because that DLL is Team Cherry's compiled code (a byte-for-byte copy of the installed game). So the mod is built against exactly the assembly it will run against. If automatic detection fails on an unusual install path, copy `hollow_knight_Data\Managed\Assembly-CSharp.dll` into `Mod/HK_AI_Mod/libs/` (that folder is in `.gitignore`) and the build uses it as a fallback. Copy the built DLL into the mods folder:
 
 ```
 <path to the game>/hollow_knight_Data/Managed/Mods/HK_AI_Mod/HK_AI_Mod.dll
