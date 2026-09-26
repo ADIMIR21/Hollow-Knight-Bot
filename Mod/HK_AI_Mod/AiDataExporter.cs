@@ -71,7 +71,12 @@ namespace HK_AI_Mod
         private float _watchdogTimer = 0f;
         private int _forcedEntryAttempts = 0;
         private const string DEFAULT_BOSS_SCENE = "GG_False_Knight";
-        private const string DEFAULT_ENTRY_GATE = "door1";
+        // В аренах Godhome единственный TransitionPoint называется door_dreamEnter
+        // (проверено вживую в GG_False_Knight и GG_Hornet_1). С прежним дефолтом
+        // "door1" гейт не находился никогда: watchdog на каждом входе выставлял
+        // героя вручную ("Герой завис в transitioning"), а команда "warp" вообще
+        // не двигала героя ("гейт не найден, герой остаётся на месте").
+        private const string DEFAULT_ENTRY_GATE = "door_dreamEnter";
 
         // ---------------- Реестр боссов Godhome (пантеоны) ----------------
         // Сцены взяты из build settings игры (hollow_knight_Data/globalgamemanagers).

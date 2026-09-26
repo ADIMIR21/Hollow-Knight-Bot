@@ -8,6 +8,11 @@ import os
 import sys
 import time
 
+# Стенд слушает своё имя пайпа: без этого тест подключился бы к пайпу
+# запущенной игры и начал бы управлять модом вместо макета (так и случилось
+# однажды — тест ушёл телепортировать героя в GG_No_Such_Boss_Scene).
+os.environ.setdefault("HK_PIPE_NAME", "hk_ai_mod_sim")
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 import bosses  # noqa: E402
@@ -34,6 +39,15 @@ check("hello получен", hello is not None, hello)
 check("protocol == 3", client.protocol == 3, client.protocol)
 check("mod_version == 1.3", client.mod_version == "1.3", client.mod_version)
 check("hello-событие доступно", (client.hello or {}).get("status") == "pipe_hello")
+
+# Страховка от самого дорогого промаха стенда: подключиться к пайпу живой игры
+# (например, если макет не смог занять имя) и начать телепортировать героя.
+# Мод такого поля не шлёт, поэтому дальше идти нельзя.
+if (hello or {}).get("server") != "hkpipesim":
+    print("\n[СТОП] На пайпе не макет, а что-то другое — похоже, запущенный мод.")
+    print("       Тест управлял бы настоящей игрой, поэтому останавливаюсь.")
+    print("       Проверь HK_PIPE_NAME: макет слушает hk_ai_mod_sim.")
+    sys.exit(2)
 
 print("\n[2] Поток телеметрии")
 deadline = time.time() + 5.0
@@ -76,7 +90,7 @@ check("current_scene()", bosses.current_scene() == "GG_Hornet_1", bosses.current
 
 print("\n[6] Неизвестный босс -> command_error")
 before = client.get_status_seq("command_error")
-bosses.request_boss("GG_No_Such_Boss_Scene")
+bosses.request_boss("No_Such_Boss_Query")
 ev = client.wait_for_status("command_error", timeout=5.0, after_seq=before)
 check("command_error пришёл", ev is not None, ev)
 check("событие не подменило телеметрию",
@@ -86,6 +100,15 @@ check("событие не подменило телеметрию",
 check("get_last_message() не пуст", client.get_last_message() is not None)
 check("после ошибки сцена не сменилась", bosses.current_scene() == "GG_Hornet_1",
       bosses.current_scene())
+
+print("\n[6b] Незнакомая сцена gg_* -> передаётся как есть (правило 7 мода)")
+before = client.get_status_seq("boss_selected")
+check("request_boss(gg_*) отправлен", bosses.request_boss("GG_No_Such_Boss_Scene"))
+ev = client.wait_for_status("boss_selected", timeout=5.0, after_seq=before)
+check("мод попытался загрузить сцену, а не ответил ошибкой",
+      (ev or {}).get("scene") == "GG_No_Such_Boss_Scene", ev)
+bosses.request_boss("GG_Hornet_1")   # вернуть стенд в известное состояние
+time.sleep(0.3)
 
 print("\n[7] Рестарт боя")
 check("request_restart отправлен", bosses.request_restart())

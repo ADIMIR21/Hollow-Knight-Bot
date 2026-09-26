@@ -18,7 +18,7 @@ import time
 from hk_pipe import REQUIRED_PROTOCOL, get_shared_client
 
 DEFAULT_SCENE = "GG_False_Knight"
-DEFAULT_GATE = "door1"
+DEFAULT_GATE = "door_dreamEnter"   # вход в арену Godhome (см. мод)
 
 # (scene, label) — порядок и подписи совпадают с реестром мода.
 BOSS_LIST = [
@@ -209,7 +209,7 @@ def set_boss_scene(scene_name):
 
 
 def set_gate(gate_name):
-    """Задаёт входной гейт арены, по умолчанию door1."""
+    """Задаёт входной гейт арены (по умолчанию door_dreamEnter — вход Godhome)."""
     return send_command("set_gate " + (str(gate_name).strip() or DEFAULT_GATE))
 
 

@@ -2,7 +2,9 @@ import vgamepad as vg
 import time
 
 DEFAULT_BOSS_SCENE = "GG_False_Knight"
-DEFAULT_ENTRY_GATE = "door1"
+# В аренах Godhome входной TransitionPoint называется door_dreamEnter — см.
+# DEFAULT_ENTRY_GATE в моде (Mod/HK_AI_Mod/AiDataExporter.cs).
+DEFAULT_ENTRY_GATE = "door_dreamEnter"
 
 class HollowKnightController:
     def __init__(self, pipe=None):

@@ -39,7 +39,9 @@ import os
 import threading
 import time
 
-PIPE_PATH = r"\\.\pipe\hk_ai_mod"
+# Имя пайпа. HK_PIPE_NAME переопределяет его для стенда (tests/pipe_sim):
+# макет слушает hk_ai_mod_sim, чтобы не занять пайп запущенной игры.
+PIPE_PATH = "\\\\.\\pipe\\" + os.environ.get("HK_PIPE_NAME", "hk_ai_mod")
 
 # Минимальная версия протокола, на которой есть команды пантеона.
 REQUIRED_PROTOCOL = 3
@@ -192,7 +194,7 @@ class HKPipeClient:
             return self._seq
 
     def send_command(self, text):
-        """Отправить команду моду ('restart GG_False_Knight door1' и т.п.).
+        """Отправить команду моду ('restart GG_False_Knight door_dreamEnter' и т.п.).
 
         True — строка ушла в пайп (мод заберёт её в течение кадра-двух).
         """

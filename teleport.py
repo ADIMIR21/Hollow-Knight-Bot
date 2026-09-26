@@ -165,8 +165,8 @@ def teleport_to(query, timeout=45.0):
     else:
         print("[ТЕЛЕПОРТ] Бой не поднялся за отведённое время.")
         print("           Проверь ModLog (мод пишет активные гейты сцены) — "
-              "у некоторых сцен вход отличается от door1, задай его командой")
-        print("           set_gate <гейт> или переменной HK_ENTRY_GATE.")
+              "у некоторых сцен вход отличается от door_dreamEnter, задай его")
+        print("           командой set_gate <гейт> или переменной HK_ENTRY_GATE.")
     return ok, scene
 
 

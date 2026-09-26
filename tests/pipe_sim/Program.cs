@@ -15,7 +15,11 @@ namespace hkpipesim
 {
     public static class Program
     {
-        private const string PIPE_NAME = "hk_ai_mod";
+        // Имя пайпа стенда отличается от боевого: макет не должен уметь занять
+        // пайп запущенной игры и перехватить клиентов (а тест — начать управлять
+        // игрой вместо макета). HK_PIPE_NAME позволяет это переопределить.
+        private static readonly string PIPE_NAME =
+            Environment.GetEnvironmentVariable("HK_PIPE_NAME") ?? "hk_ai_mod_sim";
         private const int MAX_CLIENTS = 4;
         private const int POLL_MS = 25;
 
@@ -30,7 +34,7 @@ namespace hkpipesim
         private static readonly List<KeyValuePair<string, string>> Registry = new List<KeyValuePair<string, string>>();
         private static string _registryJson = "{\"status\":\"boss_list\",\"target_scene\":\"GG_False_Knight\",\"count\":0,\"bosses\":[]}";
         private static string _targetScene = "GG_False_Knight";
-        private static string _targetGate = "door1";
+        private static string _targetGate = "door_dreamEnter";
         private static string _curScene = "GG_False_Knight";
         private static bool _restartPending = false;
         private static int _restartFrames = 0;
@@ -205,6 +209,17 @@ namespace hkpipesim
                     return;
                 }
             }
+            // Незнакомое имя вида gg_* мод передаёт как сцену («вдруг сцена есть»,
+            // правило 7 в TryResolveBoss). Макет обязан повторять это точно:
+            // раньше он отвечал command_error, тест это «подтверждал», а в игре
+            // мод на GG_No_Such_Boss_Scene молча грузил несуществующую сцену.
+            if (norm.StartsWith("gg_"))
+            {
+                _targetScene = query.Trim(); _curScene = _targetScene; _restartFrames = 4;
+                PublishEvent("{\"status\": \"boss_selected\", \"scene\": \"" + _targetScene
+                    + "\", \"label\": \"" + _targetScene + " (неизвестная сцена, попытка загрузки)\"}");
+                return;
+            }
             PublishEvent("{\"status\": \"command_error\", \"command\": \"boss " + query + "\", \"reason\": \"босс не распознан\"}");
         }
 
@@ -244,7 +259,10 @@ namespace hkpipesim
                     }
 
                     Console.WriteLine($"[mock] слот {slot}: клиент подключился");
-                    byte[] hello = Utf8("{\"status\": \"pipe_hello\", \"protocol\": 3, \"mod_version\": \"1.3\"}\n");
+                    // Поле "server" — метка стенда: тест обязан убедиться, что
+                    // говорит с макетом, а не с модом запущенной игры (их hello
+                    // иначе не отличить, и тест начнёт управлять игрой).
+                    byte[] hello = Utf8("{\"status\": \"pipe_hello\", \"protocol\": 3, \"mod_version\": \"1.3\", \"server\": \"hkpipesim\"}\n");
                     if (Win32Pipe.Write(pipe, hello, hello.Length))
                         PumpClient(pipe, readBuf, lineBuf, events, payload);
                 }

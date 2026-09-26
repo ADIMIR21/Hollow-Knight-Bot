@@ -34,8 +34,8 @@ def parse_args():
     )
     parser.add_argument(
         "--entry-gate", metavar="ГЕЙТ",
-        default=os.environ.get("HK_ENTRY_GATE", "door1"),
-        help="входной гейт арены (по умолчанию door1)",
+        default=os.environ.get("HK_ENTRY_GATE", "door_dreamEnter"),
+        help="входной гейт арены (по умолчанию door_dreamEnter — вход арен Godhome)",
     )
     return parser.parse_args()
 

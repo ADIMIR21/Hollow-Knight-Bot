@@ -10,9 +10,7 @@ import os
 import sys
 import time
 
-from hk_pipe import HKPipeClient
-
-PIPE_PATH = r"\\.\pipe\hk_ai_mod"
+from hk_pipe import HKPipeClient, PIPE_PATH
 
 print(f"Подключаюсь к пайпу: {PIPE_PATH}")
 print("Для выхода нажмите Ctrl + C\n")

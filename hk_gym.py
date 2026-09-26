@@ -46,7 +46,7 @@ STATS_SIZE = len(STAT_NAMES)
 _RAW_BOSS_SCENE = os.environ.get("HK_BOSS_SCENE", "GG_False_Knight")
 _RESOLVED_BOSS = resolve_query(_RAW_BOSS_SCENE)
 BOSS_SCENE, BOSS_SCENE_LABEL = _RESOLVED_BOSS if _RESOLVED_BOSS else (_RAW_BOSS_SCENE, _RAW_BOSS_SCENE)
-ENTRY_GATE = os.environ.get("HK_ENTRY_GATE", "door1")
+ENTRY_GATE = os.environ.get("HK_ENTRY_GATE", "door_dreamEnter")
 # FRAME_SKIP больше не используется: шаг синхронизируется по свежей телеметрии
 # (см. wait_for_fresh_telemetry в ai_environment.py). Оставлено для совместимости.
 FRAME_SKIP = max(1, int(os.environ.get("HK_FRAME_SKIP", "4")))
