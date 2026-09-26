@@ -1,11 +1,13 @@
-﻿# Деплой мода HK_AI_Mod в игру (запускать при ЗАКРЫТОЙ игре).
-# Использование:
+﻿# Deploy the HK_AI_Mod mod into the game (run while the game is CLOSED).
+# Usage:
 #   powershell -ExecutionPolicy Bypass -File deploy_mod.ps1
-#   powershell -ExecutionPolicy Bypass -File deploy_mod.ps1 -Build   # пересобрать перед деплоем
+#   powershell -ExecutionPolicy Bypass -File deploy_mod.ps1 -Build   # rebuild before deploying
 #
-# ВАЖНО: файл должен оставаться в UTF-8 **с BOM**. Windows PowerShell 5.1 без BOM читает
-# кириллицу как CP1251, из-за чего падает с "Missing closing '}'" на первом же блоке.
-# Если правил файл редактором, который срезает BOM — верни его обратно.
+# NOTE: this file must stay ASCII-only and is kept in UTF-8 **with BOM**.
+# Windows PowerShell 5.1 without a BOM reads non-ASCII bytes as CP1251, which used
+# to break the parser with "Missing closing '}'" on the first block. The script text
+# is English/ASCII now, but the BOM is kept as a safety net: if you edit the file with
+# an editor that strips the BOM, put it back.
 
 param(
     [switch]$Build
@@ -13,7 +15,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# --- Поиск установленной игры (как в csproj: реестр Steam + стандартные библиотеки) ---
+# --- Locate the installed game (same approach as the csproj: Steam registry + default libraries) ---
 function Find-GameDir {
     $steam = (Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\Valve\Steam' -ErrorAction SilentlyContinue).InstallPath
     $libs = @()
@@ -36,29 +38,29 @@ function Find-GameDir {
 
 $gameDir = Find-GameDir
 if (-not $gameDir) {
-    Write-Host "Hollow Knight не найден (реестр Steam + стандартные пути)." -ForegroundColor Red
+    Write-Host "Hollow Knight was not found (Steam registry + default paths)." -ForegroundColor Red
     exit 1
 }
-Write-Host "Игра: $gameDir"
+Write-Host "Game: $gameDir"
 
 $game = Get-Process -Name "hollow_knight" -ErrorAction SilentlyContinue
 if ($game) {
-    Write-Host "Игра запущена (PID $($game.Id)) — закрой Hollow Knight и повтори деплой." -ForegroundColor Yellow
+    Write-Host "The game is running (PID $($game.Id)) - close Hollow Knight and deploy again." -ForegroundColor Yellow
     exit 1
 }
 
 if ($Build) {
-    Write-Host "Сборка мода (Release)..."
+    Write-Host "Building the mod (Release)..."
     dotnet build (Join-Path $PSScriptRoot "Mod\HK_AI_Mod\HK_AI_Mod.csproj") -c Release
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "Сборка не удалась." -ForegroundColor Red
+        Write-Host "Build failed." -ForegroundColor Red
         exit 1
     }
 }
 
 $dll = Join-Path $PSScriptRoot "Mod\HK_AI_Mod\bin\Release\net472\HK_AI_Mod.dll"
 if (-not (Test-Path $dll)) {
-    Write-Host "DLL не найдена: $dll (сначала dotnet build -c Release)" -ForegroundColor Red
+    Write-Host "DLL not found: $dll (run dotnet build -c Release first)" -ForegroundColor Red
     exit 1
 }
 
@@ -67,5 +69,5 @@ if (-not (Test-Path $modsDir)) {
     New-Item -ItemType Directory -Path $modsDir -Force | Out-Null
 }
 Copy-Item $dll (Join-Path $modsDir "HK_AI_Mod.dll") -Force
-Write-Host "Деплой выполнен: $modsDir\HK_AI_Mod.dll" -ForegroundColor Green
-Write-Host "Запусти игру и проверь ModLog — версия мода должна быть v1."
+Write-Host "Deploy finished: $modsDir\HK_AI_Mod.dll" -ForegroundColor Green
+Write-Host "Launch the game and check ModLog - the mod version should be v1."

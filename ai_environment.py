@@ -16,16 +16,16 @@ class HollowKnightEnv:
         self.use_screen_capture = USE_SCREEN_CAPTURE
         if self.use_screen_capture:
             self.camera = ScreenCaptureAgent()
-            print("[ENV] Захват экрана ВКЛЮЧЕН")
+            print("[ENV] Screen capture ENABLED")
         else:
             self.camera = None
-            print("[ENV] Захват экрана ОТКЛЮЧЕН (используется телеметрия)")
-        print("[ENV] хк успешно найден!")
+            print("[ENV] Screen capture DISABLED (using telemetry)")
+        print("[ENV] Hollow Knight found successfully!")
 
     def get_telemetry(self):
-        # Обновление 3: ретраи БЕЗ сна. Мод пишет через File.Replace —
-        # в момент замены файл недоступен лишь считанные микросекунды,
-        # спать по 0.02с на каждую неудачную попытку не нужно.
+        # Update 3: retries WITHOUT sleeping. The mod writes via File.Replace —
+        # at the moment of replacement the file is unavailable for only a few microseconds,
+        # sleeping 0.02s after every failed attempt is unnecessary.
         for attempt in range(10):
             try:
                 with open(PATH_TO_TELEMETRY, 'r') as f:
@@ -35,7 +35,7 @@ class HollowKnightEnv:
         return None
 
     def get_telemetry_mtime(self):
-        """Штамп последней записи телеметрии (mtime файла) или None."""
+        """Timestamp of the last telemetry write (file mtime) or None."""
         try:
             return os.path.getmtime(PATH_TO_TELEMETRY)
         except OSError:
@@ -43,11 +43,11 @@ class HollowKnightEnv:
 
     def wait_for_fresh_telemetry(self, last_mtime, timeout=0.15):
         """
-        Обновление 2: ждём появления НОВОЙ записи в файле телеметрии
-        (по изменению mtime) вместо фиксированных снов.
+        Update 2: wait for a NEW entry to appear in the telemetry file
+        (by mtime change) instead of fixed sleeps.
 
-        Возвращает mtime новых данных, либо прежний last_mtime,
-        если за timeout ничего не пришло (меню/пауза — работаем по старым данным).
+        Returns the mtime of the new data, or the previous last_mtime,
+        if nothing arrived within timeout (menu/pause — we work with the old data).
         """
         if last_mtime is None:
             last_mtime = self.get_telemetry_mtime()
@@ -76,9 +76,9 @@ def main():
     if ENABLE_PREVIEW:
         cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
         cv2.resizeWindow(window_name, AI_VISION_SIZE[0], AI_VISION_SIZE[1])
-        print("[СИСТЕМА] Предпросмотр ВКЛЮЧЕН. Нажми 'q' в окне трансляции для выхода.")
+        print("[SYSTEM] Preview ENABLED. Press 'q' in the broadcast window to exit.")
     else:
-        print("[СИСТЕМА] Предпросмотр ВЫКЛЮЧЕН. Нажми Ctrl+C в консоли для выхода.")
+        print("[SYSTEM] Preview DISABLED. Press Ctrl+C in the console to exit.")
     
     last_x, last_y = 0.0, 0.0
     last_hp, last_mana, last_boss_hp = 0, 0, 0
@@ -112,16 +112,16 @@ def main():
                     hp != last_hp or mana != last_mana or boss_hp != last_boss_hp):
                     
                     os.system('cls' if os.name == 'nt' else 'clear')
-                    print(f"=== МОЗГИ ИИ ===")
-                    print(f"ИГРОК:    {hp}/{max_hp} HP | ДУША: {mana}/99 MP")
-                    print(f"БОСС:     {boss_hp} HP | Состояние: {boss_state}")
-                    print(f"ПОЗИЦИЯ:  X: {current_x:.2f} | Y: {current_y:.2f}")
-                    print(f"СКОРОСТЬ: VX: {vel_x:.2f} | VY: {vel_y:.2f}")
-                    print(f"СТАТУС:   Земля={grounded} | Атака={is_attacking} | Рывок={is_dashing}")
-                    print(f"          Прыжок={is_jumping} | Падение={is_falling} | Отдача={is_recoiling}")
-                    print(f"БОСС АТАКУЕТ: {boss_is_attacking} | Опасность рядом: {near_hazard}")
-                    print(f"ПОЛУЧИЛ УРОН: {was_hit}")
-                    print(f"ГЛАЗА:    Кадр {AI_VISION_SIZE[0]}x{AI_VISION_SIZE[1]} в памяти")
+                    print(f"=== AI BRAIN ===")
+                    print(f"PLAYER:   {hp}/{max_hp} HP | SOUL: {mana}/99 MP")
+                    print(f"BOSS:     {boss_hp} HP | State: {boss_state}")
+                    print(f"POSITION: X: {current_x:.2f} | Y: {current_y:.2f}")
+                    print(f"SPEED:    VX: {vel_x:.2f} | VY: {vel_y:.2f}")
+                    print(f"STATUS:   Grounded={grounded} | Attack={is_attacking} | Dash={is_dashing}")
+                    print(f"          Jump={is_jumping} | Fall={is_falling} | Recoil={is_recoiling}")
+                    print(f"BOSS ATTACKING: {boss_is_attacking} | Nearby hazard: {near_hazard}")
+                    print(f"TOOK DAMAGE: {was_hit}")
+                    print(f"VISION:   Frame {AI_VISION_SIZE[0]}x{AI_VISION_SIZE[1]} in memory")
                     print(f"=============================")
                     
                     last_x, last_y = current_x, current_y
@@ -135,11 +135,11 @@ def main():
                 time.sleep(0.01)
                 
     except KeyboardInterrupt:
-        print("\n[СИСТЕМА] Остановка...")
+        print("\n[SYSTEM] Stopping...")
         
     if ENABLE_PREVIEW:
         cv2.destroyAllWindows()
-    print("[СИСТЕМА] Работа завершена.")
+    print("[SYSTEM] Work finished.")
 
 if __name__ == "__main__":
     main()

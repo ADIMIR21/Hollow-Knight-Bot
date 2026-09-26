@@ -9,11 +9,11 @@ DEFAULT_BOSS_SCENE = "GG_False_Knight"
 
 class HollowKnightController:
     def __init__(self):
-        print("[CONTROLLER] Подключаем геймпад...")
+        print("[CONTROLLER] Connecting the gamepad...")
         self.gamepad = vg.VX360Gamepad()
         
         time.sleep(2.0)
-        print("[CONTROLLER] Геймпад Xbox 360 подключился)!")
+        print("[CONTROLLER] Xbox 360 gamepad connected)!")
         
         self.buttons = {
             "jump": vg.XUSB_BUTTON.XUSB_GAMEPAD_A,
@@ -27,16 +27,16 @@ class HollowKnightController:
         try:
             with open(BOSS_SCENE_FILE, "w") as f:
                 f.write(scene_name.strip())
-            print(f"[CONTROLLER] Целевая сцена босса: {scene_name.strip()}")
+            print(f"[CONTROLLER] Target boss scene: {scene_name.strip()}")
         except OSError as e:
-            print(f"[CONTROLLER] Не удалось записать конфиг сцены: {e}")
+            print(f"[CONTROLLER] Failed to write the scene config: {e}")
 
     def request_fast_restart(self):
         try:
             with open(CMD_FILE, "w") as f:
                 f.write("restart")
         except OSError as e:
-            print(f"[CONTROLLER] Не удалось отправить команду рестарта: {e}")
+            print(f"[CONTROLLER] Failed to send the restart command: {e}")
 
     def fast_restart_available(self):
         return os.path.exists(CMD_FILE)
@@ -92,21 +92,21 @@ class HollowKnightController:
 if __name__ == "__main__":
     ctrl = HollowKnightController()
     
-    print("\n[ТЕСТ] У тебя есть 5 секунд, чтобы развернуть хк...")
+    print("\n[TEST] You have 5 seconds to get Hollow Knight running...")
     time.sleep(5)
     
-    print("Идем вправо...")
+    print("Moving right...")
     ctrl.set_action(2)
     time.sleep(0.5)
     
-    print("Прыгаем в движении!")
+    print("Jumping while moving!")
     ctrl.set_action(3)
     time.sleep(0.3)
     
-    print("Рывок!")
+    print("Dash!")
     ctrl.set_action(5)
     time.sleep(0.2)
     
-    print("Остановка.")
+    print("Stopping.")
     ctrl.reset_all()
-    print("Тест завершен!")
+    print("Test complete!")

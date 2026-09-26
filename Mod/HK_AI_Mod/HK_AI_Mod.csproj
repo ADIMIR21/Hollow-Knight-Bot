@@ -72,8 +72,8 @@
   </ItemGroup>
 
   <Target Name="PrintHollowKnightPath" BeforeTargets="ResolveAssemblyReferences">
-    <Message Condition="'$(HollowKnightManagedDir)' != ''" Text="*** Hollow Knight найден: $(HollowKnightManagedDir)" Importance="High" />
-    <Message Condition="'$(HollowKnightManagedDir)' == ''" Text="*** Hollow Knight не найден автоматически. Используются пути по умолчанию." Importance="High" />
+    <Message Condition="'$(HollowKnightManagedDir)' != ''" Text="*** Hollow Knight found: $(HollowKnightManagedDir)" Importance="High" />
+    <Message Condition="'$(HollowKnightManagedDir)' == ''" Text="*** Hollow Knight was not found automatically. Using the default paths." Importance="High" />
   </Target>
 
 </Project>

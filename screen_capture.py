@@ -30,12 +30,12 @@ class ScreenCaptureAgent:
                     self.monitor['height'] = hk_window.height - 39
                     
                     if not self.game_was_found:
-                        print("[VISION] Игра Hollow Knight успешно зафиксирована!")
+                        print("[VISION] Hollow Knight game window found successfully!")
                         self.game_was_found = True
                     return True
             else:
                 if self.game_was_found:
-                    print("[VISION] Окно игры потеряно. Ожидание запуска...")
+                    print("[VISION] Game window lost. Waiting for launch...")
                     self.game_was_found = False
                     
         except Exception as e:
@@ -67,8 +67,8 @@ def main():
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(window_name, AI_VISION_SIZE[0], AI_VISION_SIZE[1])
 
-    print("[СИСТЕМА] Автонаведение запущено! Ожидаем Hollow Knight...")
-    print("Нажми 'q' в окошке ИИ для выхода.")
+    print("[SYSTEM] Auto-tracking started! Waiting for Hollow Knight...")
+    print("Press 'q' in the AI window to exit.")
     
     last_time = time.time()
     
@@ -88,7 +88,7 @@ def main():
             break
             
     cv2.destroyAllWindows()
-    print("[СИСТЕМА] Зрение отключено.")
+    print("[SYSTEM] Vision disabled.")
 
 if __name__ == "__main__":
     main()

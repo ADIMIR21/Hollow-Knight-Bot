@@ -6,8 +6,8 @@ import tempfile
 
 FILE_PATH = os.path.join(tempfile.gettempdir(), "hk_ai_data.json")
 
-print(f"Следим за файлом: {FILE_PATH}")
-print("Для выхода нажмите Ctrl + C\n")
+print(f"Watching file: {FILE_PATH}")
+print("Press Ctrl + C to exit\n")
 
 attempt = 0
 clear = 0 
@@ -18,13 +18,13 @@ try:
         attempt += 1
         
         if not os.path.exists(FILE_PATH):
-            print(f"[{attempt}] ОШИБКА: Файл вообще не создан игрой.")
+            print(f"[{attempt}] ERROR: The file was never created by the game.")
             clear += 1
             if clear == 20:
                 os.system('cls' if os.name == 'nt' else 'clear')
-                print("Очистка терминала")
-                print(f"Следим за файлом: {FILE_PATH}")
-                print("Для выхода нажмите Ctrl + C\n")
+                print("Clearing the terminal")
+                print(f"Watching file: {FILE_PATH}")
+                print("Press Ctrl + C to exit\n")
                 clear = 0 
                 attempt = 0
             time.sleep(0.5)
@@ -40,26 +40,26 @@ try:
                 old_content = content
             
             if not content.strip():
-                print(f"[{attempt}] Файл пустой, скорее всего (попали в момент перезаписи C#)")
+                print(f"[{attempt}] File is empty, most likely (caught it during the C# rewrite)")
                 time.sleep(0.02)
                 continue
 
             try:
                 data = json.loads(content)
                 if "status" in data:
-                    print(f"[{attempt}] (Статус) -> {data['status']}")
+                    print(f"[{attempt}] (Status) -> {data['status']}")
                 else:
-                    print(f"[{attempt}] (Координаты) -> ХП: {data.get('hp')} | X: {data.get('x')}, Y: {data.get('y')}")
+                    print(f"[{attempt}] (Position) -> HP: {data.get('hp')} | X: {data.get('x')}, Y: {data.get('y')}")
             
             except json.JSONDecodeError:
-                print(f"[{attempt}] текст успели вытащить: {content}")
+                print(f"[{attempt}] managed to pull the text out: {content}")
 
         except PermissionError:
-            print(f"[{attempt}] Файл занят игрой")
+            print(f"[{attempt}] File is locked by the game")
             time.sleep(0.01) 
 
         time.sleep(0.05)
 
 except KeyboardInterrupt:
-    print("\nОстнавливаю.")
+    print("\nStopping.")
     sys.exit(0)

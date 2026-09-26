@@ -14,12 +14,12 @@ from stable_baselines3.common.type_aliases import Schedule
 from ai_controller import HollowKnightController
 from bosses import resolve_query, set_boss_scene, set_gate, DEFAULT_SCENE
 
-# hk_gym импортируется в main() ПОСЛЕ фиксации сцены босса:
-# сцена читается из HK_BOSS_SCENE на импорте модуля.
+# hk_gym is imported in main() AFTER the boss scene is fixed:
+# the scene is read from HK_BOSS_SCENE at module import time.
 MODELS_ROOT = "models/ppo_hk"
 LOGS_DIR = "logs"
-# VECNORM_PATH убран: после перехода на per-boss папки путь считается как
-# os.path.join(boss_dir, "vecnormalize.pkl") внутри main() — см. vecnorm_path ниже.
+# VECNORM_PATH was removed: after the move to per-boss folders the path is computed as
+# os.path.join(boss_dir, "vecnormalize.pkl") inside main() — see vecnorm_path below.
 PROGRESS_PATH = os.path.join(LOGS_DIR, "progress.txt")
 PROGRESS_WINDOW = 100
 
@@ -30,24 +30,24 @@ if not os.path.exists(LOGS_DIR):
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Обучение PPO-бота Hollow Knight")
+    parser = argparse.ArgumentParser(description="Training a PPO bot for Hollow Knight")
     parser.add_argument(
-        "--boss", metavar="ИМЯ",
+        "--boss", metavar="NAME",
         default=os.environ.get("HK_BOSS_SCENE", DEFAULT_SCENE),
-        help="босс для обучения: имя сцены (GG_Hornet_1), алиас (hornet, nkg) "
-             "или номер списка (python teleport.py --list). По умолчанию HK_BOSS_SCENE или GG_False_Knight",
+        help="boss to train on: scene name (GG_Hornet_1), alias (hornet, nkg) "
+             "or list number (python teleport.py --list). Defaults to HK_BOSS_SCENE or GG_False_Knight",
     )
     parser.add_argument(
-        "--entry-gate", metavar="ГЕЙТ",
+        "--entry-gate", metavar="GATE",
         default=os.environ.get("HK_ENTRY_GATE", "door_dreamEnter"),
-        help="входной гейт арены (по умолчанию door_dreamEnter — единственный "
-             "TransitionPoint в сценах Godhome; мод умеет подбирать его сам)",
+        help="arena entry gate (default door_dreamEnter — the only "
+             "TransitionPoint in Godhome scenes; the mod can pick it automatically)",
     )
     return parser.parse_args()
 
 
 def resolve_boss(args):
-    """Аргумент/переменная окружения -> (scene, label). Незнакомые строки пропускает как есть."""
+    """Argument/environment variable -> (scene, label). Unrecognized strings pass through as-is."""
     resolved = resolve_query(args.boss)
     if resolved is not None:
         return resolved
@@ -55,8 +55,8 @@ def resolve_boss(args):
 
 
 def migrate_legacy_model(scene, boss_dir):
-    """Разовая миграция старой раскладки (файлы в корне models/ppo_hk —
-    это обучение на дефолтной арене False Knight) в per-boss папку."""
+    """One-time migration of the old layout (files in the root of models/ppo_hk —
+    training on the default False Knight arena) into the per-boss folder."""
     if scene != DEFAULT_SCENE:
         return
     legacy_files = [os.path.join(MODELS_ROOT, "hk_model_final.zip"),
@@ -66,12 +66,12 @@ def migrate_legacy_model(scene, boss_dir):
     if not legacy_files:
         return
     if os.path.exists(os.path.join(boss_dir, "hk_model_final.zip")):
-        return  # у босса уже есть своё сохранение — старые файлы не трогаем
-    print(f"[СИСТЕМА] Переношу старые файлы обучения в папку босса: {boss_dir}")
+        return  # the boss already has its own save — leave the old files untouched
+    print(f"[SYSTEM] Moving old training files into the boss folder: {boss_dir}")
     for f in legacy_files:
         dst = os.path.join(boss_dir, os.path.basename(f))
         os.replace(f, dst)
-        print(f"[СИСТЕМА]   {os.path.basename(f)} -> {dst}")
+        print(f"[SYSTEM]   {os.path.basename(f)} -> {dst}")
 
 
 def linear_schedule(initial_value: float) -> Schedule:
@@ -120,15 +120,15 @@ class VecNormalizeSaveCallback(BaseCallback):
 
 class WinRateLoggingCallback(BaseCallback):
     """
-    Обновление 4: вин-рейт за последние N эпизодов и причины завершения.
-    Эпизод считаем завершённым по info["episode"] (его добавляет Monitor),
-    исход берём из reward_parts, который кладёт среда.
+    Update 4: win rate over the last N episodes and the reasons episodes end.
+    An episode counts as finished based on info["episode"] (added by Monitor),
+    the outcome is taken from reward_parts, which the environment provides.
     """
 
     def __init__(self, window=100, verbose=0):
         super().__init__(verbose)
         self.window = window
-        self._results = deque(maxlen=window)  # 1.0 победа, 0.0 не-победа
+        self._results = deque(maxlen=window)  # 1.0 victory, 0.0 non-victory
         self.total_episodes = 0
         self.total_victories = 0
         self._reasons = deque(maxlen=window)  # "victory" / "death" / "timeout"
@@ -166,21 +166,21 @@ class WinRateLoggingCallback(BaseCallback):
 
 
 class ProgressFileCallback(BaseCallback):
-    """Обновление 7: текстовый журнал обучения в logs/progress.txt.
+    """Update 7: a text training journal in logs/progress.txt.
 
-    Пишет две вещи:
-      * `EPISODE ...` — строка на каждый завершённый эпизод: исход
-        (victory/death/timeout), награда, длина, счётчик побед и вин-рейт;
-      * таблицу метрик после каждого роллаута (каждые n_steps шагов) — те же
-        значения, что печатаются в консоль и уходят в TensorBoard (custom/*,
-        reward_breakdown/*, rollout/*, train/*). При verbose=1 её пишет сам
-        логгер SB3 через HumanOutputFormat, при verbose=0 колбэк собирает
-        значения из logger.name_to_value сам.
+    It writes two things:
+      * `EPISODE ...` — one line per finished episode: the outcome
+        (victory/death/timeout), reward, length, win counter and win rate;
+      * a metrics table after each rollout (every n_steps steps) — the same
+        values as printed to the console and sent to TensorBoard (custom/*,
+        reward_breakdown/*, rollout/*, train/*). With verbose=1 it is written by
+        the SB3 logger itself via HumanOutputFormat; with verbose=0 the callback
+        collects the values from logger.name_to_value itself.
 
-    В CallbackList колбэк должен идти ПОСЛЕДНИМ: тогда к моменту
-    _on_rollout_end логгер уже содержит записи остальных колбэков.
-    Строки эпизодов дописываются append-ом на каждую запись, поэтому
-    обрыв обучения не теряет уже зафиксированный прогресс.
+    In the CallbackList the callback must go LAST: that way by the time
+    _on_rollout_end runs the logger already contains the other callbacks' entries.
+    Episode lines are appended on every write, so an interrupted
+    training run does not lose the progress already recorded.
     """
 
     def __init__(self, path=PROGRESS_PATH, window=PROGRESS_WINDOW, verbose=0):
@@ -216,26 +216,26 @@ class ProgressFileCallback(BaseCallback):
                 handle.write(text)
             return True
         except OSError as exc:
-            print(f"[ПРОГРЕСС] Не удалось записать {self.path}: {exc}")
+            print(f"[PROGRESS] Failed to write {self.path}: {exc}")
             return False
 
     def _on_training_start(self) -> bool:
         if not self._header_written:
             self._append(
-                "# Hollow Knight Bot — журнал прогресса обучения\n"
-                f"# Создан: {self._stamp()}\n"
-                "# EPISODE — исход каждого эпизода, далее таблица метрик после каждого роллаута\n"
-                "# Значения дублируют TensorBoard (logs/PPO_*) и консоль обучения\n"
+                "# Hollow Knight Bot - training progress log\n"
+                f"# Created: {self._stamp()}\n"
+                "# EPISODE - outcome of each episode, followed by the metrics table after every rollout\n"
+                "# Values mirror TensorBoard (logs/PPO_*) and the training console\n"
                 "\n"
             )
             self._header_written = True
 
-        # При verbose>=1 SB3 сам дампит метрики (Logger.dump) после каждого
-        # роллаута — подключаем тот же вывод к нашему файлу, чтобы в нём были
-        # ровно те же значения, что в консоли и TensorBoard (включая свежие
-        # train/* и rollout/*).
-        # ВАЖНО: HumanOutputFormat(путь) открывает файл режимом "w" и затирает
-        # историю, поэтому передаём уже открытый handle в режиме append.
+        # With verbose>=1 SB3 dumps the metrics itself (Logger.dump) after each
+        # rollout — we attach the same output to our file so it contains
+        # exactly the same values as the console and TensorBoard (including fresh
+        # train/* and rollout/*).
+        # IMPORTANT: HumanOutputFormat(path) opens the file in "w" mode and wipes
+        # the history, so we pass an already-open handle in append mode.
         if self.model.verbose >= 1 and self._metric_writer is None:
             self._metric_handle = open(self.path, "a", encoding="utf-8")
             self._metric_writer = HumanOutputFormat(self._metric_handle)
@@ -275,8 +275,8 @@ class ProgressFileCallback(BaseCallback):
         return True
 
     def _on_rollout_end(self) -> bool:
-        # При verbose>=1 таблицу метрик в файл пишет сам логгер (см.
-        # _on_training_start), вручную дублируем только когда вывод SB3 выключен.
+        # With verbose>=1 the logger itself writes the metrics table to the file (see
+        # _on_training_start); we duplicate it manually only when SB3 output is off.
         if self.model.verbose >= 1:
             return True
 
@@ -292,8 +292,8 @@ class ProgressFileCallback(BaseCallback):
         return True
 
     def _on_training_end(self) -> bool:
-        # Отцепляем и закрываем файл: повторный learn() в том же процессе не
-        # должен писать в закрытый handle и добавлять форматтер второй раз.
+        # We detach and close the file: a repeated learn() in the same process must
+        # not write to a closed handle or add the formatter a second time.
         if self._metric_writer is not None:
             try:
                 self.logger.output_formats.remove(self._metric_writer)
@@ -313,9 +313,9 @@ def make_model(env):
         verbose=1,
         tensorboard_log=LOGS_DIR,
         learning_rate=linear_schedule(3e-4),
-        # Обновление 5: 2048 -> 1024. При ~20-60 шагах/сек один роллаут
-        # из 2048 шагов занимал 0.5-2 минуты; апдейт политики чаще —
-        # заметнее прогресс в начале обучения.
+        # Update 5: 2048 -> 1024. At ~20-60 steps/sec a single rollout
+        # of 2048 steps took 0.5-2 minutes; updating the policy more often —
+        # progress is more noticeable early in training.
         n_steps=1024,
         batch_size=128,
         n_epochs=10,
@@ -337,15 +337,15 @@ def load_compatible_vecnorm(vec_env, vecnorm_path):
         loaded = VecNormalize.load(vecnorm_path, vec_env)
         obs_dim = vec_env.observation_space.shape[0]
         if loaded.obs_rms is not None and loaded.obs_rms.mean.shape[0] != obs_dim:
-            print(f"[СИСТЕМА] vecnormalize.pkl от другого пространства наблюдений "
-                  f"({loaded.obs_rms.mean.shape[0]} != {obs_dim}). Начинаю нормализацию заново.")
+            print(f"[SYSTEM] vecnormalize.pkl from a different observation space "
+                  f"({loaded.obs_rms.mean.shape[0]} != {obs_dim}). Restarting normalization.")
             return fresh_vecnorm(vec_env)
         loaded.training = True
         loaded.norm_reward = True
-        print(f"\n[СИСТЕМА] Восстанавливаю статистику нормализации: {vecnorm_path}")
+        print(f"\n[SYSTEM] Restoring normalization statistics: {vecnorm_path}")
         return loaded
     except Exception as e:
-        print(f"[СИСТЕМА] Не удалось загрузить vecnormalize.pkl: {e}. Начинаю нормализацию заново.")
+        print(f"[SYSTEM] Failed to load vecnormalize.pkl: {e}. Restarting normalization.")
         return fresh_vecnorm(vec_env)
 
 
@@ -362,28 +362,28 @@ def fresh_vecnorm(vec_env):
 def main():
     args = parse_args()
     scene, label = resolve_boss(args)
-    print(f"[СИСТЕМА] Босс обучения: {label} ({scene})")
+    print(f"[SYSTEM] Training boss: {label} ({scene})")
 
-    # Сцена босса должна быть выставлена ДО импорта hk_gym: он читает
-    # HK_BOSS_SCENE на импорте модуля. Заодно пишем конфиги мода, чтобы
-    # рестарты и телепорт работали с этой же ареной.
+    # The boss scene must be set BEFORE importing hk_gym: it reads
+    # HK_BOSS_SCENE at module import time. We also write the mod configs so
+    # restarts and teleport work with the same arena.
     os.environ["HK_BOSS_SCENE"] = scene
     os.environ["HK_ENTRY_GATE"] = args.entry_gate
     set_boss_scene(scene)
     set_gate(args.entry_gate)
 
-    from hk_gym import HollowKnightGym  # noqa: E402  (импорт после фиксации сцены)
+    from hk_gym import HollowKnightGym  # noqa: E402  (import after the scene is fixed)
 
-    # Файлы обучения раскладываются автоматически по боссу:
-    # models/ppo_hk/<сцена>/  — чекпоинты, финальная модель, vecnormalize.
-    # Ничего создавать вручную не нужно.
+    # Training files are laid out automatically per boss:
+    # models/ppo_hk/<scene>/  — checkpoints, final model, vecnormalize.
+    # Nothing needs to be created manually.
     boss_dir = os.path.join(MODELS_ROOT, scene)
     os.makedirs(boss_dir, exist_ok=True)
     migrate_legacy_model(scene, boss_dir)
     vecnorm_path = os.path.join(boss_dir, "vecnormalize.pkl")
-    print(f"[СИСТЕМА] Папка обучения босса: {boss_dir}")
+    print(f"[SYSTEM] Boss training folder: {boss_dir}")
 
-    print("Создание среды ХК...")
+    print("Creating the HK environment...")
     raw_env = HollowKnightGym()
     monitored_env = Monitor(raw_env)
     base_vec_env = DummyVecEnv([lambda: monitored_env])
@@ -394,12 +394,12 @@ def main():
     vec_env = load_compatible_vecnorm(base_vec_env, vecnorm_path)
 
     if have_saved_model:
-        print(f"\n[СИСТЕМА] Найдено сохранение: hk_model_final ({scene}). Загружаю...")
+        print(f"\n[SYSTEM] Save found: hk_model_final ({scene}). Loading...")
         try:
-            # Модель сохранена под Python 3.11: вшитые в pickle расписания
-            # (learning_rate/clip_range) содержат байткод 3.11, который
-            # роняет Python 3.14 при вызове (access violation).
-            # Подменяем их свежими объектами через custom_objects.
+            # The model was saved under Python 3.11: the schedules pickled into
+            # the file (learning_rate/clip_range) contain 3.11 bytecode that
+            # crashes Python 3.14 when called (access violation).
+            # We replace them with fresh objects via custom_objects.
             model = PPO.load(
                 model_path,
                 env=vec_env,
@@ -407,17 +407,17 @@ def main():
                     "learning_rate": lambda progress_remaining: 3e-4 * progress_remaining,
                     "clip_range": 0.2,
                 },
-                # Обновление 5: в файле модели зашит n_steps=2048, kwarg
-                # применяется ПОСЛЕ data в SB3 и перекрывает его.
+                # Update 5: the model file has n_steps=2048 baked in; the kwarg
+                # is applied AFTER data in SB3 and overrides it.
                 n_steps=1024,
             )
-            print("[СИСТЕМА] Модель успешно загружена.")
+            print("[SYSTEM] Model loaded successfully.")
         except Exception as e:
-            print(f"[СИСТЕМА] Ошибка загрузки модели: {e}")
-            print("[СИСТЕМА] Создаю новую модель с нуля...")
+            print(f"[SYSTEM] Failed to load the model: {e}")
+            print("[SYSTEM] Creating a new model from scratch...")
             model = make_model(vec_env)
     else:
-        print("\n[СИСТЕМА] Сохранение для этого босса не найдено. Создаю новое с нуля...")
+        print("\n[SYSTEM] No save found for this boss. Creating a new one from scratch...")
         model = make_model(vec_env)
 
     checkpoint_callback = CheckpointCallback(
@@ -431,8 +431,8 @@ def main():
 
     reward_logging_callback = RewardComponentLoggingCallback()
     win_rate_callback = WinRateLoggingCallback(window=100)
-    # Последним в списке: к его _on_rollout_end логгер уже содержит метрики
-    # остальных колбэков (custom/*, reward_breakdown/*), их он и пишет в файл.
+    # Last in the list: by its _on_rollout_end the logger already contains the metrics
+    # of the other callbacks (custom/*, reward_breakdown/*), which it writes to the file.
     progress_callback = ProgressFileCallback(PROGRESS_PATH, window=PROGRESS_WINDOW)
 
     callback_list = CallbackList([
@@ -443,24 +443,24 @@ def main():
         progress_callback,
     ])
 
-    print("\n[СИСТЕМА] ИИ готов к обучению.")
-    print(f"[СИСТЕМА] Журнал прогресса: {PROGRESS_PATH} (история дописывается)")
-    print("Через 10 сек начнется")
+    print("\n[SYSTEM] AI is ready for training.")
+    print(f"[SYSTEM] Progress log: {PROGRESS_PATH} (history is appended)")
+    print("Starting in 10 seconds")
     time.sleep(10)
-    print("ПОЕХАЛИ!\n")
+    print("LET'S GO!\n")
 
     try:
         model.learn(total_timesteps=2000000, reset_num_timesteps=False, callback=callback_list)
 
     except KeyboardInterrupt:
-        print("\n[СИСТЕМА] Обучение прервано. Сохраняю че получилось...")
+        print("\n[SYSTEM] Training interrupted. Saving what we have...")
 
     finally:
         final_save_path = os.path.join(boss_dir, "hk_model_final")
         model.save(final_save_path)
         vec_env.save(vecnorm_path)
-        print(f"[СИСТЕМА] ИИ сохранена в: {final_save_path}.zip")
-        print(f"[СИСТЕМА] Статистика нормализации сохранена в: {vecnorm_path}")
+        print(f"[SYSTEM] AI saved to: {final_save_path}.zip")
+        print(f"[SYSTEM] Normalization statistics saved to: {vecnorm_path}")
 
 if __name__ == "__main__":
     main()
