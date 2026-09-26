@@ -12,7 +12,7 @@
 дают собственную построчную разборку потока.
 
 Формат сообщений мода (одна строка = один JSON-объект):
-    {"status": "pipe_hello", "protocol": 3, "mod_version": "1.3"}   — при подключении
+    {"status": "pipe_hello", "protocol": 3, "mod_version": "v1"}   — при подключении
     {"status": "fight", "restart_pending": 0, "scene": "GG_False_Knight", "hp": 9, ...}
     {"status": "main_menu" | "loading_scene" | "initialized" | ...}  — служебные
     {"status": "boss_list", "event": 1, "count": 60, "bosses": [...]}   — ответ на "bosses"

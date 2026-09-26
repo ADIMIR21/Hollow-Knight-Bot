@@ -262,7 +262,7 @@ namespace hkpipesim
                     // Поле "server" — метка стенда: тест обязан убедиться, что
                     // говорит с макетом, а не с модом запущенной игры (их hello
                     // иначе не отличить, и тест начнёт управлять игрой).
-                    byte[] hello = Utf8("{\"status\": \"pipe_hello\", \"protocol\": 3, \"mod_version\": \"1.3\", \"server\": \"hkpipesim\"}\n");
+                    byte[] hello = Utf8("{\"status\": \"pipe_hello\", \"protocol\": 3, \"mod_version\": \"v1\", \"server\": \"hkpipesim\"}\n");
                     if (Win32Pipe.Write(pipe, hello, hello.Length))
                         PumpClient(pipe, readBuf, lineBuf, events, payload);
                 }

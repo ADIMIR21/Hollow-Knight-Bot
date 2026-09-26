@@ -1,6 +1,4 @@
-"""Реестр боссов Godhome и протокол команд для мода HK_AI_Mod.
-
-Реестр — зеркало BossRegistry в Mod/HK_AI_Mod/AiDataExporter.cs (v1.3).
+"""Реестр — зеркало BossRegistry в Mod/HK_AI_Mod/AiDataExporter.cs.
 Сцены взяты из build settings игры (hollow_knight_Data/globalgamemanagers).
 Варианты с суффиксом _V — усложнённые версии боёв (Ascended/Radiant),
 GG_Mantis_Lords_V = Sisters of Battle, GG_Nosk_Hornet = Winged Nosk.
@@ -18,7 +16,9 @@ import time
 from hk_pipe import REQUIRED_PROTOCOL, get_shared_client
 
 DEFAULT_SCENE = "GG_False_Knight"
-DEFAULT_GATE = "door_dreamEnter"   # вход в арену Godhome (см. мод)
+# Арены Godhome принимают героя через единственный TransitionPoint сцены —
+# door_dreamEnter (мод всё равно подбирает существующий гейт сам).
+DEFAULT_GATE = "door_dreamEnter"
 
 # (scene, label) — порядок и подписи совпадают с реестром мода.
 BOSS_LIST = [
@@ -280,7 +280,7 @@ def mod_version():
 
 
 def current_scene():
-    """Текущая сцена из телеметрии (мод v1.3+) или None."""
+    """Текущая сцена из телеметрии или None."""
     data = read_telemetry()
     if data is None:
         return None
@@ -311,6 +311,6 @@ def wait_for_scene(expected_scene=None, timeout=30.0, on_progress=None):
 
 
 def mod_has_scene_field():
-    """Есть ли поле scene в телеметрии (признак мода v1.3+)."""
+    """Есть ли поле scene в телеметрии."""
     data = read_telemetry()
     return data is not None and "scene" in data

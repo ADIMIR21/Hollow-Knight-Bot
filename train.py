@@ -35,7 +35,8 @@ def parse_args():
     parser.add_argument(
         "--entry-gate", metavar="ГЕЙТ",
         default=os.environ.get("HK_ENTRY_GATE", "door_dreamEnter"),
-        help="входной гейт арены (по умолчанию door_dreamEnter — вход арен Godhome)",
+        help="входной гейт арены (по умолчанию door_dreamEnter — единственный "
+             "TransitionPoint в сценах Godhome; мод умеет подбирать его сам)",
     )
     return parser.parse_args()
 

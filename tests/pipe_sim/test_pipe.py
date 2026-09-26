@@ -37,7 +37,7 @@ check("wait_connected", client.wait_connected(timeout=10.0))
 hello = client.wait_hello(timeout=5.0)
 check("hello получен", hello is not None, hello)
 check("protocol == 3", client.protocol == 3, client.protocol)
-check("mod_version == 1.3", client.mod_version == "1.3", client.mod_version)
+check("mod_version == v1", client.mod_version == "v1", client.mod_version)
 check("hello-событие доступно", (client.hello or {}).get("status") == "pipe_hello")
 
 # Страховка от самого дорогого промаха стенда: подключиться к пайпу живой игры

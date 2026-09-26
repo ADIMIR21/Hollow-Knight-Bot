@@ -13,9 +13,12 @@ namespace HK_AI_Mod
 {
     public class AiDataExporter : Mod
     {
-        public override string GetVersion() => "1.3";
+        // ВАЖНО: версия намеренно зафиксирована как "v1" — НЕ меняй её при каждом изменении
+        // мода. Она нужна только для того, чтобы в ModLog было видно, какая сборка
+        // загружена игрой. Историю изменений ведём в README, а не в этой строке.
+        public override string GetVersion() => "v1";
 
-        // ---------------- Транспорт: именованный пайп (протокол v3) ----------------
+        // ---------------- Транспорт: именованный пайп (протокол 3) ----------------
         // Сервер: \\.\pipe\hk_ai_mod (duplex, построчный обмен), поднимается
         // напрямую через kernel32 — см. Win32Pipe.cs и объяснение там же, почему
         // нельзя взять System.IO.Pipes.NamedPipeServerStream (в Mono игры все его
@@ -32,7 +35,7 @@ namespace HK_AI_Mod
         private const int MAX_PIPE_CLIENTS = 4;
         private const int PIPE_POLL_MS = 25;
         private const int PROTOCOL_VERSION = 3;
-        private const string MOD_VERSION = "1.3";
+        private const string MOD_VERSION = "v1";
         private const int MAX_OUTBOX = 256;
 
         // Одноразовые события (список боссов, подтверждение выбора) в отличие от
@@ -49,6 +52,9 @@ namespace HK_AI_Mod
 
         private string _targetScene = DEFAULT_BOSS_SCENE;
         private string _targetGate = DEFAULT_ENTRY_GATE;
+        // scene -> входной гейт, который РЕАЛЬНО существует в сцене (выучивается при
+        // загрузке сцены, чтобы переход в незагруженную сцену тоже попал в её гейт).
+        private readonly Dictionary<string, string> _sceneGates = new Dictionary<string, string>();
 
         private HealthManager? _currentBoss = null;
         private int _lastPlayerHp = 9;
@@ -65,17 +71,37 @@ namespace HK_AI_Mod
         private const int ATTACK_STICKY_MIN_FRAMES = 2;
 
         private bool _restartPending = false;
+        // Отложенный рестарт: команда принята, но переход сцены выполняется не сразу,
+        // а когда игра не занята своим сценарием победы/смерти (иначе белый фейд
+        // игры остаётся висеть на экране, см. комментарий у TryPerformPendingTransition).
+        private bool _restartRequested = false;
+        private float _restartRequestedAt = 0f;
+        private string _restartTargetScene = "";
+        private string _restartGate = "";
+        // Если после запроса сцена уже сменилась — собственный сценарий конца боя
+        // (смерть/выход арены) доигран, и ждать больше нечего.
+        private bool _sceneChangedSinceRequest = false;
+        private string _deferReasonLastLogged = "";
+        private const float RESTART_FORCE_TIMEOUT = 10f;
+        // Сторож фейда: игра умеет сама гасить залипший фейд (CameraController.FadeInFailSafe),
+        // но в этой сборке игры корутина нигде не запускается — делаем это сами.
+        private string _fadeStateLastLogged = "";
+        private float _fadeNotNormalSince = -1f;
+        private int _fadeRescueAttempts = 0;
+        private const float FADE_STUCK_TIMEOUT = 1.5f;
+        // 'FadingOut' — промежуточное состояние: если игра уже спокойна (сцена загружена,
+        // герой не в переходе), а фейд всё ещё в нём, ждать долго нечего.
+        private const float FADE_STUCK_FADINGOUT_TIMEOUT = 1.0f;
         private bool _inMenuScene = true;
         private bool _bossDead = false;
         private BossSceneController _subscribedBsc = null;
         private float _watchdogTimer = 0f;
         private int _forcedEntryAttempts = 0;
         private const string DEFAULT_BOSS_SCENE = "GG_False_Knight";
-        // В аренах Godhome единственный TransitionPoint называется door_dreamEnter
-        // (проверено вживую в GG_False_Knight и GG_Hornet_1). С прежним дефолтом
-        // "door1" гейт не находился никогда: watchdog на каждом входе выставлял
-        // героя вручную ("Герой завис в transitioning"), а команда "warp" вообще
-        // не двигала героя ("гейт не найден, герой остаётся на месте").
+        // Арены Godhome входят в сцену через гейт door_dreamEnter — это единственный
+        // TransitionPoint в GG_* сценах боссов (проверено вживую в GG_False_Knight и
+        // GG_Hornet_1). Мод всё равно сверяет его с реальными TransitionPoint сцены,
+        // а явно заданный set_gate важнее.
         private const string DEFAULT_ENTRY_GATE = "door_dreamEnter";
 
         // ---------------- Реестр боссов Godhome (пантеоны) ----------------
@@ -254,7 +280,12 @@ namespace HK_AI_Mod
                     _bossDead = false;
                     _watchdogTimer = 2.5f;
                     _forcedEntryAttempts = 0;
+                    _fadeNotNormalSince = -1f;
+                    _fadeRescueAttempts = 0;
+                    _fadeStateLastLogged = "";
+                    if (_restartRequested) _sceneChangedSinceRequest = true;
                     SubscribeBossDeath();
+                    LearnSceneGate(newScene.name);
                     Publish(StatusJson("loading_scene"));
                 }
             };
@@ -302,7 +333,9 @@ namespace HK_AI_Mod
         private void OnTick(float unscaledDelta)
         {
             DrainCommands();
+            TryPerformPendingTransition();
             TransitionWatchdogTick(unscaledDelta);
+            FadeWatchdogTick();
         }
 
         private void DrainCommands()
@@ -401,6 +434,10 @@ namespace HK_AI_Mod
             TryRestart();
         }
 
+        // Команда рестарта/телепорта только принимается. Сам переход делает
+        // TryPerformPendingTransition, когда игра освободится: если дёрнуть сцену
+        // посреди сценария смерти или белого выхода арены, фейд камеры остаётся
+        // на экране, а герой — в transitioning (см. ResolveEntryGate).
         private void TryRestart()
         {
             if (_inMenuScene)
@@ -411,18 +448,15 @@ namespace HK_AI_Mod
             if (_restartPending) return;
 
             _restartPending = true;
-            Log($"[ИИ] Быстрый рестарт: переход в сцену '{_targetScene}' (гейт '{_targetGate}')");
+            _restartRequested = true;
+            _restartRequestedAt = Time.time;
+            _restartTargetScene = _targetScene;
+            _sceneChangedSinceRequest = false;
+            _deferReasonLastLogged = "";
 
-            _watchdogTimer = 0f;
-
-            GameManager.instance.BeginSceneTransition(new GameManager.SceneLoadInfo
-            {
-                SceneName = _targetScene,
-                EntryGateName = _targetGate,
-                WaitForSceneTransitionCameraFade = true,
-                Visualization = GameManager.SceneLoadVisualizations.Default,
-                AlwaysUnloadUnusedAssets = false
-            });
+            string gate = ResolveEntryGate(_targetScene);
+            _restartGate = gate;
+            Log($"[ИИ] Быстрый рестарт: цель '{_targetScene}', гейт '{gate}' — команда принята, переход выполню, когда игра освободится");
         }
 
         private void TransitionWatchdogTick(float unscaledDelta)
@@ -719,6 +753,298 @@ namespace HK_AI_Mod
             }
             sb.Append("]}");
             return sb.ToString();
+        }
+
+        // ---------------- Гейты сцены ----------------
+
+        // Все TransitionPoint, реально лежащие в сцене (с учётом аддитивной загрузки:
+        // в реестре бывают гейты и других сцен).
+        private List<string> CollectSceneGates(string sceneName)
+        {
+            List<string> result = new List<string>();
+            try
+            {
+                UnityEngine.SceneManagement.Scene target;
+                if (string.IsNullOrEmpty(sceneName))
+                {
+                    target = UnityEngine.SceneManagement.SceneManager.GetActiveScene();
+                }
+                else
+                {
+                    target = UnityEngine.SceneManagement.SceneManager.GetSceneByName(sceneName);
+                    if (!target.IsValid() || !target.isLoaded) return result;
+                }
+
+                List<TransitionPoint> registry = TransitionPoint.TransitionPoints;
+                if (registry == null) return result;
+
+                for (int i = 0; i < registry.Count; i++)
+                {
+                    TransitionPoint tp = registry[i];
+                    if (tp == null) continue;
+                    if (tp.gameObject.scene != target) continue;
+                    string name = tp.name;
+                    if (!string.IsNullOrEmpty(name) && !result.Contains(name))
+                        result.Add(name);
+                }
+            }
+            catch (Exception) {}
+            return result;
+        }
+
+        // GameManager.EnterHero(additiveGateSearch: true) ищет EntryGateName именно
+        // среди TransitionPoint ЗАГРУЖАЕМОЙ сцены и при промахе делает
+        // `Debug.LogError("Searching in next scene for TransitionGate failed."); return;`
+        // — то есть ни EnterScene, ни FinishedEnteringScene, ни FadeSceneIn.
+        // Герой навсегда остаётся в transitioning, а фейд (белый после смерти/выхода
+        // из арены) остаётся висеть на экране. Поэтому гейт обязан существовать в сцене.
+        private string PickEntryGate(List<string> gates, string configured)
+        {
+            if (gates == null || gates.Count == 0) return null;
+            if (!string.IsNullOrEmpty(configured) && gates.Contains(configured)) return configured;
+            for (int i = 0; i < gates.Count; i++)
+            {
+                if (gates[i].IndexOf("dream", StringComparison.OrdinalIgnoreCase) >= 0)
+                    return gates[i];
+            }
+            return gates[0];
+        }
+
+        private void LearnSceneGate(string sceneName)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(sceneName)) return;
+                List<string> gates = CollectSceneGates(sceneName);
+                if (gates.Count == 0) return;
+
+                string learned = PickEntryGate(gates, _targetGate);
+                if (string.IsNullOrEmpty(learned)) return;
+
+                string previous;
+                if (_sceneGates.TryGetValue(sceneName, out previous) && previous == learned) return;
+
+                _sceneGates[sceneName] = learned;
+                Log($"[ИИ] Гейты сцены '{sceneName}': {string.Join(", ", gates.ToArray())} | вход -> '{learned}'");
+            }
+            catch (Exception) {}
+        }
+
+        private string ResolveEntryGate(string targetScene)
+        {
+            string configured = _targetGate;
+            try
+            {
+                List<string> loaded = CollectSceneGates(targetScene);
+                if (loaded.Count > 0)
+                {
+                    string gate = PickEntryGate(loaded, configured);
+                    if (!string.IsNullOrEmpty(gate))
+                        return gate;
+                }
+
+                string learned;
+                if (!string.IsNullOrEmpty(targetScene)
+                    && _sceneGates.TryGetValue(targetScene, out learned)
+                    && !string.IsNullOrEmpty(learned))
+                    return learned;
+            }
+            catch (Exception) {}
+
+            if (!string.IsNullOrEmpty(configured)) return configured;
+            return DEFAULT_ENTRY_GATE;
+        }
+
+        // ---------------- Отложенный рестарт ----------------
+
+        private bool IsHeroDying(HeroController hero)
+        {
+            try
+            {
+                if (hero == null || hero.cState == null) return true;
+                if (hero.cState.dead || hero.cState.hazardDeath) return true;
+                // Сцена уже сменилась после запроса — собственный сценарий конца боя доигран.
+                if (_sceneChangedSinceRequest) return false;
+                // Хп обнуляется при смерти в Godhome (не выставляя cState.dead), но в зале
+                // оно может остаться нулевым и после дрим-возврата, поэтому стоп-фактор
+                // считаем только пока герой в целевой арене.
+                // controlReqlinquished намеренно НЕ используется: в хабе Godhome он висит
+                // и у живого героя с полным хп (в логе hp=9, controlReqlinquished=True),
+                // из-за чего рестарт упирался в 10-секундный дедлайн.
+                if (CurrentSceneName() == _restartTargetScene)
+                {
+                    PlayerData pd = PlayerData.instance;
+                    if (pd != null && pd.health <= 0) return true;
+                }
+            }
+            catch (Exception) {}
+            return false;
+        }
+
+        private static string DescribeHeroState(HeroController hero)
+        {
+            try
+            {
+                PlayerData pd = PlayerData.instance;
+                int hp = (pd != null) ? pd.health : -1;
+                return $"герой в сценарии смерти/возврата (hp={hp}, dead={hero.cState.dead}, "
+                     + $"сцена {UnityEngine.SceneManagement.SceneManager.GetActiveScene().name})";
+            }
+            catch (Exception)
+            {
+                return "герой занят сценарием игры";
+            }
+        }
+
+        // Белый выход арены из боя (победа над боссом): BossSceneController.EndSceneDelayed()
+        // сначала проигрывает "GG TRANSITION OUT STATUE", и только потом уходит из сцены.
+        private static bool IsArenaExitRunning()
+        {
+            try
+            {
+                BossSceneController bsc = BossSceneController.Instance;
+                if (bsc == null) return false;
+                return ReflectionHelper.GetField<BossSceneController, bool>(bsc, "isTransitioningOut");
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+
+        private static bool IsGameSettled(GameManager gm, HeroController hero)
+        {
+            if (gm == null) return false;
+            if (gm.IsInSceneTransition || gm.IsLoadingSceneTransition) return false;
+            if (hero == null || hero.cState == null) return false;
+            if (hero.cState.transitioning || hero.cState.hazardDeath || hero.cState.hazardRespawning) return false;
+            return true;
+        }
+
+        private void TryPerformPendingTransition()
+        {
+            if (!_restartRequested) return;
+
+            try
+            {
+                if (_inMenuScene) return;
+
+                GameManager gm = GameManager.instance;
+                if (gm == null) return;
+                if (gm.IsInSceneTransition || gm.IsLoadingSceneTransition) return;
+
+                HeroController hero = HeroController.instance;
+                if (hero == null || hero.cState == null) return;
+                if (hero.cState.transitioning || hero.cState.hazardDeath || hero.cState.hazardRespawning) return;
+
+                float waited = Time.time - _restartRequestedAt;
+                bool forced = waited >= RESTART_FORCE_TIMEOUT;
+
+                string deferReason = null;
+                if (!forced && IsHeroDying(hero))
+                    deferReason = DescribeHeroState(hero);       // сценарий смерти/дрим-возврата
+                else if (!forced && IsArenaExitRunning())
+                    deferReason = "арена проигрывает свой белый выход из боя";
+
+                if (deferReason != null)
+                {
+                    if (_deferReasonLastLogged != deferReason)
+                    {
+                        _deferReasonLastLogged = deferReason;
+                        Log($"[ИИ] Рестарт отложен: {deferReason} — жду, пока игра закончит сценарий");
+                    }
+                    return;
+                }
+
+                _deferReasonLastLogged = "";
+
+                if (forced)
+                    Log($"[ИИ] Ждал {waited:F1}с — форсирую переход (состояние игры так и не освободилось)");
+
+                string gate = _restartGate;
+                if (string.IsNullOrEmpty(gate)) gate = ResolveEntryGate(_restartTargetScene);
+
+                Log($"[ИИ] Быстрый рестарт: переход в сцену '{_restartTargetScene}' через гейт '{gate}' (ожидание {waited:F2}с)");
+
+                _restartRequested = false;
+                _restartGate = "";
+                _watchdogTimer = 0f;
+
+                gm.BeginSceneTransition(new GameManager.SceneLoadInfo
+                {
+                    SceneName = _restartTargetScene,
+                    EntryGateName = gate,
+                    WaitForSceneTransitionCameraFade = true,
+                    Visualization = GameManager.SceneLoadVisualizations.Default,
+                    AlwaysUnloadUnusedAssets = false
+                });
+            }
+            catch (Exception e)
+            {
+                _restartRequested = false;
+                Log($"[ИИ] Ошибка отложенного перехода: {e}");
+            }
+        }
+
+        // ---------------- Сторож фейда ----------------
+
+        // Фейды игры (в т.ч. белый RESPAWN FADE/Dream Return) живут на DDOL-объекте
+        // GameCameras. Если сцену выдернуть из середины такого сценария, фейд остаётся
+        // в непрозрачном состоянии, а штатный FadeInFailSafe в этой сборке игры не
+        // запускается нигде. Поэтому гасим залипание сами — тем же событием, что и игра.
+        private void FadeWatchdogTick()
+        {
+            try
+            {
+                GameCameras gc = GameCameras.instance;
+                if (gc == null || gc.cameraFadeFSM == null || gc.cameraFadeFSM.Fsm == null) return;
+
+                string state = gc.cameraFadeFSM.Fsm.ActiveStateName;
+                if (string.IsNullOrEmpty(state)) return;
+
+                if (state != _fadeStateLastLogged)
+                {
+                    if (state != "Normal")
+                        Log($"[ИИ] Фейд камеры -> '{state}' (сцена {CurrentSceneName()})");
+                    _fadeStateLastLogged = state;
+                }
+
+                if (state == "Normal")
+                {
+                    _fadeNotNormalSince = -1f;
+                    _fadeRescueAttempts = 0;
+                    return;
+                }
+
+                // Ждём только когда игра реально ничем не занята: во время честного
+                // перехода фейд тоже не "Normal", и лезть в него нельзя.
+                if (!IsGameSettled(GameManager.instance, HeroController.instance))
+                {
+                    _fadeNotNormalSince = -1f;
+                    return;
+                }
+
+                float limit = (state == "FadingOut") ? FADE_STUCK_FADINGOUT_TIMEOUT : FADE_STUCK_TIMEOUT;
+                if (_fadeNotNormalSince < 0f)
+                {
+                    _fadeNotNormalSince = Time.unscaledTime;
+                    return;
+                }
+
+                float stuck = Time.unscaledTime - _fadeNotNormalSince;
+                if (stuck < limit) return;
+                if (_fadeRescueAttempts >= 5)
+                {
+                    _fadeNotNormalSince = Time.unscaledTime;
+                    return;
+                }
+
+                _fadeRescueAttempts++;
+                _fadeNotNormalSince = Time.unscaledTime;
+                Log($"[ИИ] Фейд залип в '{state}' на {stuck:F1}с (попытка {_fadeRescueAttempts}) — отправляю FADE SCENE IN");
+                gc.cameraFadeFSM.Fsm.Event("FADE SCENE IN");
+            }
+            catch (Exception) {}
         }
 
         private static string CommandErrorJson(string command, string reason)
