@@ -1,31 +1,31 @@
-"""Телепорт к боссам пантеона (Godhome) — выбор босса и запуск обучения.
+"""Teleport to pantheon bosses (Godhome) — boss selection and training launch.
 
-Требует мод HK_AI_Mod в игре: команды boss/teleport/bosses/warp идут
-через именованный пайп ``\\\\.\\pipe\\hk_ai_mod``. Файловый протокол %TEMP%
-удалён, фолбэка для старого мода v1.1 больше нет.
+Requires the HK_AI_Mod mod in the game: the boss/teleport/bosses/warp commands
+go through the named pipe ``\\\\.\\pipe\\hk_ai_mod``. The %TEMP% file protocol
+is gone, there is no fallback for the old mod v1.1 anymore.
 
-Использование:
-  python teleport.py                  — интерактивное меню выбора босса;
-                                        после телепорта спросит про обучение
-  python teleport.py --train          — то же, но обучение запускается сразу
-  python teleport.py --list           — показать список боссов и выйти
-  python teleport.py --verify         — сверить реестры Python и мода через пайп
-  python teleport.py --boss hornet    — телепорт к боссу по имени/номеру/алиасу
-  python teleport.py --boss 8         — телепорт к боссу по номеру списка
-  python teleport.py --boss nkg --train — телепорт + сразу обучение (train.py)
-  python teleport.py --restart        — рестарт текущего боя
-  python teleport.py --warp           — вернуть героя к гейту арены
+Usage:
+  python teleport.py                  — interactive boss selection menu;
+                                        after the teleport it asks about training
+  python teleport.py --train          — same, but training starts right away
+  python teleport.py --list           — show the boss list and exit
+  python teleport.py --verify         — compare the Python and mod registries over the pipe
+  python teleport.py --boss hornet    — teleport to a boss by name/number/alias
+  python teleport.py --boss 8         — teleport to a boss by list number
+  python teleport.py --boss nkg --train — teleport + training right away (train.py)
+  python teleport.py --restart        — restart the current fight
+  python teleport.py --warp           — return the hero to the arena gate
 
-Обучение для каждого босса хранится автоматически:
-models/ppo_hk/<сцена>/ — чекпоинты, hk_model_final.zip, vecnormalize.pkl.
-Создавать что-то вручную не нужно.
+Training for every boss is stored automatically:
+models/ppo_hk/<scene>/ — checkpoints, hk_model_final.zip, vecnormalize.pkl.
+There is no need to create anything by hand.
 
-Интерактивные команды в меню:
-  <номер/имя/алиас>  телепорт к боссу (например: 5, hornet, nkg, false_knight)
-  r                  рестарт текущего боя
-  w                  варп к гейту арены (если герой вылетел из боя)
-  list               показать список боссов
-  q                  выход
+Interactive commands in the menu:
+  <number/name/alias>  teleport to a boss (for example: 5, hornet, nkg, false_knight)
+  r                  restart the current fight
+  w                  warp to the arena gate (if the hero got thrown out of the fight)
+  list               show the boss list
+  q                  quit
 """
 
 import argparse
@@ -52,180 +52,182 @@ from hk_pipe import REQUIRED_PROTOCOL, PIPE_PATH
 
 
 def print_boss_list():
-    print("\n=== Боссы Godhome (пантеоны) ===")
+    print("\n=== Godhome bosses (pantheons) ===")
     for i, (scene, label) in enumerate(BOSS_LIST, start=1):
         print(f"  {i:>2}. {label:<28} {scene}")
     print(
-        "\nПодсказки: можно вводить номер, имя сцены (gg_hornet_1), "
-        "алиас (hornet, nkg, sisters, oro) или часть названия."
+        "\nHints: you can enter a number, a scene name (gg_hornet_1), "
+        "an alias (hornet, nkg, sisters, oro) or part of a label."
     )
-    print("Варианты с (Variant) — усложнённые версии боёв для пантеона Халлоунеста.\n")
+    print("(Variant) entries are harder versions of the fights for the Pantheon of Hallownest.\n")
 
 
 def check_mod():
-    """Проверяет, что пайп мода на связи и его протокол умеет команды пантеона."""
+    """Checks that the mod pipe is connected and its protocol supports pantheon commands."""
     if not is_connected(timeout=10.0):
-        print("[ТЕЛЕПОРТ] Пайп мода не отвечает — игра с модом HK_AI_Mod запущена?")
-        print(f"           Мод держит сервер {PIPE_PATH}. Проверь, что игра запущена")
-        print("           и HK_AI_Mod.dll лежит в папке Mods.")
+        print("[TELEPORT] The mod pipe is not responding — is the game running with the HK_AI_Mod mod?")
+        print(f"           The mod hosts the server {PIPE_PATH}. Check that the game is running")
+        print("           and that HK_AI_Mod.dll is in the Mods folder.")
         return False
 
     if wait_hello(timeout=3.0) is None:
-        print("[ТЕЛЕПОРТ] Пайп открыт, но hello-сообщение от мода не пришло.")
-        print("           Похоже, пайп занят не модом HK_AI_Mod.")
+        print("[TELEPORT] The pipe is open, but no hello message came from the mod.")
+        print("           Looks like the pipe is held by something other than the HK_AI_Mod mod.")
         return False
 
     proto = mod_protocol()
     if proto < REQUIRED_PROTOCOL:
-        print(f"[ТЕЛЕПОРТ] Мод отвечает, но протокол {proto} — команды пантеона "
-              f"требуют >= {REQUIRED_PROTOCOL}.")
-        print("           Обнови DLL: dotnet build Mod/HK_AI_Mod/HK_AI_Mod.csproj -c Release")
-        print("           и скопируй bin/Release/net472/HK_AI_Mod.dll в папку Mods.")
+        print(f"[TELEPORT] The mod responds, but protocol {proto} — pantheon commands "
+              f"require >= {REQUIRED_PROTOCOL}.")
+        print("           Update the DLL: dotnet build Mod/HK_AI_Mod/HK_AI_Mod.csproj -c Release")
+        print("           and copy bin/Release/net472/HK_AI_Mod.dll into the Mods folder.")
         return False
 
     if not mod_has_scene_field():
-        print("[ТЕЛЕПОРТ] Мод подключён, но поле 'scene' в телеметрии не приходит.")
+        print("[TELEPORT] The mod is connected, but the 'scene' field is missing from telemetry.")
         return False
 
-    print(f"[ТЕЛЕПОРТ] Мод на связи: {mod_version()} (протокол {proto}).")
+    print(f"[TELEPORT] Mod connected: {mod_version()} (protocol {proto}).")
     return True
 
 
 def verify_registry():
-    """Сверяет локальный реестр (bosses.BOSS_LIST) с реестром мода по пайпу."""
+    """Compares the local registry (bosses.BOSS_LIST) with the mod's registry over the pipe."""
     data = fetch_boss_list(timeout=3.0)
     if data is None:
-        print("[ПРОВЕРКА] Мод не ответил событием boss_list за 3 секунды.")
+        print("[VERIFY] The mod did not answer with the boss_list event within 3 seconds.")
         return False
 
     mod_bosses = data.get("bosses") or []
     mod_scenes = [b.get("scene") for b in mod_bosses]
     local_scenes = [scene for scene, _ in BOSS_LIST]
 
-    print(f"[ПРОВЕРКА] Мод: {data.get('count')} записей, Python: {len(BOSS_LIST)}.")
-    print(f"[ПРОВЕРКА] Целевая сцена мода: {data.get('target_scene')}")
+    print(f"[VERIFY] Mod: {data.get('count')} entries, Python: {len(BOSS_LIST)}.")
+    print(f"[VERIFY] Mod target scene: {data.get('target_scene')}")
 
     only_local = [s for s in local_scenes if s not in mod_scenes]
     only_mod = [s for s in mod_scenes if s not in local_scenes]
     if only_local:
-        print(f"[ПРОВЕРКА] Есть только в Python: {', '.join(only_local)}")
+        print(f"[VERIFY] Only in Python: {', '.join(only_local)}")
     if only_mod:
-        print(f"[ПРОВЕРКА] Есть только в моде: {', '.join(only_mod)}")
+        print(f"[VERIFY] Only in the mod: {', '.join(only_mod)}")
     if not only_local and not only_mod:
-        print("[ПРОВЕРКА] Реестры совпадают.")
+        print("[VERIFY] The registries match.")
         return True
     return False
 
 
 def run_train(scene):
-    """Запускает обучение (train.py) для выбранного босса в этой же консоли.
+    """Runs training (train.py) for the selected boss in this same console.
 
-    Ctrl+C в train.py корректно сохраняет модель и статистику нормализации
-    в models/ppo_hk/<сцена>/.
+    Ctrl+C in train.py correctly saves the model and the normalization
+    statistics to models/ppo_hk/<scene>/.
     """
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    print(f"\n[ОБУЧЕНИЕ] Старт train.py для {scene}. Ctrl+C — прервать с сохранением.\n")
+    print(f"\n[TRAIN] Starting train.py for {scene}. Ctrl+C — interrupt and save.\n")
     try:
         return subprocess.call(
             [sys.executable, os.path.join(script_dir, "train.py"), "--boss", scene],
             cwd=script_dir,
         )
     except KeyboardInterrupt:
-        print("\n[ОБУЧЕНИЕ] Прервано (Ctrl+C).")
+        print("\n[TRAIN] Interrupted (Ctrl+C).")
         return 130
 
 
 def teleport_to(query, timeout=45.0):
-    """Телепорт к боссу по запросу и ожидание начала боя.
+    """Teleports to a boss by query and waits for the fight to start.
 
-    Возвращает (ok, scene) — сцена резолвится локально.
+    Returns (ok, scene) — the scene is resolved locally.
     """
     resolved = resolve_query(query)
     if resolved is None:
-        print(f"[ТЕЛЕПОРТ] Босс не распознан: {query!r}. Смотри: python teleport.py --list")
+        print(f"[TELEPORT] Boss not recognized: {query!r}. See: python teleport.py --list")
         return False, None
 
     scene, label = resolved
     before = current_scene()
-    print(f"[ТЕЛЕПОРТ] Босс: {label} ({scene})")
+    print(f"[TELEPORT] Boss: {label} ({scene})")
 
     if before == scene:
-        # Уже в нужной сцене — мод просто перезагрузит арену (рестарт боя).
-        print("[ТЕЛЕПОРТ] Сцена уже активна — рестарт арены.")
+        # Already in the required scene — the mod will simply reload the arena (fight restart).
+        print("[TELEPORT] The scene is already active — restarting the arena.")
 
     request_boss(scene)
 
     def progress(current, status):
         if current and current != before:
-            print(f"[ТЕЛЕПОРТ] Загрузка: {current} ({status})...")
+            print(f"[TELEPORT] Loading: {current} ({status})...")
 
     ok = wait_for_scene(scene, timeout=timeout, on_progress=progress)
     if ok:
-        print(f"[ТЕЛЕПОРТ] Готово: бой на арене {scene} начался!")
+        print(f"[TELEPORT] Done: the fight in arena {scene} has started!")
     else:
-        print("[ТЕЛЕПОРТ] Бой не поднялся за отведённое время.")
-        print("           Проверь ModLog (мод пишет гейты сцены и выбранный вход) — "
-              "мод подбирает существующий гейт сам, вручную править нужно редко:")
-        print("           командой set_gate <гейт> или переменной HK_ENTRY_GATE.")
+        print("[TELEPORT] The fight did not come up within the allotted time.")
+        print("           Check the ModLog (the mod logs the scene gates and the chosen entry) — "
+              "the mod picks an existing gate on its own, manual edits are rarely needed:")
+        print("           with the set_gate <gate> command or the HK_ENTRY_GATE variable.")
     return ok, scene
 
 
-# Хабы Godhome без боссов — обучение там не имеет смысла.
+# Godhome hubs without bosses — training there makes no sense.
 NON_TRAIN_SCENES = {"GG_Atrium", "GG_Workshop", "GG_Boss_Door_Entrance"}
 
 
 def maybe_train(scene, auto_train):
-    """Запускает обучение сцены (или спрашивает), кроме хабов без боссов."""
+    """Starts training for the scene (or asks), except for hubs without bosses."""
     if not scene:
         return
     if scene in NON_TRAIN_SCENES:
-        print(f"[ОБУЧЕНИЕ] {scene} — хаб без босса, обучение не запускаю.")
-        print("           Выбери арену с боссом (python teleport.py --list).")
+        print(f"[TRAIN] {scene} — a hub without a boss, not starting training.")
+        print("           Pick an arena with a boss (python teleport.py --list).")
         return
     if auto_train:
         run_train(scene)
         return
     try:
-        answer = input("Запустить обучение этого босса? [Y/n]> ").strip().lower()
+        answer = input("Start training for this boss? [Y/n]> ").strip().lower()
     except (EOFError, KeyboardInterrupt):
         print()
         return
-    if answer in ("", "y", "yes", "д", "да"):
+    # "\u0434" / "\u0434\u0430" are the Russian "y" / "yes" aliases, kept so the usual
+    # keyboard habit still works (escaped so the source stays ASCII).
+    if answer in ("", "y", "yes", "\u0434", "\u0434\u0430"):
         run_train(scene)
 
 
 def interactive_loop(auto_train=False):
     current = current_scene()
     if current:
-        print(f"[ТЕЛЕПОРТ] Текущая сцена: {current}")
-    print("[ТЕЛЕПОРТ] Введи номер/имя босса, r (рестарт), w (варп к гейту), list, q (выход).\n")
+        print(f"[TELEPORT] Current scene: {current}")
+    print("[TELEPORT] Enter a boss number/name, r (restart), w (warp to gate), list, q (quit).\n")
 
     while True:
         try:
             query = input("boss> ").strip()
         except (EOFError, KeyboardInterrupt):
-            print("\n[ТЕЛЕПОРТ] Выход.")
+            print("\n[TELEPORT] Exiting.")
             return
 
         if not query:
             continue
         low = query.lower()
         if low in ("q", "quit", "exit"):
-            print("[ТЕЛЕПОРТ] Выход.")
+            print("[TELEPORT] Exiting.")
             return
         if low in ("list", "l", "ls", "--list"):
             print_boss_list()
             continue
         if low == "r":
-            print("[ТЕЛЕПОРТ] Рестарт боя...")
+            print("[TELEPORT] Restarting the fight...")
             request_restart()
             if wait_for_scene(current_scene(), timeout=30.0):
-                print("[ТЕЛЕПОРТ] Бой перезапущен.")
+                print("[TELEPORT] The fight has been restarted.")
             else:
-                print("[ТЕЛЕПОРТ] Бой не перезапустился.")
+                print("[TELEPORT] The fight was not restarted.")
             continue
         if low == "w":
-            print("[ТЕЛЕПОРТ] Варп к гейту арены...")
+            print("[TELEPORT] Warping to the arena gate...")
             request_warp()
             continue
 
@@ -236,15 +238,15 @@ def interactive_loop(auto_train=False):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Телепорт к боссам пантеона Hollow Knight")
-    parser.add_argument("--boss", metavar="ИМЯ", help="номер/имя сцены/алиас босса")
+    parser = argparse.ArgumentParser(description="Teleport to Hollow Knight pantheon bosses")
+    parser.add_argument("--boss", metavar="NAME", help="boss list number/scene name/alias")
     parser.add_argument("--train", action="store_true",
-                        help="после телепортации сразу запустить train.py для выбранного босса")
-    parser.add_argument("--list", action="store_true", help="показать список боссов")
+                        help="run train.py for the selected boss right after the teleport")
+    parser.add_argument("--list", action="store_true", help="show the boss list")
     parser.add_argument("--verify", action="store_true",
-                        help="сверить реестр боссов Python и мода (через пайп)")
-    parser.add_argument("--restart", action="store_true", help="рестарт боя в текущей сцене")
-    parser.add_argument("--warp", action="store_true", help="варп героя к гейту арены")
+                        help="compare the Python and mod boss registries (over the pipe)")
+    parser.add_argument("--restart", action="store_true", help="restart the fight in the current scene")
+    parser.add_argument("--warp", action="store_true", help="warp the hero to the arena gate")
     args = parser.parse_args()
 
     if args.list:
@@ -260,14 +262,14 @@ def main():
         if not have_mod:
             sys.exit(1)
         request_restart()
-        print("[ТЕЛЕПОРТ] Команда рестарта отправлена.")
+        print("[TELEPORT] Restart command sent.")
         return
 
     if args.warp:
         if not have_mod:
             sys.exit(1)
         request_warp()
-        print("[ТЕЛЕПОРТ] Команда варпа отправлена.")
+        print("[TELEPORT] Warp command sent.")
         return
 
     if args.boss:
@@ -278,10 +280,10 @@ def main():
             maybe_train(scene, auto_train=args.train)
         return
 
-    # Интерактивное меню
+    # Interactive menu
     print_boss_list()
     if not have_mod:
-        print("[ТЕЛЕПОРТ] Интерактивный режим требует запущенной игры с модом.")
+        print("[TELEPORT] Interactive mode requires the game running with the mod.")
         sys.exit(1)
     interactive_loop(auto_train=args.train)
 

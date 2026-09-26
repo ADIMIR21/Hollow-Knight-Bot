@@ -1,16 +1,17 @@
 # -*- coding: utf-8 -*-
-"""Интеграционный тест Python-клиента пайпа против mock-сервера мода.
+"""Integration test for the Python named-pipe client against the mod's mock server.
 
-Проверяет транспорт (hk_pipe), протокол команд (bosses) и логику телепорта
-(teleport) без запущенной игры. Запускать из корня репозитория.
+Covers the transport (hk_pipe), the command protocol (bosses) and the teleport
+logic (teleport) without a running game. Run from the repository root.
 """
 import os
 import sys
 import time
 
-# Стенд слушает своё имя пайпа: без этого тест подключился бы к пайпу
-# запущенной игры и начал бы управлять модом вместо макета (так и случилось
-# однажды — тест ушёл телепортировать героя в GG_No_Such_Boss_Scene).
+# The harness listens on its own pipe name: without this the test would connect to
+# the pipe of a running game and start driving the mod instead of the mock (that is
+# exactly what happened once — the test went off to teleport the knight into
+# GG_No_Such_Boss_Scene).
 os.environ.setdefault("HK_PIPE_NAME", "hk_ai_mod_sim")
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
@@ -32,111 +33,111 @@ def check(name, cond, extra=""):
 
 client = get_shared_client()
 
-print("\n[1] Подключение и hello")
+print("\n[1] Connection and hello")
 check("wait_connected", client.wait_connected(timeout=10.0))
 hello = client.wait_hello(timeout=5.0)
-check("hello получен", hello is not None, hello)
+check("hello received", hello is not None, hello)
 check("protocol == 3", client.protocol == 3, client.protocol)
 check("mod_version == v1", client.mod_version == "v1", client.mod_version)
-check("hello-событие доступно", (client.hello or {}).get("status") == "pipe_hello")
+check("hello event available", (client.hello or {}).get("status") == "pipe_hello")
 
-# Страховка от самого дорогого промаха стенда: подключиться к пайпу живой игры
-# (например, если макет не смог занять имя) и начать телепортировать героя.
-# Мод такого поля не шлёт, поэтому дальше идти нельзя.
+# Guard against the harness's most expensive mistake: connecting to the pipe of a
+# live game (for example, if the mock failed to claim the name) and starting to
+# teleport the knight. The mod does not send such a field, so we must not go on.
 if (hello or {}).get("server") != "hkpipesim":
-    print("\n[СТОП] На пайпе не макет, а что-то другое — похоже, запущенный мод.")
-    print("       Тест управлял бы настоящей игрой, поэтому останавливаюсь.")
-    print("       Проверь HK_PIPE_NAME: макет слушает hk_ai_mod_sim.")
+    print("\n[STOP] The pipe is not the mock but something else — looks like a running mod.")
+    print("       The test would be driving a real game, so I am stopping here.")
+    print("       Check HK_PIPE_NAME: the mock listens on hk_ai_mod_sim.")
     sys.exit(2)
 
-print("\n[2] Поток телеметрии")
+print("\n[2] Telemetry stream")
 deadline = time.time() + 5.0
 while time.time() < deadline and not (client.get_telemetry() or {}).get("scene"):
     time.sleep(0.05)
 t = client.get_telemetry() or {}
 check("status == fight", t.get("status") == "fight", t.get("status"))
-check("поле scene есть", "scene" in t, t.get("scene"))
-check("hp == 9 и boss_hp == 40", t.get("hp") == 9 and t.get("boss_hp") == 40)
+check("scene field present", "scene" in t, t.get("scene"))
+check("hp == 9 and boss_hp == 40", t.get("hp") == 9 and t.get("boss_hp") == 40)
 
 seq0 = client.get_seq()
 time.sleep(0.3)
-check("seq растёт", client.get_seq() > seq0, f"{seq0} -> {client.get_seq()}")
+check("seq grows", client.get_seq() > seq0, f"{seq0} -> {client.get_seq()}")
 s1 = client.get_seq()
 s2 = client.wait_for_fresh(s1, timeout=1.0)
-check("wait_for_fresh отдаёт новый seq", s2 != s1, f"{s1} -> {s2}")
+check("wait_for_fresh returns a new seq", s2 != s1, f"{s1} -> {s2}")
 
-print("\n[3] Команда bosses -> событие boss_list")
+print("\n[3] Command bosses -> boss_list event")
 data = bosses.fetch_boss_list(timeout=5.0)
-check("boss_list получен", data is not None and data.get("status") == "boss_list")
+check("boss_list received", data is not None and data.get("status") == "boss_list")
 if data:
     scenes_mod = [b["scene"] for b in data["bosses"]]
     scenes_py = [s for s, _ in BOSS_LIST]
-    check("count совпадает", data.get("count") == len(BOSS_LIST),
+    check("count matches", data.get("count") == len(BOSS_LIST),
           f"{data.get('count')} vs {len(BOSS_LIST)}")
-    check("списки сцен идентичны", scenes_mod == scenes_py)
+    check("scene lists are identical", scenes_mod == scenes_py)
 
 print("\n[4] teleport.check_mod / verify_registry")
 check("check_mod()", teleport.check_mod() is True)
 check("verify_registry()", teleport.verify_registry() is True)
 
-print("\n[5] Команда boss <сцена> -> boss_selected + бой")
+print("\n[5] Command boss <scene> -> boss_selected + fight")
 before = client.get_status_seq("boss_selected")
-check("request_boss отправлен", bosses.request_boss("GG_Hornet_1"))
+check("request_boss sent", bosses.request_boss("GG_Hornet_1"))
 ev = client.wait_for_status("boss_selected", timeout=5.0, after_seq=before)
-check("boss_selected пришёл", ev is not None, ev)
-check("сцена в событии", (ev or {}).get("scene") == "GG_Hornet_1")
+check("boss_selected received", ev is not None, ev)
+check("scene in event", (ev or {}).get("scene") == "GG_Hornet_1")
 check("wait_for_scene(GG_Hornet_1)", bosses.wait_for_scene("GG_Hornet_1", timeout=5.0))
 check("current_scene()", bosses.current_scene() == "GG_Hornet_1", bosses.current_scene())
 
-print("\n[6] Неизвестный босс -> command_error")
+print("\n[6] Unknown boss -> command_error")
 before = client.get_status_seq("command_error")
 bosses.request_boss("No_Such_Boss_Query")
 ev = client.wait_for_status("command_error", timeout=5.0, after_seq=before)
-check("command_error пришёл", ev is not None, ev)
-check("событие не подменило телеметрию",
+check("command_error received", ev is not None, ev)
+check("event did not replace telemetry",
       (client.get_telemetry() or {}).get("event") is None
       and (client.get_telemetry() or {}).get("status") == "fight",
       client.get_telemetry())
-check("get_last_message() не пуст", client.get_last_message() is not None)
-check("после ошибки сцена не сменилась", bosses.current_scene() == "GG_Hornet_1",
+check("get_last_message() is not empty", client.get_last_message() is not None)
+check("scene unchanged after the error", bosses.current_scene() == "GG_Hornet_1",
       bosses.current_scene())
 
-print("\n[6b] Незнакомая сцена gg_* -> передаётся как есть (правило 7 мода)")
+print("\n[6b] Unfamiliar gg_* scene -> passed through as-is (mod rule 7)")
 before = client.get_status_seq("boss_selected")
-check("request_boss(gg_*) отправлен", bosses.request_boss("GG_No_Such_Boss_Scene"))
+check("request_boss(gg_*) sent", bosses.request_boss("GG_No_Such_Boss_Scene"))
 ev = client.wait_for_status("boss_selected", timeout=5.0, after_seq=before)
-check("мод попытался загрузить сцену, а не ответил ошибкой",
+check("mod attempted to load the scene instead of answering with an error",
       (ev or {}).get("scene") == "GG_No_Such_Boss_Scene", ev)
-bosses.request_boss("GG_Hornet_1")   # вернуть стенд в известное состояние
+bosses.request_boss("GG_Hornet_1")   # return the harness to a known state
 time.sleep(0.3)
 
-print("\n[7] Рестарт боя")
-check("request_restart отправлен", bosses.request_restart())
-check("wait_for_scene после рестарта", bosses.wait_for_scene("GG_Hornet_1", timeout=5.0))
-check("restart_pending вернулся в 0",
+print("\n[7] Fight restart")
+check("request_restart sent", bosses.request_restart())
+check("wait_for_scene after restart", bosses.wait_for_scene("GG_Hornet_1", timeout=5.0))
+check("restart_pending is back to 0",
       int((client.get_telemetry() or {}).get("restart_pending", 0)) == 0)
 
 print("\n[8] set_boss / set_gate")
 check("set_boss_scene", bosses.set_boss_scene("GG_Mantis_Lords"))
 check("set_gate", bosses.set_gate("door2"))
 
-print("\n[9] teleport.teleport_to по алиасу")
+print("\n[9] teleport.teleport_to by alias")
 ok, scene = teleport.teleport_to("nkg", timeout=8.0)
 check("teleport_to('nkg') -> GG_Grimm_Nightmare",
       ok is True and scene == "GG_Grimm_Nightmare", (ok, scene))
 
-print("\n[10] Варп")
-check("request_warp отправлен", bosses.request_warp())
+print("\n[10] Warp")
+check("request_warp sent", bosses.request_warp())
 
-print("\n[11] Хелперы bosses")
+print("\n[11] bosses helpers")
 check("mod_has_scene_field()", bosses.mod_has_scene_field() is True)
 check("mod_protocol() == 3", bosses.mod_protocol() == 3)
 check("is_connected()", bosses.is_connected(timeout=2.0) is True)
 
 print()
 if FAILS:
-    print(f"ПРОВАЛЕНО ПРОВЕРОК: {len(FAILS)}")
+    print(f"CHECKS FAILED: {len(FAILS)}")
     for f in FAILS:
         print("  - " + f)
     sys.exit(1)
-print("ВСЕ ПРОВЕРКИ ПРОШЛИ")
+print("ALL CHECKS PASSED")

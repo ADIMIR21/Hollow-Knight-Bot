@@ -13,34 +13,45 @@ namespace HK_AI_Mod
 {
     public class AiDataExporter : Mod
     {
-        // ВАЖНО: версия намеренно зафиксирована как "v1" — НЕ меняй её при каждом изменении
-        // мода. Она нужна только для того, чтобы в ModLog было видно, какая сборка
-        // загружена игрой. Историю изменений ведём в README, а не в этой строке.
+        // IMPORTANT: the version is deliberately pinned as "v1" — do NOT bump it on every
+        // mod change. It only exists so that ModLog shows which build the game
+        // loaded. We keep the changelog in README, not in this string.
         public override string GetVersion() => "v1";
 
-        // ---------------- Транспорт: именованный пайп (протокол 3) ----------------
-        // Сервер: \\.\pipe\hk_ai_mod (duplex, построчный обмен), поднимается
-        // напрямую через kernel32 — см. Win32Pipe.cs и объяснение там же, почему
-        // нельзя взять System.IO.Pipes.NamedPipeServerStream (в Mono игры все его
-        // конструкторы — заглушки с NotImplementedException).
-        //   Мод   -> Python: строки JSON — hello при подключении, затем телеметрия,
-        //                     плюс одноразовые события (список боссов, подтверждения).
-        //   Python -> Мод: текстовые команды (см. HandleCommand):
+        // ---------------- Transport: named pipe (protocol 3) ----------------
+        // Server: \\.\pipe\hk_ai_mod (duplex, line-based exchange), created
+        // directly through kernel32 — see Win32Pipe.cs and the explanation there why
+        // System.IO.Pipes.NamedPipeServerStream cannot be used (in the game's Mono all of
+        // its constructors are stubs throwing NotImplementedException).
+        //   Mod    -> Python: JSON lines — hello on connect, then telemetry,
+        //                     plus one-shot events (boss list, confirmations).
+        //   Python -> Mod: text commands (see HandleCommand):
         //                     restart [scene] [gate] | teleport | set_boss <scene>
-        //                     set_gate <gate> | boss <запрос> | bosses | warp
-        // Пайп заменяет прежнюю связку файлов %TEMP%\hk_ai_data.json / hk_ai_cmd.txt
-        // / hk_ai_boss.txt / hk_ai_gate.txt / hk_ai_bosses.json: без гонок за файл,
-        // без лишних снов на Python-стороне и без ожидания опроса файла модом.
+        //                     set_gate <gate> | boss <query> | bosses | warp
+        // The pipe replaces the former set of files %TEMP%\hk_ai_data.json / hk_ai_cmd.txt
+        // / hk_ai_boss.txt / hk_ai_gate.txt / hk_ai_bosses.json: no file races,
+        // no extra sleeps on the Python side and no file polling by the mod.
         private const string PIPE_NAME = "hk_ai_mod";
         private const int MAX_PIPE_CLIENTS = 4;
         private const int PIPE_POLL_MS = 25;
         private const int PROTOCOL_VERSION = 3;
         private const string MOD_VERSION = "v1";
         private const int MAX_OUTBOX = 256;
+        // A client that stops reading makes WriteFile block once the pipe's out buffer is
+        // full, and the slot thread never gets back to ConnectNamedPipe — the slot would be
+        // lost for good. After this many milliseconds the stuck write is cancelled and the
+        // slot rebuilds its pipe instance (see PipeSlotWatchdogLoop).
+        private const int WRITE_STUCK_MS = 3000;
 
-        // Одноразовые события (список боссов, подтверждение выбора) в отличие от
-        // телеметрии не перетираются свежим кадром: их получает каждый подключённый
-        // клиент ровно один раз — по монотонному id, который помнит с момента connect.
+        // Per-slot bookkeeping for that watchdog: the pipe handle, the id of the thread
+        // serving it and the tick at which the current write started (0 = no write in flight).
+        private readonly IntPtr[] _slotHandles = new IntPtr[MAX_PIPE_CLIENTS];
+        private readonly uint[] _slotThreads = new uint[MAX_PIPE_CLIENTS];
+        private readonly int[] _slotWriteSince = new int[MAX_PIPE_CLIENTS];
+
+        // One-shot events (boss list, selection confirmation), unlike telemetry,
+        // are not overwritten by the newest frame: every connected client receives
+        // them exactly once — by a monotonic id remembered since connect.
         private readonly List<KeyValuePair<long, string>> _outbox = new List<KeyValuePair<long, string>>();
         private long _outboxSeq = 0;
 
@@ -52,8 +63,8 @@ namespace HK_AI_Mod
 
         private string _targetScene = DEFAULT_BOSS_SCENE;
         private string _targetGate = DEFAULT_ENTRY_GATE;
-        // scene -> входной гейт, который РЕАЛЬНО существует в сцене (выучивается при
-        // загрузке сцены, чтобы переход в незагруженную сцену тоже попал в её гейт).
+        // scene -> entry gate that REALLY exists in the scene (learned when the scene
+        // loads, so that a transition into a not-yet-loaded scene also lands in its gate).
         private readonly Dictionary<string, string> _sceneGates = new Dictionary<string, string>();
 
         private HealthManager? _currentBoss = null;
@@ -71,26 +82,26 @@ namespace HK_AI_Mod
         private const int ATTACK_STICKY_MIN_FRAMES = 2;
 
         private bool _restartPending = false;
-        // Отложенный рестарт: команда принята, но переход сцены выполняется не сразу,
-        // а когда игра не занята своим сценарием победы/смерти (иначе белый фейд
-        // игры остаётся висеть на экране, см. комментарий у TryPerformPendingTransition).
+        // Deferred restart: the command is accepted, but the scene transition is not done
+        // immediately, only when the game is not busy with its own victory/death scenario
+        // (otherwise the game's white fade stays on screen, see TryPerformPendingTransition).
         private bool _restartRequested = false;
         private float _restartRequestedAt = 0f;
         private string _restartTargetScene = "";
         private string _restartGate = "";
-        // Если после запроса сцена уже сменилась — собственный сценарий конца боя
-        // (смерть/выход арены) доигран, и ждать больше нечего.
+        // If the scene already changed after the request, the game's own end-of-fight
+        // scenario (death / arena exit) has finished and there is nothing left to wait for.
         private bool _sceneChangedSinceRequest = false;
         private string _deferReasonLastLogged = "";
         private const float RESTART_FORCE_TIMEOUT = 10f;
-        // Сторож фейда: игра умеет сама гасить залипший фейд (CameraController.FadeInFailSafe),
-        // но в этой сборке игры корутина нигде не запускается — делаем это сами.
+        // Fade watchdog: the game can clear a stuck fade itself (CameraController.FadeInFailSafe),
+        // but in this build of the game that coroutine is never started — so we do it ourselves.
         private string _fadeStateLastLogged = "";
         private float _fadeNotNormalSince = -1f;
         private int _fadeRescueAttempts = 0;
         private const float FADE_STUCK_TIMEOUT = 1.5f;
-        // 'FadingOut' — промежуточное состояние: если игра уже спокойна (сцена загружена,
-        // герой не в переходе), а фейд всё ещё в нём, ждать долго нечего.
+        // 'FadingOut' is a transient state: if the game is already calm (scene loaded,
+        // hero not transitioning) while the fade is still in it, there is nothing to wait for.
         private const float FADE_STUCK_FADINGOUT_TIMEOUT = 1.0f;
         private bool _inMenuScene = true;
         private bool _bossDead = false;
@@ -98,15 +109,15 @@ namespace HK_AI_Mod
         private float _watchdogTimer = 0f;
         private int _forcedEntryAttempts = 0;
         private const string DEFAULT_BOSS_SCENE = "GG_False_Knight";
-        // Арены Godhome входят в сцену через гейт door_dreamEnter — это единственный
-        // TransitionPoint в GG_* сценах боссов (проверено вживую в GG_False_Knight и
-        // GG_Hornet_1). Мод всё равно сверяет его с реальными TransitionPoint сцены,
-        // а явно заданный set_gate важнее.
+        // Godhome arenas enter the scene through the door_dreamEnter gate — it is the only
+        // TransitionPoint in GG_* boss scenes (verified live in GG_False_Knight and
+        // GG_Hornet_1). The mod still matches it against the scene's real TransitionPoints,
+        // and an explicitly set set_gate takes priority.
         private const string DEFAULT_ENTRY_GATE = "door_dreamEnter";
 
-        // ---------------- Реестр боссов Godhome (пантеоны) ----------------
-        // Сцены взяты из build settings игры (hollow_knight_Data/globalgamemanagers).
-        // Варианты с суффиксом _V — усложнённые версии боёв (Ascended/Radiant),
+        // ---------------- Godhome boss registry (pantheons) ----------------
+        // Scenes are taken from the game's build settings (hollow_knight_Data/globalgamemanagers).
+        // Entries with the _V suffix are the harder fight versions (Ascended/Radiant),
         // GG_Mantis_Lords_V = Sisters of Battle, GG_Nosk_Hornet = Winged Nosk.
         public struct BossEntry
         {
@@ -122,14 +133,14 @@ namespace HK_AI_Mod
 
         private static readonly BossEntry[] BossRegistry = new BossEntry[]
         {
-            // --- Пантеон Мастера (ранние боссы) ---
+            // --- Pantheon of the Master (early bosses) ---
             new BossEntry("GG_Vengefly", "Vengefly King"),
             new BossEntry("GG_Gruz_Mother", "Gruz Mother"),
             new BossEntry("GG_False_Knight", "False Knight"),
             new BossEntry("GG_Mega_Moss_Charger", "Massive Moss Charger"),
             new BossEntry("GG_Hornet_1", "Hornet Protector"),
             new BossEntry("GG_Brooding_Mawlek", "Brooding Mawlek"),
-            // --- Пантеон Художника (раньше-середина игры) ---
+            // --- Pantheon of the Artist (early-to-mid game) ---
             new BossEntry("GG_Soul_Master", "Soul Master"),
             new BossEntry("GG_Crystal_Guardian", "Crystal Guardian"),
             new BossEntry("GG_Crystal_Guardian_2", "Enraged Guardian"),
@@ -144,7 +155,7 @@ namespace HK_AI_Mod
             new BossEntry("GG_Nosk", "Nosk"),
             new BossEntry("GG_Mantis_Lords", "Mantis Lords"),
             new BossEntry("GG_Broken_Vessel", "Broken Vessel"),
-            // --- Пантеон Мудреца (середина-поздняя игра) ---
+            // --- Pantheon of the Sage (mid-to-late game) ---
             new BossEntry("GG_Lost_Kin", "Lost Kin"),
             new BossEntry("GG_Failed_Champion", "Failed Champion"),
             new BossEntry("GG_Traitor_Lord", "Traitor Lord"),
@@ -158,20 +169,20 @@ namespace HK_AI_Mod
             new BossEntry("GG_Ghost_Markoth", "Markoth"),
             new BossEntry("GG_Ghost_Galien", "Galien"),
             new BossEntry("GG_Ghost_Hu", "Elder Hu"),
-            // --- Пантеон Рыцаря (поздние боссы) ---
+            // --- Pantheon of the Knight (late bosses) ---
             new BossEntry("GG_Hornet_2", "Hornet Sentinel"),
             new BossEntry("GG_Grey_Prince_Zote", "Grey Prince Zote"),
             new BossEntry("GG_White_Defender", "White Defender"),
             new BossEntry("GG_Grimm_Nightmare", "Nightmare King Grimm"),
             new BossEntry("GG_Hollow_Knight", "Pure Vessel"),
-            // --- Пантеон Халлоунеста (финал) ---
+            // --- Pantheon of Hallownest (finale) ---
             new BossEntry("GG_Radiance", "The Radiance"),
-            // --- Гвоздемастеры (финалы пантеонов 1-3) ---
+            // --- Nailmasters (finales of pantheons 1-3) ---
             new BossEntry("GG_Nailmasters", "Brothers Oro & Mato"),
             new BossEntry("GG_Painter", "Paintmaster Sheo"),
             new BossEntry("GG_Sly", "Great Nailsage Sly"),
             new BossEntry("GG_Lurker", "Pale Lurker"),
-            // --- Усложнённые варианты боёв (Ascended/Radiant) ---
+            // --- Harder fight variants (Ascended/Radiant) ---
             new BossEntry("GG_Mantis_Lords_V", "Sisters of Battle"),
             new BossEntry("GG_Nosk_Hornet", "Winged Nosk"),
             new BossEntry("GG_Vengefly_V", "Vengefly King (Variant)"),
@@ -186,14 +197,14 @@ namespace HK_AI_Mod
             new BossEntry("GG_Ghost_Markoth_V", "Markoth (Variant)"),
             new BossEntry("GG_Ghost_No_Eyes_V", "No Eyes (Variant)"),
             new BossEntry("GG_Ghost_Xero_V", "Xero (Variant)"),
-            // --- Хаб Godhome (не боссы, но полезно телепортироваться) ---
-            new BossEntry("GG_Atrium", "Godhome Atrium (хаб)"),
-            new BossEntry("GG_Workshop", "Godhome Workshop (верстак)"),
-            new BossEntry("GG_Boss_Door_Entrance", "Двери пантеонов"),
+            // --- Godhome hub (not bosses, but handy to teleport to) ---
+            new BossEntry("GG_Atrium", "Godhome Atrium (hub)"),
+            new BossEntry("GG_Workshop", "Godhome Workshop (workbench)"),
+            new BossEntry("GG_Boss_Door_Entrance", "Pantheon Doors"),
         };
 
-        // Все GG_-сцены из build settings игры — для канонизации имён,
-        // введённых пользователем в любом регистре (gg_hornet_1 -> GG_Hornet_1).
+        // All GG_ scenes from the game's build settings — for canonicalizing names
+        // entered by the user in any case (gg_hornet_1 -> GG_Hornet_1).
         private static readonly string[] KnownScenes = new string[]
         {
             "GG_Atrium", "GG_Atrium_Roof", "GG_Blue_Room", "GG_Boss_Door_Entrance",
@@ -218,7 +229,7 @@ namespace HK_AI_Mod
             "GG_White_Defender", "GG_Workshop", "GG_Wyrm"
         };
 
-        // Популярные короткие алиасы, которых нет в самих именах сцен.
+        // Popular short aliases that are not part of the scene names themselves.
         private static readonly Dictionary<string, string> ExtraAliases = new Dictionary<string, string>
         {
             { "hornet", "GG_Hornet_1" },
@@ -302,8 +313,8 @@ namespace HK_AI_Mod
             pipeThread.Start();
 
             Publish(StatusJson("initialized"));
-            Log($"[ИИ] Экспортер {MOD_VERSION} работает! Пайп: \\\\.\\pipe\\{PIPE_NAME}");
-            Log("[ИИ] Команды: restart | teleport | set_boss <сцена> | set_gate <гейт> | boss <запрос> | bosses | warp");
+            Log($"[AI] Exporter {MOD_VERSION} is running! Pipe: \\\\.\\pipe\\{PIPE_NAME}");
+            Log("[AI] Commands: restart | teleport | set_boss <scene> | set_gate <gate> | boss <query> | bosses | warp");
         }
 
         private void SubscribeBossDeath()
@@ -327,7 +338,7 @@ namespace HK_AI_Mod
         private void OnBossesDeadHandler()
         {
             _bossDead = true;
-            Log("[ИИ] Босс мёртв (событие BossSceneController)");
+            Log("[AI] Boss is dead (BossSceneController event)");
         }
 
         private void OnTick(float unscaledDelta)
@@ -343,7 +354,7 @@ namespace HK_AI_Mod
             while (_incomingCommands.TryDequeue(out string line))
             {
                 try { HandleCommand(line); }
-                catch (Exception e) { Log("[ИИ] Ошибка команды: " + e); }
+                catch (Exception e) { Log("[AI] Command error: " + e); }
             }
         }
 
@@ -366,22 +377,22 @@ namespace HK_AI_Mod
                     if (parts.Length >= 2)
                     {
                         _targetGate = parts[1];
-                        Log($"[ИИ] Точка входа: {_targetGate}");
+                        Log($"[AI] Entry gate: {_targetGate}");
                     }
                     break;
 
-                // "boss <запрос>" — выбрать босса пантеона и телепортироваться к нему.
+                // "boss <query>" — select a pantheon boss and teleport to it.
                 case "boss":
                     SelectBoss(rest);
                     break;
 
-                // "bosses" — выгрузить реестр. Работает даже в главном меню.
+                // "bosses" — dump the registry. Works even in the main menu.
                 case "bosses":
                     PublishEvent(BossListJson());
-                    Log($"[ИИ] Список боссов отправлен в пайп ({BossRegistry.Length} записей)");
+                    Log($"[AI] Boss list sent to the pipe ({BossRegistry.Length} entries)");
                     break;
 
-                // "warp" — вернуть героя к гейту арены без перезагрузки сцены.
+                // "warp" — return the hero to the arena gate without reloading the scene.
                 case "warp":
                     WarpHeroToGate();
                     break;
@@ -394,26 +405,26 @@ namespace HK_AI_Mod
                     break;
 
                 default:
-                    Log($"[ИИ] Неизвестная команда: '{line}'");
-                    PublishEvent(CommandErrorJson(line, "неизвестная команда"));
+                    Log($"[AI] Unknown command: '{line}'");
+                    PublishEvent(CommandErrorJson(line, "unknown command"));
                     break;
             }
         }
 
-        // Целевая сцена может прийти алиасом ("hornet", "nkg") или номером
-        // реестра — разворачиваем её так же, как команда "boss".
+        // The target scene may arrive as an alias ("hornet", "nkg") or as a registry
+        // index — we resolve it exactly the same way the "boss" command does.
         private void SetTargetScene(string scene)
         {
             string resolved, label;
             if (TryResolveBoss(scene, out resolved, out label))
             {
                 _targetScene = resolved;
-                Log($"[ИИ] Целевая сцена босса: {_targetScene} ({label})");
+                Log($"[AI] Target boss scene: {_targetScene} ({label})");
             }
             else
             {
                 _targetScene = scene;
-                Log($"[ИИ] Целевая сцена босса: {_targetScene} (не распознана, передаю как есть)");
+                Log($"[AI] Target boss scene: {_targetScene} (not recognized, passing it through as is)");
             }
         }
 
@@ -422,27 +433,27 @@ namespace HK_AI_Mod
             string scene, label;
             if (!TryResolveBoss(query, out scene, out label))
             {
-                Log($"[ИИ] Босс не распознан: '{query}'. Отправь команду 'bosses' для списка.");
-                PublishEvent(CommandErrorJson("boss " + query, "босс не распознан"));
+                Log($"[AI] Boss not recognized: '{query}'. Send the 'bosses' command for the list.");
+                PublishEvent(CommandErrorJson("boss " + query, "boss not recognized"));
                 return;
             }
 
             _targetScene = scene;
-            Log($"[ИИ] Выбран босс: {label} ({scene})");
+            Log($"[AI] Boss selected: {label} ({scene})");
             PublishEvent("{\"status\": \"boss_selected\", \"scene\": \"" + scene
                 + "\", \"label\": \"" + label + "\"}");
             TryRestart();
         }
 
-        // Команда рестарта/телепорта только принимается. Сам переход делает
-        // TryPerformPendingTransition, когда игра освободится: если дёрнуть сцену
-        // посреди сценария смерти или белого выхода арены, фейд камеры остаётся
-        // на экране, а герой — в transitioning (см. ResolveEntryGate).
+        // The restart/teleport command is only accepted. The transition itself is performed
+        // by TryPerformPendingTransition once the game frees up: if the scene is yanked
+        // in the middle of the death or white arena-exit scenario, the camera fade stays
+        // on screen and the hero stays in transitioning (see ResolveEntryGate).
         private void TryRestart()
         {
             if (_inMenuScene)
             {
-                Log("[ИИ] Рестарт проигнорирован: мы в меню");
+                Log("[AI] Restart ignored: we are in the menu");
                 return;
             }
             if (_restartPending) return;
@@ -456,7 +467,7 @@ namespace HK_AI_Mod
 
             string gate = ResolveEntryGate(_targetScene);
             _restartGate = gate;
-            Log($"[ИИ] Быстрый рестарт: цель '{_targetScene}', гейт '{gate}' — команда принята, переход выполню, когда игра освободится");
+            Log($"[AI] Fast restart: target '{_targetScene}', gate '{gate}' — command accepted, I will perform the transition once the game frees up");
         }
 
         private void TransitionWatchdogTick(float unscaledDelta)
@@ -516,13 +527,13 @@ namespace HK_AI_Mod
                         if (registry != null)
                             foreach (TransitionPoint tp in registry)
                                 names.Append(tp != null ? tp.name : "null").Append("; ");
-                        Log($"[ИИ] Активные гейты сцены: {names}");
+                        Log($"[AI] Active scene gates: {names}");
                     }
                     catch (Exception) {}
                 }
                 if (gate == null)
                     gate = FindTransitionGate(hero.transform, gateName);
-                Log($"[ИИ] Герой завис в transitioning. Гейт '{gateName}' найден: {gate != null}{(gate != null ? $" ({gate.name})" : "")}, попытка #{_forcedEntryAttempts}");
+                Log($"[AI] Hero is stuck in transitioning. Gate '{gateName}' found: {gate != null}{(gate != null ? $" ({gate.name})" : "")}, attempt #{_forcedEntryAttempts}");
 
                 if (gate != null && _forcedEntryAttempts == 0)
                 {
@@ -548,11 +559,11 @@ namespace HK_AI_Mod
                     if (heroRenderer != null) heroRenderer.enabled = true;
                 }
                 catch (Exception) {}
-                Log("[ИИ] Герой выставлен у гейта вручную и разблокирован");
+                Log("[AI] Hero placed at the gate manually and unblocked");
             }
             catch (Exception e)
             {
-                Log($"[ИИ] Ошибка watchdog перехода: {e}");
+                Log($"[AI] Transition watchdog error: {e}");
             }
         }
 
@@ -594,7 +605,7 @@ namespace HK_AI_Mod
             return null;
         }
 
-        // ---------------- Выбор босса Godhome ----------------
+        // ---------------- Godhome boss selection ----------------
 
         private static string NormalizeQuery(string query)
         {
@@ -605,8 +616,8 @@ namespace HK_AI_Mod
             return norm.Trim('_');
         }
 
-        // Канонизация имени сцены: пользователь может ввести "gg_hornet_1"
-        // в любом регистре — подставляем точное имя из build settings.
+        // Scene name canonicalization: the user may type "gg_hornet_1"
+        // in any case — we substitute the exact name from build settings.
         private static bool TryCanonicalizeScene(string normalized, out string scene)
         {
             foreach (string known in KnownScenes)
@@ -621,8 +632,8 @@ namespace HK_AI_Mod
             return false;
         }
 
-        // Разбирает запрос на босса: номер в списке, имя сцены (любой регистр),
-        // короткий алиас, точное или частичное название босса.
+        // Parses a boss query: index in the list, scene name (any case),
+        // short alias, exact or partial boss name.
         private static bool TryResolveBoss(string query, out string scene, out string label)
         {
             scene = null;
@@ -631,7 +642,7 @@ namespace HK_AI_Mod
 
             string norm = NormalizeQuery(query);
 
-            // 1. Номер в реестре (1-based)
+            // 1. Index in the registry (1-based)
             int index;
             if (int.TryParse(norm, out index) && index >= 1 && index <= BossRegistry.Length)
             {
@@ -640,7 +651,7 @@ namespace HK_AI_Mod
                 return true;
             }
 
-            // 2. Точное имя сцены из реестра (без учёта регистра)
+            // 2. Exact scene name from the registry (case-insensitive)
             foreach (BossEntry e in BossRegistry)
             {
                 if (e.Scene.ToLowerInvariant() == norm)
@@ -651,7 +662,7 @@ namespace HK_AI_Mod
                 }
             }
 
-            // 3. Короткий алиас (hornet, nkg, sisters, ...)
+            // 3. Short alias (hornet, nkg, sisters, ...)
             string aliasScene;
             if (ExtraAliases.TryGetValue(norm, out aliasScene))
             {
@@ -666,7 +677,7 @@ namespace HK_AI_Mod
                 }
             }
 
-            // 4. Точное название босса
+            // 4. Exact boss name
             foreach (BossEntry e in BossRegistry)
             {
                 if (NormalizeQuery(e.Label) == norm)
@@ -677,18 +688,18 @@ namespace HK_AI_Mod
                 }
             }
 
-            // 5. Имя сцены из build settings, не попавшее в реестр
-            // (GG_Spa, GG_Wyrm, GG_Engine и т.п.)
+            // 5. Scene name from build settings that did not make it into the registry
+            // (GG_Spa, GG_Wyrm, GG_Engine and the like)
             string canonical;
             if (TryCanonicalizeScene(norm, out canonical))
             {
                 scene = canonical;
-                label = canonical + " (сцена без реестра)";
+                label = canonical + " (scene not in registry)";
                 return true;
             }
 
-            // 6. Частичное совпадение по сцене/названию; при неоднозначности
-            // предпочитаем базовую версию босса (не (Variant) и не *_V)
+            // 6. Partial match on scene/label; on ambiguity we
+            // prefer the base version of the boss (not (Variant) and not *_V)
             string matched = null;
             string matchedLabel = null;
             foreach (BossEntry e in BossRegistry)
@@ -698,12 +709,12 @@ namespace HK_AI_Mod
                     continue;
                 if (matched != null)
                 {
-                    // Второй кандидат: сузим до базовой версии, если возможно
+                    // Second candidate: narrow down to the base version if possible
                     bool curIsVariant = matched.EndsWith("_V") || matchedLabel.Contains("(Variant)");
                     bool newIsVariant = e.Scene.EndsWith("_V") || e.Label.Contains("(Variant)");
-                    if (newIsVariant) continue;          // вариант хуже базовой версии
+                    if (newIsVariant) continue;          // a variant is worse than the base version
                     if (curIsVariant) { matched = e.Scene; matchedLabel = e.Label; continue; }
-                    return false;                        // две базовые версии — неоднозначно
+                    return false;                        // two base versions — ambiguous
                 }
                 matched = e.Scene;
                 matchedLabel = e.Label;
@@ -715,11 +726,11 @@ namespace HK_AI_Mod
                 return true;
             }
 
-            // 7. Незнакомое имя вида gg_* — передаём как есть, вдруг сцена есть
+            // 7. Unfamiliar gg_* name — pass it through as is, maybe the scene exists
             if (norm.StartsWith("gg_"))
             {
                 scene = query.Trim();
-                label = scene + " (неизвестная сцена, попытка загрузки)";
+                label = scene + " (unknown scene, attempting to load)";
                 return true;
             }
 
@@ -738,7 +749,7 @@ namespace HK_AI_Mod
             }
         }
 
-        // Реестр уходит в пайп событием, а не файлом %TEMP%/hk_ai_bosses.json.
+        // The registry goes to the pipe as an event, not as the %TEMP%/hk_ai_bosses.json file.
         private string BossListJson()
         {
             var sb = new System.Text.StringBuilder();
@@ -755,10 +766,10 @@ namespace HK_AI_Mod
             return sb.ToString();
         }
 
-        // ---------------- Гейты сцены ----------------
+        // ---------------- Scene gates ----------------
 
-        // Все TransitionPoint, реально лежащие в сцене (с учётом аддитивной загрузки:
-        // в реестре бывают гейты и других сцен).
+        // All TransitionPoints actually lying in the scene (accounting for additive
+        // loading: the registry also contains gates belonging to other scenes).
         private List<string> CollectSceneGates(string sceneName)
         {
             List<string> result = new List<string>();
@@ -792,12 +803,12 @@ namespace HK_AI_Mod
             return result;
         }
 
-        // GameManager.EnterHero(additiveGateSearch: true) ищет EntryGateName именно
-        // среди TransitionPoint ЗАГРУЖАЕМОЙ сцены и при промахе делает
+        // GameManager.EnterHero(additiveGateSearch: true) looks for EntryGateName only
+        // among the TransitionPoints of the scene BEING LOADED and on a miss it does
         // `Debug.LogError("Searching in next scene for TransitionGate failed."); return;`
-        // — то есть ни EnterScene, ни FinishedEnteringScene, ни FadeSceneIn.
-        // Герой навсегда остаётся в transitioning, а фейд (белый после смерти/выхода
-        // из арены) остаётся висеть на экране. Поэтому гейт обязан существовать в сцене.
+        // — that is, no EnterScene, no FinishedEnteringScene and no FadeSceneIn.
+        // The hero stays in transitioning forever, and the fade (white after death / arena
+        // exit) stays hanging on screen. That is why the gate must exist in the scene.
         private string PickEntryGate(List<string> gates, string configured)
         {
             if (gates == null || gates.Count == 0) return null;
@@ -825,7 +836,7 @@ namespace HK_AI_Mod
                 if (_sceneGates.TryGetValue(sceneName, out previous) && previous == learned) return;
 
                 _sceneGates[sceneName] = learned;
-                Log($"[ИИ] Гейты сцены '{sceneName}': {string.Join(", ", gates.ToArray())} | вход -> '{learned}'");
+                Log($"[AI] Scene gates '{sceneName}': {string.Join(", ", gates.ToArray())} | entry -> '{learned}'");
             }
             catch (Exception) {}
         }
@@ -855,7 +866,7 @@ namespace HK_AI_Mod
             return DEFAULT_ENTRY_GATE;
         }
 
-        // ---------------- Отложенный рестарт ----------------
+        // ---------------- Deferred restart ----------------
 
         private bool IsHeroDying(HeroController hero)
         {
@@ -863,14 +874,14 @@ namespace HK_AI_Mod
             {
                 if (hero == null || hero.cState == null) return true;
                 if (hero.cState.dead || hero.cState.hazardDeath) return true;
-                // Сцена уже сменилась после запроса — собственный сценарий конца боя доигран.
+                // The scene already changed after the request — the game's own end-of-fight scenario has finished.
                 if (_sceneChangedSinceRequest) return false;
-                // Хп обнуляется при смерти в Godhome (не выставляя cState.dead), но в зале
-                // оно может остаться нулевым и после дрим-возврата, поэтому стоп-фактор
-                // считаем только пока герой в целевой арене.
-                // controlReqlinquished намеренно НЕ используется: в хабе Godhome он висит
-                // и у живого героя с полным хп (в логе hp=9, controlReqlinquished=True),
-                // из-за чего рестарт упирался в 10-секундный дедлайн.
+                // HP is zeroed on death in Godhome (without setting cState.dead), but in the
+                // hall it may stay zero even after a dream return, so we treat it as a stop
+                // factor only while the hero is in the target arena.
+                // controlReqlinquished is deliberately NOT used: in the Godhome hub it is set
+                // even for a live hero with full HP (in the log hp=9, controlReqlinquished=True),
+                // which made the restart run into the 10-second deadline.
                 if (CurrentSceneName() == _restartTargetScene)
                 {
                     PlayerData pd = PlayerData.instance;
@@ -887,17 +898,17 @@ namespace HK_AI_Mod
             {
                 PlayerData pd = PlayerData.instance;
                 int hp = (pd != null) ? pd.health : -1;
-                return $"герой в сценарии смерти/возврата (hp={hp}, dead={hero.cState.dead}, "
-                     + $"сцена {UnityEngine.SceneManagement.SceneManager.GetActiveScene().name})";
+                return $"hero in the death/return scenario (hp={hp}, dead={hero.cState.dead}, "
+                     + $"scene {UnityEngine.SceneManagement.SceneManager.GetActiveScene().name})";
             }
             catch (Exception)
             {
-                return "герой занят сценарием игры";
+                return "hero is busy with the game's scenario";
             }
         }
 
-        // Белый выход арены из боя (победа над боссом): BossSceneController.EndSceneDelayed()
-        // сначала проигрывает "GG TRANSITION OUT STATUE", и только потом уходит из сцены.
+        // The white arena exit from the fight (boss victory): BossSceneController.EndSceneDelayed()
+        // first plays "GG TRANSITION OUT STATUE", and only then leaves the scene.
         private static bool IsArenaExitRunning()
         {
             try
@@ -942,16 +953,16 @@ namespace HK_AI_Mod
 
                 string deferReason = null;
                 if (!forced && IsHeroDying(hero))
-                    deferReason = DescribeHeroState(hero);       // сценарий смерти/дрим-возврата
+                    deferReason = DescribeHeroState(hero);       // death / dream-return scenario
                 else if (!forced && IsArenaExitRunning())
-                    deferReason = "арена проигрывает свой белый выход из боя";
+                    deferReason = "the arena is playing its own white exit from the fight";
 
                 if (deferReason != null)
                 {
                     if (_deferReasonLastLogged != deferReason)
                     {
                         _deferReasonLastLogged = deferReason;
-                        Log($"[ИИ] Рестарт отложен: {deferReason} — жду, пока игра закончит сценарий");
+                        Log($"[AI] Restart deferred: {deferReason} — waiting for the game to finish its scenario");
                     }
                     return;
                 }
@@ -959,12 +970,12 @@ namespace HK_AI_Mod
                 _deferReasonLastLogged = "";
 
                 if (forced)
-                    Log($"[ИИ] Ждал {waited:F1}с — форсирую переход (состояние игры так и не освободилось)");
+                    Log($"[AI] Waited {waited:F1}s — forcing the transition (the game state never freed up)");
 
                 string gate = _restartGate;
                 if (string.IsNullOrEmpty(gate)) gate = ResolveEntryGate(_restartTargetScene);
 
-                Log($"[ИИ] Быстрый рестарт: переход в сцену '{_restartTargetScene}' через гейт '{gate}' (ожидание {waited:F2}с)");
+                Log($"[AI] Fast restart: transitioning to scene '{_restartTargetScene}' through gate '{gate}' (waited {waited:F2}s)");
 
                 _restartRequested = false;
                 _restartGate = "";
@@ -982,16 +993,16 @@ namespace HK_AI_Mod
             catch (Exception e)
             {
                 _restartRequested = false;
-                Log($"[ИИ] Ошибка отложенного перехода: {e}");
+                Log($"[AI] Deferred transition error: {e}");
             }
         }
 
-        // ---------------- Сторож фейда ----------------
+        // ---------------- Fade watchdog ----------------
 
-        // Фейды игры (в т.ч. белый RESPAWN FADE/Dream Return) живут на DDOL-объекте
-        // GameCameras. Если сцену выдернуть из середины такого сценария, фейд остаётся
-        // в непрозрачном состоянии, а штатный FadeInFailSafe в этой сборке игры не
-        // запускается нигде. Поэтому гасим залипание сами — тем же событием, что и игра.
+        // The game's fades (including the white RESPAWN FADE/Dream Return) live on the DDOL
+        // object GameCameras. If the scene is yanked out of the middle of such a scenario, the
+        // fade stays in an opaque state, and the stock FadeInFailSafe is never started in this
+        // build of the game. So we clear the stuck fade ourselves — with the same event the game uses.
         private void FadeWatchdogTick()
         {
             try
@@ -1005,7 +1016,7 @@ namespace HK_AI_Mod
                 if (state != _fadeStateLastLogged)
                 {
                     if (state != "Normal")
-                        Log($"[ИИ] Фейд камеры -> '{state}' (сцена {CurrentSceneName()})");
+                        Log($"[AI] Camera fade -> '{state}' (scene {CurrentSceneName()})");
                     _fadeStateLastLogged = state;
                 }
 
@@ -1016,8 +1027,8 @@ namespace HK_AI_Mod
                     return;
                 }
 
-                // Ждём только когда игра реально ничем не занята: во время честного
-                // перехода фейд тоже не "Normal", и лезть в него нельзя.
+                // We only wait when the game is genuinely not busy with anything: during an
+                // honest transition the fade is also not "Normal", and we must not touch it.
                 if (!IsGameSettled(GameManager.instance, HeroController.instance))
                 {
                     _fadeNotNormalSince = -1f;
@@ -1041,7 +1052,7 @@ namespace HK_AI_Mod
 
                 _fadeRescueAttempts++;
                 _fadeNotNormalSince = Time.unscaledTime;
-                Log($"[ИИ] Фейд залип в '{state}' на {stuck:F1}с (попытка {_fadeRescueAttempts}) — отправляю FADE SCENE IN");
+                Log($"[AI] Fade stuck in '{state}' for {stuck:F1}s (attempt {_fadeRescueAttempts}) — sending FADE SCENE IN");
                 gc.cameraFadeFSM.Fsm.Event("FADE SCENE IN");
             }
             catch (Exception) {}
@@ -1055,21 +1066,21 @@ namespace HK_AI_Mod
                 + "\", \"reason\": \"" + safeReason + "\"}";
         }
 
-        // Возвращает героя к входу арены текущей сцены без перезагрузки сцены.
+        // Returns the hero to the arena entrance of the current scene without reloading the scene.
         private void WarpHeroToGate()
         {
             try
             {
                 if (_inMenuScene)
                 {
-                    Log("[ИИ] Warp проигнорирован: мы в меню");
+                    Log("[AI] Warp ignored: we are in the menu");
                     return;
                 }
 
                 HeroController hero = HeroController.instance;
                 if (hero == null)
                 {
-                    Log("[ИИ] Warp: героя нет на сцене");
+                    Log("[AI] Warp: no hero in the scene");
                     return;
                 }
 
@@ -1077,7 +1088,7 @@ namespace HK_AI_Mod
                 if (gate != null)
                     hero.transform.SetPosition2D(gate.transform.position.x, gate.transform.position.y + 1f);
                 else
-                    Log("[ИИ] Warp: гейт не найден, герой остаётся на месте");
+                    Log("[AI] Warp: gate not found, the hero stays in place");
 
                 if (hero.cState != null && hero.cState.transitioning)
                     ReflectionHelper.CallMethod(hero, "FinishedEnteringScene", true, false);
@@ -1091,18 +1102,18 @@ namespace HK_AI_Mod
                 }
                 catch (Exception) {}
 
-                Log("[ИИ] Warp: герой возвращён к гейту арены");
+                Log("[AI] Warp: hero returned to the arena gate");
             }
             catch (Exception e)
             {
-                Log($"[ИИ] Ошибка warp: {e}");
+                Log($"[AI] Warp error: {e}");
             }
         }
 
-        // ---------------- Пайп-сервер ----------------
+        // ---------------- Pipe server ----------------
 
-        // Слот на клиента. Поток блокируется в ConnectNamedPipe, пока клиент не
-        // подключится, а затем сам его обслуживает (PumpClient).
+        // One slot per client. The thread blocks in ConnectNamedPipe until a client
+        // connects, and then serves that client itself (PumpClient).
         private void PipeListenerLoop()
         {
             for (int slot = 0; slot < MAX_PIPE_CLIENTS; slot++)
@@ -1114,6 +1125,59 @@ namespace HK_AI_Mod
                     Name = "HK_AI_PipeSlot" + slotId
                 };
                 thread.Start();
+            }
+
+            var watchdog = new Thread(PipeSlotWatchdogLoop)
+            {
+                IsBackground = true,
+                Name = "HK_AI_PipeWatchdog"
+            };
+            watchdog.Start();
+        }
+
+        // A write to a client that stopped reading blocks forever once the pipe's out buffer
+        // is full. The slot is marked as "writing" so that PipeSlotWatchdogLoop can cancel it.
+        private bool WriteToClient(int slot, IntPtr pipe, byte[] data)
+        {
+            _slotWriteSince[slot] = Environment.TickCount;
+            try
+            {
+                return Win32Pipe.Write(pipe, data, data.Length);
+            }
+            finally
+            {
+                _slotWriteSince[slot] = 0;
+            }
+        }
+
+        // Keeps a hung client from eating a slot: if a write has been stuck for WRITE_STUCK_MS,
+        // the blocking WriteFile is cancelled (CancelSynchronousIo). The write then fails, the
+        // slot loop closes the handle and creates a fresh instance — so a debugger that froze
+        // cannot take away a slot that training needs.
+        private void PipeSlotWatchdogLoop()
+        {
+            while (!_shuttingDown)
+            {
+                Thread.Sleep(500);
+
+                for (int slot = 0; slot < MAX_PIPE_CLIENTS; slot++)
+                {
+                    int since = _slotWriteSince[slot];
+                    if (since == 0) continue;
+                    // unchecked: TickCount wraps around roughly every 25 days.
+                    if (unchecked(Environment.TickCount - since) < WRITE_STUCK_MS) continue;
+
+                    uint threadId = _slotThreads[slot];
+                    Log($"[AI] Pipe slot {slot}: the client is not reading — cancelling the stuck write "
+                        + $"({WRITE_STUCK_MS} ms) and freeing the slot");
+                    if (!Win32Pipe.CancelBlockingWrite(threadId))
+                    {
+                        // The cancel could not be issued (the thread is already gone): close the
+                        // handle instead, so the slot does not stay stuck on this client.
+                        Log($"[AI] Pipe slot {slot}: could not cancel the write (thread {threadId}) — closing the handle");
+                        Win32Pipe.Close(_slotHandles[slot]);
+                    }
+                }
             }
         }
 
@@ -1130,10 +1194,14 @@ namespace HK_AI_Mod
                 if (pipe == IntPtr.Zero)
                 {
                     if (!_shuttingDown)
-                        Log($"[ИИ] Пайп-слот {slot}: CreateNamedPipe не удался (ошибка {Win32Pipe.LastError()})");
+                        Log($"[AI] Pipe slot {slot}: CreateNamedPipe failed (error {Win32Pipe.LastError()})");
                     Thread.Sleep(1000);
                     continue;
                 }
+
+                // The watchdog needs to know which handle and thread belong to this slot.
+                _slotHandles[slot] = pipe;
+                _slotThreads[slot] = Win32Pipe.CurrentThreadId();
 
                 try
                 {
@@ -1141,41 +1209,44 @@ namespace HK_AI_Mod
                     {
                         if (!_shuttingDown)
                         {
-                            Log($"[ИИ] Пайп-слот {slot}: ConnectNamedPipe не удался (ошибка {Win32Pipe.LastError()})");
+                            Log($"[AI] Pipe slot {slot}: ConnectNamedPipe failed (error {Win32Pipe.LastError()})");
                             Thread.Sleep(1000);
                         }
                         continue;
                     }
 
-                    Log($"[ИИ] Пайп-слот {slot}: клиент подключился");
+                    Log($"[AI] Pipe slot {slot}: client connected");
                     byte[] hello = Utf8("{\"status\": \"pipe_hello\", \"protocol\": " + PROTOCOL_VERSION
                         + ", \"mod_version\": \"" + MOD_VERSION + "\"}\n");
-                    if (Win32Pipe.Write(pipe, hello, hello.Length))
-                        PumpClient(pipe, readBuf, lineBuf, events, payload);
+                    if (WriteToClient(slot, pipe, hello))
+                        PumpClient(slot, pipe, readBuf, lineBuf, events, payload);
                 }
                 catch (Exception e)
                 {
                     if (!_shuttingDown)
-                        Log($"[ИИ] Пайп-слот {slot}: ошибка — {e.Message}");
+                        Log($"[AI] Pipe slot {slot}: error — {e.Message}");
                 }
                 finally
                 {
+                    _slotHandles[slot] = IntPtr.Zero;
+                    _slotThreads[slot] = 0;
+                    _slotWriteSince[slot] = 0;
                     Win32Pipe.Close(pipe);
                 }
             }
         }
 
-        // Обслуживание одного клиента. Всё на одном потоке: сначала пишем
-        // накопившееся, затем опрашиваем и читаем команды. На хэндле никогда не
-        // висит незавершённая операция, поэтому запись не может повиснуть на
-        // незавершённом чтении (именно это убивало прежнюю реализацию).
-        private void PumpClient(IntPtr pipe, byte[] readBuf, StringBuilder lineBuf,
+        // Serving one client. Everything on a single thread: first we write
+        // what has accumulated, then we poll for and read commands. There is never an
+        // unfinished operation pending on the handle, so a write cannot hang on an
+        // unfinished read (that is exactly what killed the previous implementation).
+        private void PumpClient(int slot, IntPtr pipe, byte[] readBuf, StringBuilder lineBuf,
             List<string> events, StringBuilder payload)
         {
             long lastSeq = -1;
             long lastOutboxId;
-            // События, накопившиеся до подключения, не переигрываем:
-            // клиента интересуют только ответы на его собственные команды.
+            // We do not replay events accumulated before the connect:
+            // the client only cares about replies to its own commands.
             lock (_sync) { lastOutboxId = _outboxSeq; }
 
             while (!_shuttingDown)
@@ -1185,7 +1256,7 @@ namespace HK_AI_Mod
 
                 lock (_sync)
                 {
-                    // 1) Одноразовые события: каждый клиент получает их ровно раз.
+                    // 1) One-shot events: every client receives them exactly once.
                     if (_outboxSeq != lastOutboxId)
                     {
                         foreach (KeyValuePair<long, string> ev in _outbox)
@@ -1193,7 +1264,7 @@ namespace HK_AI_Mod
                         lastOutboxId = _outboxSeq;
                     }
 
-                    // 2) Телеметрия: только самый свежий кадр, старые не копим.
+                    // 2) Telemetry: only the freshest frame, we do not accumulate old ones.
                     if (_seq != lastSeq)
                     {
                         lastSeq = _seq;
@@ -1213,25 +1284,25 @@ namespace HK_AI_Mod
                         payload.Append(toSend).Append('\n');
 
                     byte[] bytes = Utf8(payload.ToString());
-                    if (!Win32Pipe.Write(pipe, bytes, bytes.Length))
-                        return; // клиент отвалился
+                    if (!WriteToClient(slot, pipe, bytes))
+                        return; // the client dropped off
                 }
 
-                // Неблокирующее вычитывание команд клиента.
+                // Non-blocking draining of the client's commands.
                 if (!DrainCommands(pipe, readBuf, lineBuf))
                     return;
             }
         }
 
-        // PeekNamedPipe говорит, сколько байт готово, и только после этого читаем —
-        // ReadFile не может подвиснуть в ожидании данных.
+        // PeekNamedPipe reports how many bytes are ready, and only after that do we read —
+        // ReadFile cannot hang waiting for data.
         private bool DrainCommands(IntPtr pipe, byte[] readBuf, StringBuilder lineBuf)
         {
             while (true)
             {
                 uint available;
                 if (!Win32Pipe.Peek(pipe, out available))
-                    return false; // разрыв: клиент закрылся
+                    return false; // disconnect: the client closed
 
                 if (available == 0)
                     return true;
@@ -1254,7 +1325,7 @@ namespace HK_AI_Mod
                         _incomingCommands.Enqueue(line);
                 }
 
-                if (lineBuf.Length > 65536) // поток мусора без переводов строк — сбрасываем
+                if (lineBuf.Length > 65536) // a stream of garbage with no line breaks — reset it
                     lineBuf.Remove(0, lineBuf.Length - 1024);
             }
         }
@@ -1274,10 +1345,10 @@ namespace HK_AI_Mod
             }
         }
 
-        // Одноразовое событие: в отличие от телеметрии не перетирается свежим
-        // кадром, а доставляется каждому подключённому клиенту ровно один раз.
-        // Метка "event": 1 говорит клиенту, что это не телеметрия, — иначе
-        // событие подменило бы последний кадр наблюдений в Python.
+        // One-shot event: unlike telemetry it is not overwritten by the newest
+        // frame, but delivered to every connected client exactly once.
+        // The "event": 1 marker tells the client this is not telemetry — otherwise
+        // the event would replace the last observation frame in Python.
         private void PublishEvent(string json)
         {
             string marked = (json != null && json.StartsWith("{\"status\""))
@@ -1371,9 +1442,9 @@ namespace HK_AI_Mod
 
         private void OnHeroUpdate()
         {
-            // v1.2: телеметрия каждый HeroUpdate (~60 записей/сек при 60fps) публикуется
-            // в пайп \\.\pipe\hk_ai_mod. Python-сторона читает построчно и синхронизирует
-            // шаги по факту прихода новой записи — без снов и опроса mtime файла.
+            // v1.2: telemetry on every HeroUpdate (~60 records/sec at 60fps) is published
+            // into the \\.\pipe\hk_ai_mod pipe. The Python side reads line by line and syncs
+            // its steps to the arrival of a new record — no sleeps and no file mtime polling.
 
             try
             {
@@ -1445,7 +1516,7 @@ namespace HK_AI_Mod
                             _lastBossVelX = 0f;
                             _lastBossVelY = 0f;
                             _lastBossHpKnown = bestHp;
-                            Log($"[ИИ] Босс выбран: {bestCandidate.gameObject.name} (hp={bestHp})");
+                            Log($"[AI] Boss selected: {bestCandidate.gameObject.name} (hp={bestHp})");
                         }
                     }
 
@@ -1463,7 +1534,7 @@ namespace HK_AI_Mod
                                     if (hm.isDead || hm.hp <= 0)
                                     {
                                         _bossDead = true;
-                                        Log("[ИИ] Босс мёртв (HealthManager.isDead)");
+                                        Log("[AI] Boss is dead (HealthManager.isDead)");
                                         break;
                                     }
                                 }
@@ -1477,7 +1548,7 @@ namespace HK_AI_Mod
                         if (_currentBoss.hp <= 0 || _currentBoss.isDead)
                         {
                             _bossDead = true;
-                            Log("[ИИ] Босс мёртв (текущий HealthManager)");
+                            Log("[AI] Boss is dead (current HealthManager)");
                         }
                     }
 
@@ -1490,7 +1561,7 @@ namespace HK_AI_Mod
                                 if (hm != null && hm.hp > 20 && (hm.isDead || hm.hp <= 0))
                                 {
                                     _bossDead = true;
-                                    Log($"[ИИ] Босс мёртв (перебор HM: {hm.gameObject.name})");
+                                    Log($"[AI] Boss is dead (HM scan: {hm.gameObject.name})");
                                     break;
                                 }
                             }
@@ -1554,7 +1625,7 @@ namespace HK_AI_Mod
                                 if (_seenFsmStates.Add(logKey))
                                 {
                                     bool classifiedAsAttack = IsAttackFsmState(stateName);
-                                    Log($"[FSM] '{fsm.FsmName}' -> состояние '{stateName}' | атака={classifiedAsAttack}");
+                                    Log($"[FSM] '{fsm.FsmName}' -> state '{stateName}' | attack={classifiedAsAttack}");
                                 }
 
                                 if (IsAttackFsmState(stateName))
@@ -1566,7 +1637,7 @@ namespace HK_AI_Mod
                                 if (!_bossDead && stateName == "Death Anim Start")
                                 {
                                     _bossDead = true;
-                                    Log("[ИИ] Босс мёртв (FSM Death Anim Start)");
+                                    Log("[AI] Boss is dead (FSM Death Anim Start)");
                                 }
                             }
                         }

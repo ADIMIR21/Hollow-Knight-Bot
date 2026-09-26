@@ -6,5 +6,9 @@
     <AssemblyName>mono_il</AssemblyName>
     <RootNamespace>MonoIL</RootNamespace>
     <ImplicitUsings>enable</ImplicitUsings>
+    <!-- The probe is a throwaway tool: run it on whatever runtime is installed
+         (a machine may only have .NET 6/10) instead of failing with
+         "app-launch-failed" just because the .NET 8 runtime is missing. -->
+    <RollForward>LatestMajor</RollForward>
   </PropertyGroup>
 </Project>

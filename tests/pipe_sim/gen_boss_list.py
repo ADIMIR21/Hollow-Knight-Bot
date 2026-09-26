@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Готовит реестр боссов из bosses.py в формате события boss_list мода.
+"""Builds the boss registry from bosses.py in the mod's boss_list event format.
 
-Так mock-сервер отдаёт ровно тот же реестр, что и Python, — это позволяет
-проверить teleport.py --verify без запущенной игры.
+This way the mock server serves exactly the same registry as Python does, which
+makes it possible to verify teleport.py --verify without a running game.
 """
 import json
 import os
@@ -26,4 +26,4 @@ out = os.path.join(os.path.dirname(__file__), "bosses.json")
 with open(out, "w", encoding="utf-8") as f:
     json.dump(data, f, ensure_ascii=False)
 
-print(f"Записано {out}: {data['count']} боссов")
+print(f"Wrote {out}: {data['count']} bosses")

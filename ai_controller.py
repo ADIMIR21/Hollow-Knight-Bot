@@ -2,20 +2,20 @@ import vgamepad as vg
 import time
 
 DEFAULT_BOSS_SCENE = "GG_False_Knight"
-# В аренах Godhome входной TransitionPoint называется door_dreamEnter — см.
-# DEFAULT_ENTRY_GATE в моде (Mod/HK_AI_Mod/AiDataExporter.cs).
+# In Godhome arenas the entry TransitionPoint is called door_dreamEnter — see
+# DEFAULT_ENTRY_GATE in the mod (Mod/HK_AI_Mod/AiDataExporter.cs).
 DEFAULT_ENTRY_GATE = "door_dreamEnter"
 
 class HollowKnightController:
     def __init__(self, pipe=None):
-        print("[CONTROLLER] Подключаем геймпад...")
+        print("[CONTROLLER] Connecting the gamepad...")
         self.gamepad = vg.VX360Gamepad()
         
         time.sleep(2.0)
-        print("[CONTROLLER] Геймпад Xbox 360 подключился)!")
+        print("[CONTROLLER] Xbox 360 gamepad connected!")
         
-        # Обновление 4: команды (рестарт/сцена/гейт) уходят в пайп мода,
-        # а не в файлы %TEMP%. Клиент пайпа общий с ai_environment.
+        # Update 4: commands (restart/scene/gate) go into the mod pipe,
+        # not into %TEMP% files. The pipe client is shared with ai_environment.
         self.pipe = pipe
         self.boss_scene = DEFAULT_BOSS_SCENE
         self.entry_gate = DEFAULT_ENTRY_GATE
@@ -32,26 +32,26 @@ class HollowKnightController:
         self.boss_scene = (scene_name or DEFAULT_BOSS_SCENE).strip()
         if self.pipe is not None:
             self.pipe.send_command("set_boss " + self.boss_scene)
-        print(f"[CONTROLLER] Целевая сцена босса: {self.boss_scene}")
+        print(f"[CONTROLLER] Target boss scene: {self.boss_scene}")
 
     def set_entry_gate(self, gate_name):
-        """Задаёт гейт арены. Важно держать его в синхроне с модом: команда
-        рестарта всегда несёт и сцену, и гейт, поэтому расхождение здесь
-        перебило бы гейт, заданный через bosses.set_gate()."""
+        """Sets the arena gate. It is important to keep it in sync with the mod: the
+        restart command always carries both the scene and the gate, so a mismatch here
+        would override the gate set through bosses.set_gate()."""
         self.entry_gate = (gate_name or DEFAULT_ENTRY_GATE).strip()
         if self.pipe is not None:
             self.pipe.send_command("set_gate " + self.entry_gate)
-        print(f"[CONTROLLER] Точка входа: {self.entry_gate}")
+        print(f"[CONTROLLER] Entry gate: {self.entry_gate}")
 
     def request_fast_restart(self, scene=None, gate=None):
-        """Отправляет команду рестарта в пайп мода. True — команда ушла."""
+        """Sends the restart command to the mod pipe. True — the command was sent."""
         scene = (scene or self.boss_scene).strip()
         gate = (gate or self.entry_gate).strip()
         if self.pipe is None or not self.pipe.is_connected:
             return False
         sent = self.pipe.send_command(f"restart {scene} {gate}")
         if sent:
-            print(f"[CONTROLLER] Команда рестарта отправлена: {scene} ({gate})")
+            print(f"[CONTROLLER] Restart command sent: {scene} ({gate})")
         return sent
 
     def set_action(self, action_id):
@@ -105,21 +105,21 @@ class HollowKnightController:
 if __name__ == "__main__":
     ctrl = HollowKnightController()
     
-    print("\n[ТЕСТ] У тебя есть 5 секунд, чтобы развернуть хк...")
+    print("\n[TEST] You have 5 seconds to switch to Hollow Knight...")
     time.sleep(5)
     
-    print("Идем вправо...")
+    print("Moving right...")
     ctrl.set_action(2)
     time.sleep(0.5)
     
-    print("Прыгаем в движении!")
+    print("Jumping while moving!")
     ctrl.set_action(3)
     time.sleep(0.3)
     
-    print("Рывок!")
+    print("Dash!")
     ctrl.set_action(5)
     time.sleep(0.2)
     
-    print("Остановка.")
+    print("Stopping.")
     ctrl.reset_all()
-    print("Тест завершен!")
+    print("Test finished!")

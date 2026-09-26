@@ -1,6 +1,6 @@
-// Mock-сервер пайпа мода HK_AI_Mod для проверки Python-клиента без игры.
-// Повторяет транспорт объединённого AiDataExporter.cs: hello, поток телеметрии,
-// одноразовые события (_outbox), приём команд. Реестр боссов читается из JSON.
+// Mock named-pipe server for the HK_AI_Mod mod: tests the Python client without the game.
+// Replicates the transport of the merged AiDataExporter.cs: hello, telemetry stream,
+// one-shot events (_outbox), command intake. The boss registry is read from JSON.
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -15,9 +15,10 @@ namespace hkpipesim
 {
     public static class Program
     {
-        // Имя пайпа стенда отличается от боевого: макет не должен уметь занять
-        // пайп запущенной игры и перехватить клиентов (а тест — начать управлять
-        // игрой вместо макета). HK_PIPE_NAME позволяет это переопределить.
+        // The harness pipe name differs from the production one: the mock must not be
+        // able to take over the pipe of a running game and hijack its clients (nor may
+        // the test start driving the game instead of the mock). HK_PIPE_NAME overrides
+        // this.
         private static readonly string PIPE_NAME =
             Environment.GetEnvironmentVariable("HK_PIPE_NAME") ?? "hk_ai_mod_sim";
         private const int MAX_CLIENTS = 4;
@@ -41,6 +42,12 @@ namespace hkpipesim
 
         public static void Main(string[] args)
         {
+            if (Array.IndexOf(args, "--selftest-stuck") >= 0)
+            {
+                Environment.Exit(StuckClientSelfTest());
+                return;
+            }
+
             if (args.Length > 0 && File.Exists(args[0]))
             {
                 _registryJson = File.ReadAllText(args[0]);
@@ -53,18 +60,18 @@ namespace hkpipesim
                         _targetScene = ts.GetString();
                 }
                 _curScene = _targetScene;
-                Console.WriteLine($"[mock] реестр загружен: {Registry.Count} записей, сцена {_curScene}");
+                Console.WriteLine($"[mock] registry loaded: {Registry.Count} entries, scene {_curScene}");
             }
             else
             {
-                Console.WriteLine("[mock] ВНИМАНИЕ: реестр не передан, boss_list пустой");
+                Console.WriteLine("[mock] WARNING: no registry passed, boss_list is empty");
             }
 
             new Thread(TelemetryLoop) { IsBackground = true, Name = "Telemetry" }.Start();
             new Thread(CommandLoop) { IsBackground = true, Name = "Commands" }.Start();
 
-            // Слот на клиента — ровно как в моде: поток блокируется в
-            // ConnectNamedPipe, затем сам обслуживает клиента.
+            // One thread per client slot — exactly as in the mod: the thread blocks in
+            // ConnectNamedPipe, then serves that client itself.
             for (int slot = 0; slot < MAX_CLIENTS; slot++)
             {
                 int slotId = slot;
@@ -81,7 +88,7 @@ namespace hkpipesim
 
         private static void PublishEvent(string json)
         {
-            // Та же метка, что в моде: событие не подменяет последнюю телеметрию.
+            // Same marker as in the mod: an event does not replace the latest telemetry.
             string marked = (json != null && json.StartsWith("{\"status\""))
                 ? "{\"event\": 1, " + json.Substring(1)
                 : json;
@@ -126,11 +133,11 @@ namespace hkpipesim
                     Publish(json);
                     published++;
                     if (published % 100 == 0)
-                        Console.WriteLine($"[mock] телеметрия опубликована {published} раз, seq={_seq}");
+                        Console.WriteLine($"[mock] telemetry published {published} times, seq={_seq}");
                 }
                 catch (Exception e)
                 {
-                    Console.WriteLine("[mock] TelemetryLoop ИСКЛЮЧЕНИЕ: " + e);
+                    Console.WriteLine("[mock] TelemetryLoop EXCEPTION: " + e);
                 }
                 Thread.Sleep(50);
             }
@@ -153,15 +160,15 @@ namespace hkpipesim
             string[] parts = line.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
             string cmd = parts[0].ToLowerInvariant();
             string rest = line.Substring(parts[0].Length).Trim();
-            Console.WriteLine($"[mock] команда: '{line}'");
+            Console.WriteLine($"[mock] command: '{line}'");
 
             switch (cmd)
             {
                 case "set_boss":
-                    if (parts.Length >= 2) { _targetScene = parts[1]; Console.WriteLine($"[mock] цель: {_targetScene}"); }
+                    if (parts.Length >= 2) { _targetScene = parts[1]; Console.WriteLine($"[mock] target: {_targetScene}"); }
                     break;
                 case "set_gate":
-                    if (parts.Length >= 2) { _targetGate = parts[1]; Console.WriteLine($"[mock] гейт: {_targetGate}"); }
+                    if (parts.Length >= 2) { _targetGate = parts[1]; Console.WriteLine($"[mock] gate: {_targetGate}"); }
                     break;
                 case "boss":
                     SelectBoss(rest);
@@ -170,7 +177,7 @@ namespace hkpipesim
                     PublishEvent(ReplaceTargetScene(_registryJson));
                     break;
                 case "warp":
-                    Console.WriteLine($"[mock] warp к гейту {_targetGate}");
+                    Console.WriteLine($"[mock] warp to gate {_targetGate}");
                     break;
                 case "restart":
                 case "teleport":
@@ -178,10 +185,10 @@ namespace hkpipesim
                     if (parts.Length >= 3) _targetGate = parts[2];
                     _curScene = _targetScene;
                     _restartFrames = 4;
-                    Console.WriteLine($"[mock] рестарт: {_targetScene} через {_targetGate}");
+                    Console.WriteLine($"[mock] restart: {_targetScene} via {_targetGate}");
                     break;
                 default:
-                    PublishEvent("{\"status\": \"command_error\", \"command\": \"" + cmd + "\", \"reason\": \"неизвестная команда\"}");
+                    PublishEvent("{\"status\": \"command_error\", \"command\": \"" + cmd + "\", \"reason\": \"unknown command\"}");
                     break;
             }
         }
@@ -209,18 +216,18 @@ namespace hkpipesim
                     return;
                 }
             }
-            // Незнакомое имя вида gg_* мод передаёт как сцену («вдруг сцена есть»,
-            // правило 7 в TryResolveBoss). Макет обязан повторять это точно:
-            // раньше он отвечал command_error, тест это «подтверждал», а в игре
-            // мод на GG_No_Such_Boss_Scene молча грузил несуществующую сцену.
+            // The mod passes an unfamiliar gg_* name through as a scene ("maybe the scene
+            // exists", rule 7 in TryResolveBoss). The mock must replicate this exactly:
+            // it used to answer command_error, the test "confirmed" that, while in the game
+            // the mod silently loaded a non-existent scene for GG_No_Such_Boss_Scene.
             if (norm.StartsWith("gg_"))
             {
                 _targetScene = query.Trim(); _curScene = _targetScene; _restartFrames = 4;
                 PublishEvent("{\"status\": \"boss_selected\", \"scene\": \"" + _targetScene
-                    + "\", \"label\": \"" + _targetScene + " (неизвестная сцена, попытка загрузки)\"}");
+                    + "\", \"label\": \"" + _targetScene + " (unknown scene, load attempt)\"}");
                 return;
             }
-            PublishEvent("{\"status\": \"command_error\", \"command\": \"boss " + query + "\", \"reason\": \"босс не распознан\"}");
+            PublishEvent("{\"status\": \"command_error\", \"command\": \"boss " + query + "\", \"reason\": \"boss not recognized\"}");
         }
 
         private static string ReplaceTargetScene(string json)
@@ -244,7 +251,7 @@ namespace hkpipesim
                 IntPtr pipe = Win32Pipe.Create(@"\\.\pipe\" + PIPE_NAME, MAX_CLIENTS, 65536, 8192);
                 if (pipe == IntPtr.Zero)
                 {
-                    Console.WriteLine($"[mock] слот {slot}: CreateNamedPipe не удался, ошибка {Win32Pipe.LastError()}");
+                    Console.WriteLine($"[mock] slot {slot}: CreateNamedPipe failed, error {Win32Pipe.LastError()}");
                     Thread.Sleep(1000);
                     continue;
                 }
@@ -253,27 +260,28 @@ namespace hkpipesim
                 {
                     if (!Win32Pipe.Connect(pipe))
                     {
-                        Console.WriteLine($"[mock] слот {slot}: ConnectNamedPipe не удался, ошибка {Win32Pipe.LastError()}");
+                        Console.WriteLine($"[mock] slot {slot}: ConnectNamedPipe failed, error {Win32Pipe.LastError()}");
                         Thread.Sleep(1000);
                         continue;
                     }
 
-                    Console.WriteLine($"[mock] слот {slot}: клиент подключился");
-                    // Поле "server" — метка стенда: тест обязан убедиться, что
-                    // говорит с макетом, а не с модом запущенной игры (их hello
-                    // иначе не отличить, и тест начнёт управлять игрой).
+                    Console.WriteLine($"[mock] slot {slot}: client connected");
+                    // The "server" field is the harness marker: the test must make sure it
+                    // is talking to the mock and not to the mod of a running game (their
+                    // hellos are otherwise indistinguishable, and the test would start
+                    // driving the game).
                     byte[] hello = Utf8("{\"status\": \"pipe_hello\", \"protocol\": 3, \"mod_version\": \"v1\", \"server\": \"hkpipesim\"}\n");
                     if (Win32Pipe.Write(pipe, hello, hello.Length))
                         PumpClient(pipe, readBuf, lineBuf, events, payload);
                 }
                 catch (Exception e)
                 {
-                    Console.WriteLine($"[mock] слот {slot}: ИСКЛЮЧЕНИЕ {e.GetType().Name}: {e.Message}");
+                    Console.WriteLine($"[mock] slot {slot}: EXCEPTION {e.GetType().Name}: {e.Message}");
                 }
                 finally
                 {
                     Win32Pipe.Close(pipe);
-                    Console.WriteLine($"[mock] слот {slot}: клиент отключился");
+                    Console.WriteLine($"[mock] slot {slot}: client disconnected");
                 }
             }
         }
@@ -318,7 +326,7 @@ namespace hkpipesim
                     if (!Win32Pipe.Write(pipe, bytes, bytes.Length)) return;
                     writes++;
                     if (writes <= 3 || writes % 500 == 0)
-                        Console.WriteLine($"[mock] write #{writes}: {bytes.Length} байт");
+                        Console.WriteLine($"[mock] write #{writes}: {bytes.Length} bytes");
                 }
 
                 if (!DrainCommands(pipe, readBuf, lineBuf)) return;
@@ -354,6 +362,86 @@ namespace hkpipesim
         private static byte[] Utf8(string text)
         {
             return Encoding.UTF8.GetBytes(text);
+        }
+
+        // Regression test for the slot watchdog in the mod (PipeSlotWatchdogLoop): a client that
+        // connects and then never reads makes WriteFile block as soon as the pipe's out buffer is
+        // full. Without a way out the slot thread would stay blocked forever and the slot would be
+        // lost for good. The mod cancels such a write with CancelSynchronousIo through
+        // Win32Pipe.CancelBlockingWrite — that is exactly what this test proves, on this machine.
+        //
+        // Run: dotnet run --project tests/pipe_sim/pipe_sim.csproj -- --selftest-stuck
+        private static int StuckClientSelfTest()
+        {
+            const string serverName = @"\\.\pipe\hk_ai_mod_stuck_test";
+            const string clientName = "hk_ai_mod_stuck_test";
+
+            IntPtr server = Win32Pipe.Create(serverName, 1, 4096, 4096);
+            if (server == IntPtr.Zero)
+            {
+                Console.WriteLine($"FAIL: CreateNamedPipe failed (error {Win32Pipe.LastError()})");
+                return 1;
+            }
+
+            // The client is .NET's own NamedPipeClientStream: the test runs on the desktop runtime,
+            // where (unlike the game's Mono) it is implemented. It deliberately never reads.
+            var clientThread = new Thread(() =>
+            {
+                var client = new System.IO.Pipes.NamedPipeClientStream(".", clientName,
+                    System.IO.Pipes.PipeDirection.InOut);
+                try
+                {
+                    client.Connect(5000);
+                    Thread.Sleep(60000); // connected, never reading — this is the whole point
+                }
+                catch (Exception e)
+                {
+                    Console.WriteLine("client: " + e.Message);
+                }
+            });
+            clientThread.IsBackground = true;
+            clientThread.Start();
+
+            if (!Win32Pipe.Connect(server))
+            {
+                Console.WriteLine($"FAIL: ConnectNamedPipe failed (error {Win32Pipe.LastError()})");
+                Win32Pipe.Close(server);
+                return 1;
+            }
+
+            byte[] chunk = new byte[64 * 1024];
+            var writerDone = new ManualResetEventSlim(false);
+            bool writeOk = true;
+            uint writerThreadId = 0;
+
+            var writer = new Thread(() =>
+            {
+                writerThreadId = Win32Pipe.CurrentThreadId();
+                writeOk = Win32Pipe.Write(server, chunk, chunk.Length); // blocks once the buffer fills
+                writerDone.Set();
+            });
+            writer.IsBackground = true;
+            writer.Start();
+
+            Thread.Sleep(1000); // the buffer is 4 KB, the write is 64 KB: by now it must be blocked
+            bool stuck = !writerDone.IsSet;
+            Console.WriteLine(stuck
+                ? "the write is blocked as expected (the client is not reading)"
+                : "WARNING: the write did not block — check the pipe buffer sizes");
+
+            bool cancelIssued = Win32Pipe.CancelBlockingWrite(writerThreadId);
+            bool unblocked = writerDone.Wait(5000);
+
+            Console.WriteLine($"CancelBlockingWrite issued: {cancelIssued}, "
+                + $"the write returned: {unblocked}, Write() result: {writeOk}");
+
+            Win32Pipe.Close(server);
+
+            bool pass = stuck && cancelIssued && unblocked && !writeOk;
+            Console.WriteLine(pass
+                ? "STUCK-CLIENT SELFTEST PASSED: the stuck write is cancellable, the slot can be freed"
+                : "STUCK-CLIENT SELFTEST FAILED");
+            return pass ? 0 : 1;
         }
     }
 }

@@ -1,55 +1,58 @@
-# Диагностика Mono: ищем заглушки в BCL игры
+# Mono diagnostics: looking for stubs in the game's BCL
 
-Инструмент отвечает на вопрос «а точно ли этот API есть в Mono, на которой
-работает Hollow Knight?» — без запуска игры.
+The tool answers the question "does this API really exist in the Mono that
+Hollow Knight runs on?" — without launching the game.
 
-Он читает IL указанной сборки через `System.Reflection.Metadata` и печатает для
-каждого метода, есть ли в его теле `newobj` исключения-заглушки
+It reads the IL of the given assembly through `System.Reflection.Metadata` and
+prints, for every method, whether its body contains a `newobj` of a stub exception
 (`NotImplementedException`, `PlatformNotSupportedException`, `NotSupportedException`)
-и куда метод делегирует.
+and where the method delegates to.
 
-## Зачем понадобился
+## Why it was needed
 
-Сервер пайпа в моде не запускался, в `ModLog.txt` было бесконечно:
+The pipe server in the mod would not start; `ModLog.txt` was endless:
 
 ```
-[ИИ] Ошибка пайп-сервера: The method or operation is not implemented.
+[AI] Pipe slot 0: error — The method or operation is not implemented.
 ```
 
-Разбор `System.Core.dll` игры показал, что в этой Mono **все** публичные
-конструкторы `System.IO.Pipes.NamedPipeServerStream` сходятся в две заглушки:
+(The log line was still in Russian when this was diagnosed; it is quoted here translated, the exception text itself verbatim.)
+
+Analysis of the game's `System.Core.dll` showed that in this Mono **all** public
+constructors of `System.IO.Pipes.NamedPipeServerStream` collapse into two stubs:
 
 ```
 .ctor(String)                                             -> ..ctor(String, PipeDirection)
 .ctor(String, PipeDirection)                              -> ..ctor(String, PipeDirection, Int32)
 .ctor(String, PipeDirection, Int32)                       -> ..ctor(..., PipeTransmissionMode)
 .ctor(..., PipeTransmissionMode)                          -> ..ctor(..., PipeOptions)
-.ctor(..., PipeOptions)                                   -> ..ctor(..., Int32, Int32)   <- 7 аргументов
+.ctor(..., PipeOptions)                                   -> ..ctor(..., Int32, Int32)   <- 7 arguments
 .ctor(String, PipeDirection, Int32, PipeTransmissionMode, PipeOptions, Int32, Int32)
-                                                          -> ЗАГЛУШКА: NotImplementedException
+                                                          -> STUB: NotImplementedException
 .ctor(..., PipeSecurity)                                  -> ..ctor(..., HandleInheritability)
-.ctor(..., HandleInheritability)                          -> ..ctor(..., PipeAccessRights)  <- 10 аргументов
-.ctor(..., PipeAccessRights)                              -> ЗАГЛУШКА: NotImplementedException
-.ctor(PipeDirection, Boolean, Boolean, SafePipeHandle)    -> ЗАГЛУШКА: NotImplementedException
+.ctor(..., HandleInheritability)                          -> ..ctor(..., PipeAccessRights)  <- 10 arguments
+.ctor(..., PipeAccessRights)                              -> STUB: NotImplementedException
+.ctor(PipeDirection, Boolean, Boolean, SafePipeHandle)    -> STUB: NotImplementedException
 ```
 
-То есть тип невозможно даже создать — дело не в выборе `PipeOptions`. Поэтому
-сервер пайпа в моде поднимается через `kernel32` (`Mod/HK_AI_Mod/Win32Pipe.cs`),
-а `PipeStream.Read/Write/BeginRead/EndRead` в Mono, кстати, реализованы — но до
-них нельзя добраться без рабочего конструктора.
+That is, the type cannot even be instantiated — the problem is not the choice of
+`PipeOptions`. That is why the pipe server in the mod comes up through `kernel32`
+(`Mod/HK_AI_Mod/Win32Pipe.cs`), while `PipeStream.Read/Write/BeginRead/EndRead` in
+Mono are, incidentally, implemented — but you cannot reach them without a working
+constructor.
 
-## Запуск
+## Running
 
 ```powershell
-# все типы System.IO.Pipes
+# all System.IO.Pipes types
 dotnet run --project tests/mono_il/mono_il.csproj -- `
   "D:\SteamLibrary\steamapps\common\Hollow Knight\hollow_knight_Data\Managed\System.Core.dll"
 
-# или конкретные типы
+# or specific types
 dotnet run --project tests/mono_il/mono_il.csproj -- `
   "...\Managed\System.Core.dll" NamedPipeServerStream
 ```
 
-Если понадобится другой API (сокеты, `MemoryMappedFile`, `Stopwatch`) — подставьте
-нужную сборку и имя типа. Важно помнить: ограничение здесь на стороне Mono, а не
-мода, и обойти его можно только P/Invoke или другим классом API.
+If you need a different API (sockets, `MemoryMappedFile`, `Stopwatch`) — plug in the
+required assembly and type name. Remember: the limitation here is on the Mono side,
+not the mod's, and the only ways around it are P/Invoke or a different API class.

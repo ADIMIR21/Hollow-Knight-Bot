@@ -7,10 +7,15 @@
     <Nullable>disable</Nullable>
     <AssemblyName>hkpipesim</AssemblyName>
     <RootNamespace>hkpipesim</RootNamespace>
+    <!-- The harness is a throwaway tool: run it on whatever runtime is installed
+         (a machine may only have .NET 6/10) instead of failing with
+         "app-launch-failed" just because the .NET 8 runtime is missing. -->
+    <RollForward>LatestMajor</RollForward>
   </PropertyGroup>
 
-  <!-- Тот же самый Win32-слой, что и в моде: стенд проверяет боевой код, а не
-       его пересказ. Именно так ловится расхождение между макетом и игрой. -->
+  <!-- Exactly the same Win32 layer as in the mod: the harness tests the production
+       code, not a retelling of it. That is how a divergence between the mock and the
+       game gets caught. -->
   <ItemGroup>
     <Compile Include="..\..\Mod\HK_AI_Mod\Win32Pipe.cs" Link="Win32Pipe.cs" />
   </ItemGroup>

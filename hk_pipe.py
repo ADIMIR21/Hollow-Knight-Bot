@@ -1,37 +1,37 @@
 # -*- coding: utf-8 -*-
-"""Клиент именованного пайпа мода HK_AI_Mod (протокол v3).
+"""Named pipe client for the HK_AI_Mod mod (protocol v3).
 
-Мод (C#) держит сервер пайпа ``\\\\.\\pipe\\hk_ai_mod`` и рассылает телеметрию
-строками JSON (newline-delimited). Python открывает пайп по RAW-дескриптору
-(``os.open`` + ``os.read``/``os.write``): читает телеметрию в фоновом потоке и
-пишет текстовые команды в тот же дескриптор.
+The mod (C#) hosts the pipe server ``\\\\.\\pipe\\hk_ai_mod`` and broadcasts telemetry
+as JSON lines (newline-delimited). Python opens the pipe through a RAW handle
+(``os.open`` + ``os.read``/``os.write``): it reads telemetry in a background thread and
+writes text commands to the same handle.
 
-Почему не ``open(path, "r+b")``: это даёт ``BufferedRandom``, который на
-именованном пайпе Windows отдаёт первый считанный чанк и навсегда зависает на
-следующем ``readline()``. Сырые ``os.read``/``os.write`` работают корректно и
-дают собственную построчную разборку потока.
+Why not ``open(path, "r+b")``: that gives a ``BufferedRandom``, which on a
+Windows named pipe yields the first chunk read and then hangs forever on the
+next ``readline()``. Raw ``os.read``/``os.write`` work correctly and give you
+your own line-based parsing of the stream.
 
-Формат сообщений мода (одна строка = один JSON-объект):
-    {"status": "pipe_hello", "protocol": 3, "mod_version": "v1"}   — при подключении
+Mod message format (one line = one JSON object):
+    {"status": "pipe_hello", "protocol": 3, "mod_version": "v1"}   — on connect
     {"status": "fight", "restart_pending": 0, "scene": "GG_False_Knight", "hp": 9, ...}
-    {"status": "main_menu" | "loading_scene" | "initialized" | ...}  — служебные
-    {"status": "boss_list", "event": 1, "count": 60, "bosses": [...]}   — ответ на "bosses"
-    {"status": "boss_selected", "event": 1, "scene": "...", ...}        — выбор босса принят
-    {"status": "command_error", "event": 1, "command": "...", ...}      — команда отклонена
+    {"status": "main_menu" | "loading_scene" | "initialized" | ...}  — service statuses
+    {"status": "boss_list", "event": 1, "count": 60, "bosses": [...]}   — reply to "bosses"
+    {"status": "boss_selected", "event": 1, "scene": "...", ...}        — boss choice accepted
+    {"status": "command_error", "event": 1, "command": "...", ...}      — command rejected
 
-Телеметрия идёт потоком (~60/сек), поэтому хранится только последний кадр.
-Одноразовые события (boss_list/boss_selected/command_error) помечены полем
-``"event": 1``, кэшируются по статусу и НЕ подменяют последнюю телеметрию —
-их можно дождаться через :meth:`HKPipeClient.wait_for_status`.
+Telemetry arrives as a stream (~60/sec), so only the latest frame is kept.
+One-shot events (boss_list/boss_selected/command_error) are marked with the
+``"event": 1`` field, are cached by status and do NOT replace the latest telemetry —
+they can be awaited via :meth:`HKPipeClient.wait_for_status`.
 
-Команды Python -> мод (plain text, одна строка = одна команда):
-    restart [scene] [gate]   — быстрый рестарт боя ( BeginSceneTransition )
-    teleport                 — то же, что restart
-    set_boss <scene>         — целевая сцена босса (понимает алиасы)
-    set_gate <gate>          — точка входа на арену
-    boss <запрос>            — выбрать босса пантеона и телепортироваться к нему
-    bosses                   — прислать реестр боссов событием boss_list
-    warp                     — вернуть героя к гейту арены без перезагрузки сцены
+Commands Python -> mod (plain text, one line = one command):
+    restart [scene] [gate]   — fast fight restart ( BeginSceneTransition )
+    teleport                 — same as restart
+    set_boss <scene>         — target boss scene (understands aliases)
+    set_gate <gate>          — arena entry point
+    boss <query>             — pick a pantheon boss and teleport to it
+    bosses                   — send the boss registry as a boss_list event
+    warp                     — return the knight to the arena gate without reloading the scene
 """
 
 import json
@@ -39,27 +39,27 @@ import os
 import threading
 import time
 
-# Имя пайпа. HK_PIPE_NAME переопределяет его для стенда (tests/pipe_sim):
-# макет слушает hk_ai_mod_sim, чтобы не занять пайп запущенной игры.
+# Pipe name. HK_PIPE_NAME overrides it for the test rig (tests/pipe_sim):
+# the mock listens on hk_ai_mod_sim so it does not occupy the pipe of a running game.
 PIPE_PATH = "\\\\.\\pipe\\" + os.environ.get("HK_PIPE_NAME", "hk_ai_mod")
 
-# Минимальная версия протокола, на которой есть команды пантеона.
+# Minimum protocol version that has the pantheon commands.
 REQUIRED_PROTOCOL = 3
 
 _RETRY_OPEN_DELAY = 0.5
 _READ_CHUNK = 65536
-# Защита от потока мусора без переводов строк.
+# Guard against a flood of garbage with no newlines.
 _MAX_LINE_BUFFER = 1 << 20
 
 _O_BINARY = getattr(os, "O_BINARY", 0)
 
 
 class HKPipeClient:
-    """Постоянное подключение к пайпу мода с авто-реконнектом.
+    """Persistent connection to the mod pipe with auto-reconnect.
 
-    Потокобезопасно: фоновый поток-читатель держит последний разобранный
-    JSON (``_latest``), монотонный счётчик сообщений (``_seq``) и кэш
-    одноразовых событий по полю ``status``.
+    Thread-safe: a background reader thread holds the latest parsed
+    JSON (``_latest``), a monotonic message counter (``_seq``) and a cache
+    of one-shot events keyed by the ``status`` field.
     """
 
     def __init__(self, pipe_path=PIPE_PATH, reconnect_delay=_RETRY_OPEN_DELAY, verbose=True):
@@ -68,17 +68,17 @@ class HKPipeClient:
         self.verbose = verbose
 
         self._cond = threading.Condition()
-        self._latest = None          # последний кадр телеметрии (без событий)
-        self._last_any = None        # последнее сообщение любого типа (для отладки)
-        self._seq = 0                # сколько сообщений пришло всего
-        self._by_status = {}         # status -> последнее сообщение с этим статусом
-        self._status_seq = {}        # status -> seq, на котором оно пришло
-        self._hello = None           # hello-сообщение мода
+        self._latest = None          # latest telemetry frame (events excluded)
+        self._last_any = None        # last message of any type (for debugging)
+        self._seq = 0                # total number of messages received
+        self._by_status = {}         # status -> last message with that status
+        self._status_seq = {}        # status -> seq it arrived on
+        self._hello = None           # mod hello message
         self._connected = False
         self._stop = False
 
         self._send_lock = threading.Lock()
-        self._fd = None              # raw-дескриптор пайпа (r+w)
+        self._fd = None              # raw pipe handle (r+w)
 
         self._thread = threading.Thread(target=self._run, daemon=True, name="HKPipeClient")
         self._thread.start()
@@ -92,26 +92,26 @@ class HKPipeClient:
 
     @property
     def hello(self):
-        """hello-сообщение мода (None, пока оно не пришло)."""
+        """Mod hello message (None until it arrives)."""
         with self._cond:
             return self._hello
 
     @property
     def protocol(self):
-        """Версия протокола мода или None."""
+        """Mod protocol version or None."""
         with self._cond:
             hello = self._hello
             return hello.get("protocol") if hello else None
 
     @property
     def mod_version(self):
-        """Версия мода из hello или None."""
+        """Mod version from hello or None."""
         with self._cond:
             hello = self._hello
             return hello.get("mod_version") if hello else None
 
     def wait_connected(self, timeout=15.0):
-        """Блокирует до открытия пайпа (или до таймаута). True = дескриптор открыт."""
+        """Blocks until the pipe is open (or the timeout expires). True = handle is open."""
         deadline = time.perf_counter() + timeout
         with self._cond:
             while not self._connected:
@@ -122,7 +122,7 @@ class HKPipeClient:
             return True
 
     def wait_hello(self, timeout=3.0):
-        """Ждёт hello-сообщение мода (в нём версия протокола). None по таймауту."""
+        """Waits for the mod hello message (it carries the protocol version). None on timeout."""
         deadline = time.perf_counter() + timeout
         with self._cond:
             while self._hello is None:
@@ -133,42 +133,42 @@ class HKPipeClient:
             return self._hello
 
     def get_telemetry(self):
-        """Последний разобранный JSON телеметрии или None (нет связи).
+        """Latest parsed telemetry JSON or None (no link).
 
-        Одноразовые события сюда НЕ попадают — только кадры наблюдений (и
-        служебные статусы мода вроде loading_scene/main_menu).
+        One-shot events do NOT land here — only observation frames (and
+        mod service statuses such as loading_scene/main_menu).
         """
         with self._cond:
             return self._latest
 
     def get_last_message(self):
-        """Последнее сообщение мода любого типа, включая события (для отладки)."""
+        """Last mod message of any type, events included (for debugging)."""
         with self._cond:
             return self._last_any
 
     def get_seq(self):
-        """Монотонный счётчик принятых сообщений (аналог старого mtime файла)."""
+        """Monotonic counter of received messages (replaces the old file mtime)."""
         with self._cond:
             return self._seq
 
     def get_status(self, status):
-        """Последнее сообщение с данным ``status`` или None."""
+        """Last message with the given ``status`` or None."""
         with self._cond:
             return self._by_status.get(status)
 
     def get_status_seq(self, status):
-        """На каком seq пришло последнее сообщение с данным ``status`` (None — не было).
+        """Seq the last message with the given ``status`` arrived on (None — never seen).
 
-        Пара к :meth:`wait_for_status` с ``after_seq``: запомни seq до отправки
-        команды, чтобы дождаться именно её ответа, а не старого.
+        Companion to :meth:`wait_for_status` with ``after_seq``: remember the seq
+        before sending a command so you wait for that command's reply, not an old one.
         """
         with self._cond:
             return self._status_seq.get(status)
 
     def wait_for_status(self, status, timeout=5.0, after_seq=None):
-        """Ждёт сообщение с данным ``status``. None по таймауту.
+        """Waits for a message with the given ``status``. None on timeout.
 
-        ``after_seq`` — вернуть только сообщение новее указанного seq.
+        ``after_seq`` — return only a message newer than the given seq.
         """
         deadline = time.perf_counter() + timeout
         with self._cond:
@@ -182,10 +182,10 @@ class HKPipeClient:
                 self._cond.wait(remaining)
 
     def wait_for_fresh(self, last_seq, timeout=0.15):
-        """Ждёт НОВОЕ сообщение от мода. Возвращает актуальный seq.
+        """Waits for a NEW message from the mod. Returns the current seq.
 
-        Если за timeout ничего не пришло (меню/пауза/нет связи) — возвращает
-        прежний last_seq, как старый wait_for_fresh_telemetry по mtime.
+        If nothing arrives within the timeout (menu/pause/no link) it returns
+        the previous last_seq, like the old mtime-based wait_for_fresh_telemetry.
         """
         with self._cond:
             if self._seq != last_seq:
@@ -194,9 +194,9 @@ class HKPipeClient:
             return self._seq
 
     def send_command(self, text):
-        """Отправить команду моду ('restart GG_False_Knight door_dreamEnter' и т.п.).
+        """Send a command to the mod ('restart GG_False_Knight door_dreamEnter' etc.).
 
-        True — строка ушла в пайп (мод заберёт её в течение кадра-двух).
+        True — the line went into the pipe (the mod picks it up within a frame or two).
         """
         payload = (text.rstrip("\n") + "\n").encode("utf-8")
         with self._send_lock:
@@ -211,11 +211,11 @@ class HKPipeClient:
                     payload = payload[written:]
                 return True
             except OSError:
-                # пайп отвалился прямо во время записи — читатель реконнектится
+                # the pipe dropped mid-write — the reader thread will reconnect
                 return False
 
     def stop(self):
-        """Останавливает клиента и разблокирует поток-читатель."""
+        """Stops the client and unblocks the reader thread."""
         self._stop = True
         with self._send_lock:
             fd = self._fd
@@ -228,23 +228,23 @@ class HKPipeClient:
         with self._cond:
             self._cond.notify_all()
 
-    # ------------------------------------------------------------ внутреннее
+    # ------------------------------------------------------------ internal
 
     def _log(self, msg):
         if self.verbose:
             print(msg, flush=True)
 
     def _open_pipe(self):
-        """Открывает пайп по raw-дескриптору. None, если сервера нет/не отвечает."""
+        """Opens the pipe through a raw handle. None if the server is absent or not responding."""
         while not self._stop:
             try:
-                # O_RDWR = GENERIC_READ|GENERIC_WRITE: сервер у нас duplex.
+                # O_RDWR = GENERIC_READ|GENERIC_WRITE: the server is duplex for us.
                 fd = os.open(self.pipe_path, os.O_RDWR | _O_BINARY)
                 return fd
             except FileNotFoundError:
-                pass          # мод ещё не создал пайп (игра не запущена)
+                pass          # the mod has not created the pipe yet (game not running)
             except OSError:
-                pass          # ERROR_PIPE_BUSY и прочее — тоже ждём
+                pass          # ERROR_PIPE_BUSY and the like — keep waiting too
             time.sleep(self.reconnect_delay)
         return None
 
@@ -256,7 +256,7 @@ class HKPipeClient:
             with self._send_lock:
                 self._fd = fd
             self._set_connected(True)
-            self._log(f"[PIPE] Подключено: {self.pipe_path}")
+            self._log(f"[PIPE] Connected: {self.pipe_path}")
             try:
                 self._read_loop(fd)
             except OSError:
@@ -268,21 +268,21 @@ class HKPipeClient:
                     os.close(fd)
                 except OSError:
                     pass
-                # hello относится к конкретному соединению — сбрасываем, чтобы
-                # protocol/mod_version не пережили переподключение.
+                # hello belongs to one specific connection — clear it so that
+                # protocol/mod_version do not survive a reconnect.
                 with self._cond:
                     self._hello = None
                 self._set_connected(False)
             if self._stop:
                 break
-            self._log("[PIPE] Соединение потеряно, переподключаюсь...")
+            self._log("[PIPE] Connection lost, reconnecting...")
             time.sleep(self.reconnect_delay)
 
     def _read_loop(self, fd):
         buffer = b""
         while True:
-            # os.read на пайпе отдаёт доступные байты, блокируясь только пока
-            # данных нет вообще; EOF — пустой результат.
+            # os.read on a pipe returns the available bytes and blocks only
+            # while there is no data at all; EOF is an empty result.
             chunk = os.read(fd, _READ_CHUNK)
             if not chunk:
                 raise OSError("pipe eof")
@@ -310,7 +310,7 @@ class HKPipeClient:
         try:
             data = json.loads(line)
         except json.JSONDecodeError:
-            return  # обрезанная строка — пропускаем, мод шлёт построчно
+            return  # truncated line — skip it, the mod sends line by line
         with self._cond:
             self._seq += 1
             self._last_any = data
@@ -320,8 +320,8 @@ class HKPipeClient:
                 self._status_seq[status] = self._seq
                 if status == "pipe_hello":
                     self._hello = data
-            # Одноразовые события (метка "event": 1) не подменяют последнюю
-            # телеметрию: иначе шаг RL получил бы JSON без hp/x/y.
+            # One-shot events (marked "event": 1) do not replace the latest
+            # telemetry: otherwise an RL step would get JSON without hp/x/y.
             if not data.get("event"):
                 self._latest = data
             self._cond.notify_all()
@@ -332,17 +332,17 @@ class HKPipeClient:
             self._cond.notify_all()
 
 
-# ---------------- Общий клиент на процесс ----------------
-# Мод держит до 4 клиентов, но один общий клиент проще и надёжнее: телеметрию
-# читает training-цикл, а команды (рестарт/босс/варп) шлёт кто угодно через
-# bosses.py — и всё это через одно соединение.
+# ---------------- Per-process shared client ----------------
+# The mod supports up to 4 clients, but one shared client is simpler and more
+# reliable: the training loop reads telemetry while commands (restart/boss/warp)
+# are sent by anyone through bosses.py — all over a single connection.
 
 _shared_client = None
 _shared_lock = threading.Lock()
 
 
 def get_shared_client(verbose=True):
-    """Процесс-синглтон клиента пайпа."""
+    """Per-process singleton of the pipe client."""
     global _shared_client
     with _shared_lock:
         if _shared_client is None:
@@ -351,12 +351,12 @@ def get_shared_client(verbose=True):
 
 
 def send_command(text):
-    """Отправить команду моду через общий клиент."""
+    """Send a command to the mod through the shared client."""
     return get_shared_client().send_command(text)
 
 
 def get_telemetry():
-    """Последняя телеметрия через общий клиент."""
+    """Latest telemetry through the shared client."""
     return get_shared_client().get_telemetry()
 
 
@@ -365,18 +365,18 @@ def is_connected():
 
 
 if __name__ == "__main__":
-    # Быстрая проверка: python hk_pipe.py — печатаем живую телеметрию 5 секунд.
+    # Quick check: python hk_pipe.py — print live telemetry for 5 seconds.
     client = HKPipeClient()
-    print("Ждём мод (\\\\.\\pipe\\hk_ai_mod), до 10 секунд...")
+    print("Waiting for the mod (\\\\.\\pipe\\hk_ai_mod), up to 10 seconds...")
     if not client.wait_connected(10.0):
-        print("Мод не ответил. Игра запущена? Мод HK_AI_Mod.dll установлен?")
+        print("The mod did not respond. Is the game running? Is the HK_AI_Mod.dll mod installed?")
         raise SystemExit(1)
 
     hello = client.wait_hello(3.0) or {}
     print(f"Hello: protocol={hello.get('protocol')} mod_version={hello.get('mod_version')}")
     if (hello.get("protocol") or 0) < REQUIRED_PROTOCOL:
-        print(f"ВНИМАНИЕ: команды пантеона требуют протокол >= {REQUIRED_PROTOCOL}. "
-              f"Обнови DLL мода.")
+        print(f"WARNING: pantheon commands require protocol >= {REQUIRED_PROTOCOL}. "
+              f"Update the mod DLL.")
 
     end = time.time() + 5.0
     last = -1

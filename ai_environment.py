@@ -14,42 +14,44 @@ class HollowKnightEnv:
         self.use_screen_capture = USE_SCREEN_CAPTURE
         if self.use_screen_capture:
             self.camera = ScreenCaptureAgent()
-            print("[ENV] Захват экрана ВКЛЮЧЕН")
+            print("[ENV] Screen capture ENABLED")
         else:
             self.camera = None
-            print("[ENV] Захват экрана ОТКЛЮЧЕН (используется телеметрия)")
+            print("[ENV] Screen capture DISABLED (telemetry is used)")
 
-        # Обновление 4: телеметрия идёт через именованный пайп \\.\pipe\hk_ai_mod.
-        # Фон стримится построчно в отдельном потоке с авто-реконнектом —
-        # никаких гонок за файл в %TEMP% и ретраев открытия. Клиент общий на
-        # процесс, поэтому команды bosses.py идут по тому же соединению.
+        # Update 4: telemetry comes through the named pipe \\.\pipe\hk_ai_mod.
+        # The background streams line by line in a separate thread with auto-reconnect —
+        # no races over a file in %TEMP% and no open retries. The client is shared per
+        # process, so commands from bosses.py go over the same connection.
         self.pipe = get_shared_client()
-        print("[ENV] Жду пайп мода (\\\\.\\pipe\\hk_ai_mod)...")
+        print("[ENV] Waiting for the mod pipe (\\\\.\\pipe\\hk_ai_mod)...")
         if self.pipe.wait_connected(timeout=20.0):
-            print("[ENV] Мод на связи!")
+            print("[ENV] The mod is connected!")
         else:
-            print("[ENV] ВНИМАНИЕ: мод не ответил за 20с. Игра запущена? Мод HK_AI_Mod.dll установлен?")
-            print("[ENV] Продолжаю: клиент продолжит подключаться в фоне.")
+            print("[ENV] WARNING: the mod did not respond within 20s. Is the game running? Is the HK_AI_Mod.dll mod installed?")
+            print("[ENV] Note: an older mod build is not enough — the pipe transport needs the current DLL "
+                  "(powershell -ExecutionPolicy Bypass -File deploy_mod.ps1 -Build, with the game closed).")
+            print("[ENV] Continuing: the client will keep connecting in the background.")
 
-        print("[ENV] хк успешно найден!")
+        print("[ENV] Hollow Knight found successfully!")
 
     def get_telemetry(self):
-        # Последнее сообщение мода (None, если связи ещё нет).
+        # The last message from the mod (None if there is no connection yet).
         return self.pipe.get_telemetry()
 
     def get_telemetry_mtime(self):
-        """Штамп последней записи телеметрии (счётчик сообщений пайпа) или None."""
+        """Stamp of the last telemetry record (pipe message counter) or None."""
         if not self.pipe.is_connected:
             return None
         return self.pipe.get_seq()
 
     def wait_for_fresh_telemetry(self, last_seq, timeout=0.15):
         """
-        Обновление 4: ждём НОВОЕ сообщение в пайпе (по счётчику seq) вместо
-        фиксированных снов. Шаг идёт ровно в темпе игры.
+        Update 4: we wait for a NEW pipe message (by the seq counter) instead of
+        fixed sleeps. The step runs exactly at the pace of the game.
 
-        Возвращает seq новых данных, либо прежний last_seq,
-        если за timeout ничего не пришло (меню/пауза — работаем по старым данным).
+        Returns the seq of the new data, or the previous last_seq
+        if nothing arrived within the timeout (menu/pause — we keep working on old data).
         """
         return self.pipe.wait_for_fresh(last_seq, timeout)
 
@@ -69,9 +71,9 @@ def main():
     if ENABLE_PREVIEW:
         cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
         cv2.resizeWindow(window_name, AI_VISION_SIZE[0], AI_VISION_SIZE[1])
-        print("[СИСТЕМА] Предпросмотр ВКЛЮЧЕН. Нажми 'q' в окне трансляции для выхода.")
+        print("[SYSTEM] Preview ENABLED. Press 'q' in the stream window to exit.")
     else:
-        print("[СИСТЕМА] Предпросмотр ВЫКЛЮЧЕН. Нажми Ctrl+C в консоли для выхода.")
+        print("[SYSTEM] Preview DISABLED. Press Ctrl+C in the console to exit.")
     
     last_x, last_y = 0.0, 0.0
     last_hp, last_mana, last_boss_hp = 0, 0, 0
@@ -105,16 +107,16 @@ def main():
                     hp != last_hp or mana != last_mana or boss_hp != last_boss_hp):
                     
                     os.system('cls' if os.name == 'nt' else 'clear')
-                    print(f"=== МОЗГИ ИИ ===")
-                    print(f"ИГРОК:    {hp}/{max_hp} HP | ДУША: {mana}/99 MP")
-                    print(f"БОСС:     {boss_hp} HP | Состояние: {boss_state}")
-                    print(f"ПОЗИЦИЯ:  X: {current_x:.2f} | Y: {current_y:.2f}")
-                    print(f"СКОРОСТЬ: VX: {vel_x:.2f} | VY: {vel_y:.2f}")
-                    print(f"СТАТУС:   Земля={grounded} | Атака={is_attacking} | Рывок={is_dashing}")
-                    print(f"          Прыжок={is_jumping} | Падение={is_falling} | Отдача={is_recoiling}")
-                    print(f"БОСС АТАКУЕТ: {boss_is_attacking} | Опасность рядом: {near_hazard}")
-                    print(f"ПОЛУЧИЛ УРОН: {was_hit}")
-                    print(f"ГЛАЗА:    Кадр {AI_VISION_SIZE[0]}x{AI_VISION_SIZE[1]} в памяти")
+                    print(f"=== AI BRAIN ===")
+                    print(f"PLAYER:   {hp}/{max_hp} HP | SOUL: {mana}/99 MP")
+                    print(f"BOSS:     {boss_hp} HP | State: {boss_state}")
+                    print(f"POSITION: X: {current_x:.2f} | Y: {current_y:.2f}")
+                    print(f"VELOCITY: VX: {vel_x:.2f} | VY: {vel_y:.2f}")
+                    print(f"STATUS:   Grounded={grounded} | Attack={is_attacking} | Dash={is_dashing}")
+                    print(f"          Jump={is_jumping} | Fall={is_falling} | Recoil={is_recoiling}")
+                    print(f"BOSS ATTACKING: {boss_is_attacking} | Hazard near: {near_hazard}")
+                    print(f"TOOK DAMAGE: {was_hit}")
+                    print(f"VISION:   Frame {AI_VISION_SIZE[0]}x{AI_VISION_SIZE[1]} in memory")
                     print(f"=============================")
                     
                     last_x, last_y = current_x, current_y
@@ -128,11 +130,11 @@ def main():
                 time.sleep(0.01)
                 
     except KeyboardInterrupt:
-        print("\n[СИСТЕМА] Остановка...")
+        print("\n[SYSTEM] Stopping...")
         
     if ENABLE_PREVIEW:
         cv2.destroyAllWindows()
-    print("[СИСТЕМА] Работа завершена.")
+    print("[SYSTEM] Shutdown complete.")
 
 if __name__ == "__main__":
     main()

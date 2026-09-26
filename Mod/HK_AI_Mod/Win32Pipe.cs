@@ -1,28 +1,28 @@
-// Сервер именованных пайпов Windows напрямую через kernel32.
+// Windows named pipe server driven directly through kernel32.
 //
-// ПОЧЕМУ НЕ NamedPipeServerStream:
-// Hollow Knight работает на Mono (mscorlib 4.6.57, Unity). В этой Mono
-// ВСЕ публичные конструкторы System.IO.Pipes.NamedPipeServerStream сходятся
-// в две заглушки:
+// WHY NOT NamedPipeServerStream:
+// Hollow Knight runs on Mono (mscorlib 4.6.57, Unity). In this Mono,
+// ALL public constructors of System.IO.Pipes.NamedPipeServerStream funnel
+// into two stubs:
 //   ..ctor(string, PipeDirection, int, PipeTransmissionMode, PipeOptions, int, int)
 //   ..ctor(string, PipeDirection, int, PipeTransmissionMode, PipeOptions, int, int,
 //           PipeSecurity, HandleInheritability, PipeAccessRights)
-// обе бросают NotImplementedException, а одноаргументный и все остальные
-// конструкторы делегируют в них. То есть тип невозможно даже создать:
-// в игре это выглядело как бесконечное
-//   "[ИИ] Ошибка пайп-сервера: The method or operation is not implemented."
-// Проверено разбором IL System.Core.dll самой игры (NamedPipeClientStream.Connect
-// в Mono, наоборот, реализован — но клиент у нас Python, он ходит в Win32 сам).
+// both throw NotImplementedException, and the one-argument constructor and
+// all the others delegate into them. That is, the type cannot even be created:
+// in the game this looked like an endless
+//   "[AI] Pipe server error: The method or operation is not implemented."
+// Verified by disassembling the game's own System.Core.dll (NamedPipeClientStream.Connect
+// in Mono, by contrast, is implemented — but our client is Python, it calls Win32 itself).
 //
-// Поэтому сервер поднимается через P/Invoke. Хэндл — обычный синхронный, без
-// overlapped I/O. Каждый инстанс обслуживает один поток, который СТРОГО
-// ПОСЛЕДОВАТЕЛЬНО пишет, затем опрашивает и читает: на хэндле никогда не висит
-// незавершённая операция, поэтому дедлок «висящее чтение блокирует запись»
-// (он воспроизводится на синхронном хэндле, если держать ReadAsync)
-// структурно невозможен.
+// That is why the server is brought up through P/Invoke. The handle is an ordinary
+// synchronous one, without overlapped I/O. Each instance is served by one thread that
+// STRICTLY SEQUENTIALLY writes, then polls and reads: an incomplete operation is never
+// pending on the handle, so the deadlock "a hanging read blocks the write"
+// (it reproduces on a synchronous handle if ReadAsync is kept pending)
+// is structurally impossible.
 //
-// Файл намеренно самодостаточный: тот же код использует стенд tests/pipe_sim,
-// поэтому протокол проверяется ровно на том коде, который работает в игре.
+// The file is deliberately self-contained: the tests/pipe_sim harness compiles the same code,
+// so the protocol is verified against exactly the code that runs in the game.
 
 using System;
 using System.Runtime.InteropServices;
@@ -38,9 +38,9 @@ namespace HKPipeInterop
         public const int ERROR_PIPE_LISTENING = 536;
         public const int ERROR_SEM_TIMEOUT = 121;
 
-        // Открываем пайп как duplex: Python ходит в него одним os.open(O_RDWR).
+        // Open the pipe as duplex: Python talks to it with a single os.open(O_RDWR).
         private const uint PIPE_ACCESS_DUPLEX = 0x00000003;
-        // Байтовый тип + байтовый режим чтения + блокирующий режим: все нули.
+        // Byte type + byte read mode + blocking mode: all zeroes.
         private const uint PIPE_TYPE_BYTE = 0x00000000;
         private const uint PIPE_READMODE_BYTE = 0x00000000;
         private const uint PIPE_WAIT = 0x00000000;
@@ -92,7 +92,19 @@ namespace HKPipeInterop
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern bool CloseHandle(IntPtr hObject);
 
-        /// <summary>Создаёт инстанс пайпа. IntPtr.Zero — не удалось.</summary>
+        [DllImport("kernel32.dll")]
+        private static extern uint GetCurrentThreadId();
+
+        // CancelSynchronousIo needs a thread handle opened with THREAD_TERMINATE.
+        private const uint THREAD_TERMINATE = 0x0001;
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern IntPtr OpenThread(uint desiredAccess, bool inheritHandle, uint threadId);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool CancelSynchronousIo(IntPtr hThread);
+
+        /// <summary>Creates a pipe instance. IntPtr.Zero means it failed.</summary>
         public static IntPtr Create(string fullPipeName, int maxInstances, int outBuffer, int inBuffer)
         {
             IntPtr handle = CreateNamedPipeW(
@@ -108,8 +120,8 @@ namespace HKPipeInterop
         }
 
         /// <summary>
-        /// Ждёт подключения клиента (блокирует поток). true — соединение есть.
-        /// ERROR_PIPE_CONNECTED тоже успех: клиент успел подключиться до вызова.
+        /// Waits for a client to connect (blocks the thread). true means connected.
+        /// ERROR_PIPE_CONNECTED is also a success: the client connected before the call.
         /// </summary>
         public static bool Connect(IntPtr handle)
         {
@@ -118,13 +130,13 @@ namespace HKPipeInterop
             return Marshal.GetLastWin32Error() == ERROR_PIPE_CONNECTED;
         }
 
-        /// <summary>Сколько байт готово к чтению. false — пайп разорван.</summary>
+        /// <summary>How many bytes are ready to read. false means the pipe is broken.</summary>
         public static bool Peek(IntPtr handle, out uint available)
         {
             return PeekNamedPipe(handle, IntPtr.Zero, 0, IntPtr.Zero, out available, IntPtr.Zero);
         }
 
-        /// <summary>Читает до count байт (вызывать только когда Peek подтвердил данные). -1 — ошибка.</summary>
+        /// <summary>Reads up to count bytes (call only when Peek has confirmed data). -1 means error.</summary>
         public static int Read(IntPtr handle, byte[] buffer, int count)
         {
             uint read;
@@ -133,7 +145,7 @@ namespace HKPipeInterop
             return (int)read;
         }
 
-        /// <summary>Пишет все count байт, добивая частичные записи. false — пайп разорван.</summary>
+        /// <summary>Writes all count bytes, topping up partial writes. false means the pipe is broken.</summary>
         public static bool Write(IntPtr handle, byte[] data, int count)
         {
             int offset = 0;
@@ -160,13 +172,35 @@ namespace HKPipeInterop
             return true;
         }
 
-        /// <summary>Отключает и закрывает инстанс.</summary>
+        /// <summary>Disconnects and closes the instance.</summary>
         public static void Close(IntPtr handle)
         {
             if (handle == IntPtr.Zero || handle == INVALID_HANDLE_VALUE)
                 return;
             try { DisconnectNamedPipe(handle); } catch (Exception) { }
             try { CloseHandle(handle); } catch (Exception) { }
+        }
+
+        /// <summary>Id of the calling thread. A slot thread stores it so that its stuck write can be cancelled later.</summary>
+        public static uint CurrentThreadId()
+        {
+            return GetCurrentThreadId();
+        }
+
+        /// <summary>
+        /// Cancels a blocking synchronous WriteFile that is running on another thread and reports whether the
+        /// cancellation was issued. Needed because a client that stops reading makes WriteFile block forever once
+        /// the pipe's out buffer is full - the slot would be lost for good, since it never gets back to
+        /// ConnectNamedPipe. After the cancellation the write fails with ERROR_OPERATION_ABORTED and the slot
+        /// rebuilds its pipe instance.
+        /// </summary>
+        public static bool CancelBlockingWrite(uint threadId)
+        {
+            IntPtr thread = OpenThread(THREAD_TERMINATE, false, threadId);
+            if (thread == IntPtr.Zero)
+                return false;
+            try { return CancelSynchronousIo(thread); }
+            finally { CloseHandle(thread); }
         }
 
         public static int LastError()

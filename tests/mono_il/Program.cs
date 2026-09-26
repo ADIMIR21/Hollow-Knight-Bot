@@ -1,21 +1,22 @@
-// Ищем заглушки (NotImplementedException / PlatformNotSupportedException) в типах
-// System.IO.Pipes внутри указанной сборки. Читаем IL напрямую через
-// System.Reflection.Metadata — ничего запускать не нужно.
+// Look for stubs (NotImplementedException / PlatformNotSupportedException) in the
+// System.IO.Pipes types of the given assembly. IL is read directly through
+// System.Reflection.Metadata — nothing has to be executed.
 using System.Collections.Immutable;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
 using System.Reflection.PortableExecutable;
 
 string path = args.Length > 0 ? args[0] : @"System.Core.dll";
-// Без списка типов печатаем весь System.IO.Pipes; иначе — только названные типы.
+// Without a type list we print the whole System.IO.Pipes namespace; otherwise only
+// the named types.
 string[] wantedTypes = args.Length > 1 ? args[1..] : Array.Empty<string>();
 
 using var fs = File.OpenRead(path);
 using var pe = new PEReader(fs);
 MetadataReader md = pe.GetMetadataReader();
 
-Console.WriteLine($"Файл: {path}");
-Console.WriteLine($"Типов в сборке: {md.TypeDefinitions.Count}");
+Console.WriteLine($"File: {path}");
+Console.WriteLine($"Types in assembly: {md.TypeDefinitions.Count}");
 
 foreach (TypeDefinitionHandle tdh in md.TypeDefinitions)
 {
@@ -47,12 +48,12 @@ foreach (TypeDefinitionHandle tdh in md.TypeDefinitions)
 
 static string StubKind(PEReader pe, MetadataReader md, MethodDefinition m)
 {
-    if (m.RelativeVirtualAddress == 0) return "нет тела (extern/abstract)";
+    if (m.RelativeVirtualAddress == 0) return "no body (extern/abstract)";
     MethodBodyBlock body;
     try { body = pe.GetMethodBody(m.RelativeVirtualAddress); }
-    catch (Exception e) { return "не прочитать тело: " + e.Message; }
+    catch (Exception e) { return "cannot read body: " + e.Message; }
     byte[] il = body.GetILBytes();
-    if (il == null) return "нет IL";
+    if (il == null) return "no IL";
 
     var stubs = new List<string>();
     var calls = new List<string>();
@@ -67,9 +68,9 @@ static string StubKind(PEReader pe, MetadataReader md, MethodDefinition m)
                 stubs.Add(tn);
         }
     }
-    if (stubs.Count > 0) return "ЗАГЛУШКА: " + string.Join(" | ", stubs.Distinct());
+    if (stubs.Count > 0) return "STUB: " + string.Join(" | ", stubs.Distinct());
 
-    // Показать вызовы других методов того же типа (цепочка делегирования)
+    // Show calls to other methods of the same type (delegation chain)
     for (int i = 0; i < il.Length; i++)
     {
         if ((il[i] == 0x28 || il[i] == 0x6F) && i + 4 < il.Length)
@@ -79,8 +80,8 @@ static string StubKind(PEReader pe, MetadataReader md, MethodDefinition m)
                 calls.Add(tn);
         }
     }
-    string suffix = calls.Count > 0 ? " | вызывает: " + string.Join(", ", calls.Distinct()) : "";
-    return $"IL {il.Length} б, лок.перем. {body.LocalSignature.IsNil switch { true => 0, false => 1 }}{suffix}";
+    string suffix = calls.Count > 0 ? " | calls: " + string.Join(", ", calls.Distinct()) : "";
+    return $"IL {il.Length} bytes, locals {body.LocalSignature.IsNil switch { true => 0, false => 1 }}{suffix}";
 }
 
 static string ResolveToken(MetadataReader md, int token)

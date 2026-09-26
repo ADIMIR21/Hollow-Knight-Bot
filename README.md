@@ -8,7 +8,7 @@ The project consists of two main components:
 
 ### 1. C# Mod for Hollow Knight (`Mod/HK_AI_Mod/`)
 
-The mod exports game telemetry to a JSON file (`%TEMP%/hk_ai_data.json`, atomic write via `File.Replace`):
+The mod exports game telemetry over a **named pipe** `\\.\pipe\hk_ai_mod` (protocol 3, line-delimited JSON, one line per `HeroUpdate`, ~60/s). The old `%TEMP%/hk_ai_data.json` file protocol has been removed entirely - there is no file fallback:
 
 - **Player position** (X, Y) and velocity
 - **Player HP**, soul (MP) reserve
@@ -18,18 +18,22 @@ The mod exports game telemetry to a JSON file (`%TEMP%/hk_ai_data.json`, atomic 
 - **Boss death**: the `boss_dead` field - detected via the FSM state `Death Anim Start`, the `BossSceneController.OnBossesDead` event, `isDead`, and HP <= 0; after death `boss_hp` is pinned to 0
 - **FSM log**: the mod writes every boss FSM state to the ModLog and classifies them (attack / not attack)
 
-**Fast restart** is supported: Python puts `restart` into `%TEMP%/hk_ai_cmd.txt`, and the mod reloads the fight scene via `BeginSceneTransition`. The target scene is read from `%TEMP%/hk_ai_boss.txt` (default `GG_False_Knight`), the entry point from `%TEMP%/hk_ai_gate.txt`. While Python writes `restart_pending: 1` to the telemetry - the mod has acknowledged the command.
+The mod keeps a duplex server on `\\.\pipe\hk_ai_mod` (up to 4 clients, so training and a debugger can run side by side): when a client connects it first receives a hello line `{"status": "pipe_hello", "protocol": 3, "mod_version": "v1"}`. Reading and writing happen on background threads - the game thread only publishes the latest telemetry frame, so a hung Python process cannot freeze the game.
 
-**Why the screen used to turn white, and why the restart is now deferred.** `GameManager.EnterHero(additiveGateSearch: true)` looks for `EntryGateName` only among the `TransitionPoint`s of the scene being loaded; if the name is not there, the game writes `Searching in next scene for TransitionGate failed.` to Player.log and returns - without `EnterScene`, without `FinishedEnteringScene`, without `FadeSceneIn`. The hero stays in `transitioning`, and the camera fade (white after death / after exiting the arena) stays stuck on screen. Previously the mod always passed `door1`, which does not exist in Godhome arenas (their only gate is `door_dreamEnter`), so every episode was rescued by the watchdog, and the white screen appeared every other time - precisely when the forced transition wedged itself into the game's own white scenario (Dream Return on death, `GG TRANSITION OUT STATUE` on victory). Now the mod: (1) picks a gate that actually exists in the scene (and remembers it in `%TEMP%/hk_ai_gates.txt` per scene), (2) accepts the command immediately, but performs the transition itself only when the game is not busy with its own victory/death scenario, (3) clears a stuck camera fade with the `FADE SCENE IN` event (the stock `CameraController.FadeInFailSafe` does not run in this build of the game), (4) writes every camera fade state to the ModLog - from it you can see what is happening at the end of an episode.
+**Fast restart** is supported: Python sends `restart [scene] [gate]` into the pipe, and the mod reloads the fight scene via `BeginSceneTransition`. The target scene and the entry point are stored inside the mod and set with `set_boss` / `set_gate` (defaults `GG_False_Knight` / `door_dreamEnter`). The mod acknowledges the command with `restart_pending: 1` in the telemetry - it stays set while the mod waits for a safe moment to transition.
 
-**Choosing a Pantheon boss** - the mod contains a built-in Godhome boss registry (all `GG_*` scenes from the game's build settings) and understands commands in `%TEMP%/hk_ai_cmd.txt`:
+**Why the screen used to turn white, and why the restart is now deferred.** `GameManager.EnterHero(additiveGateSearch: true)` looks for `EntryGateName` only among the `TransitionPoint`s of the scene being loaded; if the name is not there, the game writes `Searching in next scene for TransitionGate failed.` to Player.log and returns - without `EnterScene`, without `FinishedEnteringScene`, without `FadeSceneIn`. The hero stays in `transitioning`, and the camera fade (white after death / after exiting the arena) stays stuck on screen. Previously the mod always passed `door1`, which does not exist in Godhome arenas (their only gate is `door_dreamEnter`), so every episode was rescued by the watchdog, and the white screen appeared every other time - precisely when the forced transition wedged itself into the game's own white scenario (Dream Return on death, `GG TRANSITION OUT STATUE` on victory). Now the mod: (1) picks a gate that actually exists in the scene (and remembers it in memory per scene), (2) accepts the command immediately, but performs the transition itself only when the game is not busy with its own victory/death scenario, (3) clears a stuck camera fade with the `FADE SCENE IN` event (the stock `CameraController.FadeInFailSafe` does not run in this build of the game), (4) writes every camera fade state to the ModLog - from it you can see what is happening at the end of an episode.
+
+**Choosing a Pantheon boss** - the mod contains a built-in Godhome boss registry (all `GG_*` scenes from the game's build settings) and understands these commands from the pipe:
 
 | Command | Action |
 |---------|----------|
-| `restart` | Fast restart: reload the scene from `hk_ai_boss.txt` (the mod picks a gate that matches the scene, `hk_ai_gate.txt` is the preferred option) |
+| `restart [scene] [gate]` | Fast restart: reload the scene (default - the target set by `set_boss`). The mod picks a gate that exists in the scene; an explicitly set `set_gate` takes priority |
 | `teleport` | Same as `restart` - teleport to the target boss's arena |
-| `boss <query>` | **Select a boss and teleport to it.** Query: index in the registry, scene name (`gg_hornet_1`, case-insensitive), short alias (`hornet`, `nkg`, `sisters`, `oro`) or part of the name. The selected scene is remembered in `hk_ai_boss.txt`, so restarts and training keep working with that arena |
-| `bosses` | Dump the full registry to `%TEMP%/hk_ai_bosses.json` (works even in the main menu) |
+| `set_boss <scene>` | Set the target scene: alias (`hornet`, `nkg`), scene name or registry index |
+| `set_gate <gate>` | Set the arena entry gate (an empty value restores the default `door_dreamEnter`) |
+| `boss <query>` | **Select a boss and teleport to it.** Query: index in the registry, scene name (`gg_hornet_1`, case-insensitive), short alias (`hornet`, `nkg`, `sisters`, `oro`) or part of the name. The selected scene becomes the mod's target, so restarts and training keep working with that arena. The mod answers with a `boss_selected` event |
+| `bosses` | Send the full registry as a `boss_list` event (works even in the main menu) |
 | `warp` | Return the hero to the arena gate without reloading the scene (if thrown out of the fight / stuck) |
 
 Telemetry contains a `scene` field (the current scene) - so Python and the human can see which boss's arena the fight is taking place in. If a scene transition hangs (the hero stays in `transitioning`), the mod's watchdog finds the entry point after 2.5 seconds via the `TransitionPoint.TransitionPoints` registry and properly triggers `HeroController.EnterScene`; on a repeated hang it teleports the hero to the gate and lifts the freeze directly (the private `FinishedEnteringScene` + re-enabling rendering). The watchdog also raises `Time.timeScale` if the transition zeroed out time.
@@ -38,14 +42,15 @@ Telemetry contains a `scene` field (the current scene) - so Python and the human
 
 | File | Purpose |
 |------|---------|
-| `ai_controller.py` | Xbox 360 gamepad emulation via `vgamepad` (16 discrete actions), writes the restart command to the cmd file |
+| `ai_controller.py` | Xbox 360 gamepad emulation via `vgamepad` (16 discrete actions); sends restart/scene/gate commands into the mod's pipe |
 | `screen_capture.py` | Game screen capture via `mss` + auto-focus on the Hollow Knight window |
-| `ai_environment.py` | The environment: combines the video stream and telemetry (telemetry is read with retries - the file is constantly overwritten by the game) |
+| `ai_environment.py` | The environment: combines the video stream and telemetry; steps are synced by the pipe message counter (`seq`), so there is no file polling |
+| `hk_pipe.py` | **Named-pipe client** for the mod: background reader with auto-reconnect, `get_telemetry()`, `send_command()`, one-shot events (`wait_for_status`), one shared client per process |
 | `hk_gym.py` | **Gymnasium environment** - the RL core: observation space, rewards, episode logic, fast restart |
 | `train.py` | **PPO training** via Stable-Baselines3; `--boss` picks the boss, training files are laid out per boss automatically |
-| `ai_receiver.py` | Real-time telemetry debugger |
-| `bosses.py` | Godhome boss registry (mirror of the mod's registry) + `%TEMP%/*` command protocol |
-| `teleport.py` | **Teleport to Pantheon bosses**: interactive boss selection, restart, warp to the arena, `--train` - teleport and train right away |
+| `ai_receiver.py` | Real-time telemetry debugger (connects as a second pipe client, so it does not disturb training) |
+| `bosses.py` | Godhome boss registry (mirror of the mod's registry) + command protocol over the pipe |
+| `teleport.py` | **Teleport to Pantheon bosses**: interactive boss selection, restart, warp to the arena, `--verify` - compare the Python and mod registries over the pipe, `--train` - teleport and train right away |
 
 The mod must be loaded into the game for the framework to work!   
 
@@ -74,7 +79,7 @@ The mod must be loaded into the game for the framework to work!
 
 - A vector of **25 numeric values**: HP, soul, boss HP, player and boss positions, distance and direction to the boss, velocities, state flags (grounded, facing right for the player and the boss, attack, dash, jump, fall, recoil, `boss_is_attacking`, `near_hazard`, `was_hit`)
 - **Frame stack**: a stack of the last 4 vectors -> `100` features at the policy's input (set by `HK_FRAME_STACK`)
-- **Frame skip**: `HK_FRAME_SKIP` is no longer used - each step now waits for a FRESH telemetry write (mtime change) via `wait_for_fresh_telemetry` in `ai_environment.py`, so the step rate follows the game itself (roughly up to ~60 steps/s); if no new data arrives (menu/pause), a short fallback sleep is used
+- **Frame skip**: `HK_FRAME_SKIP` is no longer used - each step waits for a FRESH telemetry frame via `wait_for_fresh_telemetry` in `ai_environment.py` (the pipe message counter `seq` must change), so the step rate follows the game itself (roughly up to ~60 steps/s); if no fresh frame arrives (menu/pause), the step continues after a short wait
 - Observations and rewards are normalized via `VecNormalize` (reward normalization is enabled - the reward is clipped within static bounds, victory/death signals are not lost)
 - Attacks are aimed toward the boss by default (`_redirect_attack_to_boss`)
 
@@ -133,6 +138,8 @@ The DLL cannot be overwritten while the game is running - close the game before 
 powershell -ExecutionPolicy Bypass -File deploy_mod.ps1 -Build
 ```
 
+The build must match the Python side: from the pipe transport on, the mod talks to Python over the named pipe `\\.\pipe\hk_ai_mod`, so with an old DLL deployed the framework will not see the game at all (it reports that the mod did not answer within 20 s).
+
 ### Teleporting to Pantheon bosses (choosing a boss to train)
 
 The mod can teleport to any Godhome boss - convenient for choosing which boss to train:
@@ -147,7 +154,7 @@ python teleport.py --restart      # restart the fight
 python teleport.py --warp         # return the hero to the arena gate
 ```
 
-The game must be running with the mod (not in the main menu - a loaded save is required). The choice is remembered: fast restart and training (`train.py`) keep working with the selected arena. If the teleport into the scene does not fire - check the ModLog: the mod logs which gates exist in the scene; a non-standard entrance can be set with the file `%TEMP%/hk_ai_gate.txt`.
+The game must be running with the mod (not in the main menu - a loaded save is required). The choice is remembered: fast restart and training (`train.py`) keep working with the selected arena. If the teleport into the scene does not fire - check the ModLog: the mod logs which gates exist in the scene; a non-standard entrance can be forced with the `set_gate` command (`bosses.set_gate("<gate>")`, `HK_ENTRY_GATE`).
 
 ### Teleport + train right away
 
@@ -205,7 +212,7 @@ Environment variables:
 | Variable | Default | Description |
 |------------|--------------|----------|
 | `HK_BOSS_SCENE` | `GG_False_Knight` | Scene/boss for restarts and training: a scene name (`GG_Hornet_1`), an alias (`hornet`, `nkg`, `sisters`) or an index from the registry (`python teleport.py --list`) |
-| `HK_ENTRY_GATE` | `door_dreamEnter` | Arena entry gate (file `%TEMP%/hk_ai_gate.txt`; the mod picks an existing gate itself) |
+| `HK_ENTRY_GATE` | `door_dreamEnter` | Arena entry gate; sent to the mod with `set_gate` at startup (if the gate is not in the scene, the mod still picks an existing one itself) |
 | `HK_FRAME_SKIP` | `4` | No longer used - kept for backward compatibility only / ignored; each step now syncs to a fresh telemetry write instead |
 | `HK_FRAME_STACK` | `4` | How many recent observations go into the stack |
 
@@ -249,8 +256,11 @@ Watch in real time: `Get-Content logs\progress.txt -Wait -Tail 40` (PowerShell).
 ### Telemetry debugging
 
 ```bash
-python ai_receiver.py
+python ai_receiver.py        # live telemetry over the pipe (a second client - training keeps running)
+python teleport.py --verify  # compare the Python and mod boss registries over the pipe
 ```
+
+The pipe is the only channel between the game and Python, so if the framework "does not see" the game: make sure the deployed build is the pipe build (see "Building and installing the mod"), and check the ModLog - on startup the mod prints the pipe name it listens on. The transport can also be exercised without the game: `tests/pipe_sim/` is a mock mod plus an integration test (see `tests/pipe_sim/README.md`).
 
 ## Training parameters (PPO)
 
@@ -274,31 +284,44 @@ python ai_receiver.py
 
 ### Mod (`Mod/HK_AI_Mod/`)
 - Built-in **Godhome boss registry** (60 entries): all combat `GG_*` scenes from the game's build settings, fight variants (`_V` = Ascended/Radiant, `GG_Mantis_Lords_V` = Sisters of Battle, `GG_Nosk_Hornet` = Winged Nosk), plus Godhome hubs
-- New commands in `%TEMP%/hk_ai_cmd.txt`:
-  - `boss <query>` - select a boss and teleport to its arena (index, scene name in any register, the alias `hornet`/`nkg`/`sisters`, or part of the name); the choice is remembered in `hk_ai_boss.txt`
-  - `bosses` - dump the registry to `%TEMP%/hk_ai_bosses.json` (works in the main menu too)
+- New commands over the pipe:
+  - `boss <query>` - select a boss and teleport to its arena (index, scene name in any register, the alias `hornet`/`nkg`/`sisters`, or part of the name); the choice becomes the mod's target
+  - `bosses` - send the registry as a `boss_list` event (works in the main menu too)
+  - `set_boss <scene>` / `set_gate <gate>` - set the target scene and the arena entry gate
   - `teleport` - teleport to the target boss's arena
   - `warp` - return the hero to the arena gate without reloading the scene
-- `restart`/`teleport` take the entry gate from `hk_ai_gate.txt` (previously it was hard-coded `door1`, which does not exist in Godhome arenas); the current version additionally validates it against the scene's real `TransitionPoint`s - see the section on the white screen
+- `restart`/`teleport` take the entry gate from `set_gate` (previously it was hard-coded `door1`, which does not exist in Godhome arenas); the current version additionally validates it against the scene's real `TransitionPoint`s - see the section on the white screen
 - Query resolver: index -> scene name -> alias -> exact title -> partial match (ambiguous queries are rejected with a hint)
 - Added the `scene` field to the telemetry - the current fight scene
 
+### Named-pipe transport instead of `%TEMP%` files
+- The whole mod <-> Python channel moved to the named pipe `\\.\pipe\hk_ai_mod` (protocol 3, line-delimited JSON): telemetry, commands (`restart`, `teleport`, `set_boss`, `set_gate`, `boss`, `bosses`, `warp`), one-shot events (`boss_list`, `boss_selected`, `command_error`) and the registry dump. The files `%TEMP%/hk_ai_data.json`, `hk_ai_cmd.txt`, `hk_ai_boss.txt`, `hk_ai_gate.txt`, `hk_ai_gates.txt`, `hk_ai_bosses.json` are gone - no file fallback is left
+- The mod's server is implemented on raw kernel32 (`Mod/HK_AI_Mod/Win32Pipe.cs`), because in the game's Mono every `NamedPipeServerStream` constructor is a stub that throws `NotImplementedException` (proved by the IL probe in `tests/mono_il/`). One thread per slot, up to 4 clients, synchronous handles without overlapped I/O: a hanging read cannot block a write
+- The game thread only publishes the latest frame, so Python can neither slow the game down nor break its own connection; the reader keeps reading the freshest message and never waits for old ones
+- Python side: `hk_pipe.py` (background reader thread, auto-reconnect, hello re-read on reconnect), `bosses.py` / `ai_controller.py` / `ai_environment.py` / `teleport.py` / `ai_receiver.py` switched to it
+- A client that stops reading cannot eat a slot: a write stuck for more than 3 s is cancelled (`CancelSynchronousIo`), the slot is freed and rebuilt - covered by `--selftest-stuck` in the harness
+- `tests/pipe_sim/` - a mock mod plus 36 integration checks; the harness compiles the same `Win32Pipe.cs` and refuses to start if the real mod's pipe exists on the machine (so it cannot accidentally connect to the live game)
+- Deployment is paired: the Python side requires the pipe build of the mod. With an older build deployed the pipe is simply absent - the framework reports that the mod did not answer within 20 s
+
 ### Python framework
-- `bosses.py` (new) - mirror of the mod's registry + command protocol (`send_command`, `request_boss`, `request_restart`, `request_warp`, `wait_for_scene`, etc.)
+- `bosses.py` (new) - mirror of the mod's registry + command protocol over the pipe (`send_command`, `request_boss`, `request_restart`, `request_warp`, `wait_for_scene`, etc.)
+- `hk_pipe.py` (new) - the named-pipe client the whole Python side runs on: one shared client per process, background reader with auto-reconnect, one-shot events (`wait_for_status`)
 - `teleport.py` (new) - interactive boss selection and teleport: menu, `--list`, `--boss <query>`, `--restart`, `--warp`, `--train` (teleport and train right away); fallback for mod builds without the `boss`/`warp` commands
 - `train.py` - the `--boss` flag; **training files are laid out per boss automatically** (`models/ppo_hk/<scene>/`: checkpoints, `hk_model_final.zip`, `vecnormalize.pkl`); an old save from the root of `models/ppo_hk/` migrates to `GG_False_Knight/` on the first run
 - `hk_gym.py` - `HK_BOSS_SCENE` accepts aliases and indices, `HK_ENTRY_GATE` added (the arena gate)
 - `deploy_mod.ps1` (new) - game lookup via the Steam registry, build and deployment of the DLL with the game closed
 
 ### White screen at the end of an episode and the arena gate
-- **Automatic entry gate selection**: the mod takes `EntryGateName` from the scene's real `TransitionPoint` list (priority - the gate from `hk_ai_gate.txt` if it exists in the scene; otherwise a gate with `dream` in its name; otherwise the first one) and remembers `scene=gate` pairs in `%TEMP%/hk_ai_gates.txt`. Previously `door1` was always sent, which does not exist in Godhome arenas
-- **Deferred restart**: the `restart`/`teleport`/`boss` command is accepted immediately (the cmd file is deleted, `restart_pending: 1`), but `BeginSceneTransition` runs only when the game is not busy with its own scenario - no `IsInSceneTransition`/`IsLoadingSceneTransition`, the hero is not in `transitioning`, is not dying, and the white arena exit is not playing (`BossSceneController.isTransitioningOut`). The death signal is narrow: `cState.dead`/`hazardDeath`, or `health <= 0` **while the scene matches the target arena** (`controlReqlinquished` in Godhome is set even for a live hero in the hall, so it is not used as a stop factor). If the state has not cleared within 10 s, the transition is forced (a warning with the reason for waiting is written to the ModLog)
+- **Automatic entry gate selection**: the mod takes `EntryGateName` from the scene's real `TransitionPoint` list (priority - the gate explicitly set with `set_gate` if it exists in the scene; otherwise a gate with `dream` in its name; otherwise the first one) and remembers `scene=gate` pairs in memory. Previously `door1` was always sent, which does not exist in Godhome arenas
+- **Deferred restart**: the `restart`/`teleport`/`boss` command is accepted immediately (`restart_pending: 1` while the mod is waiting), but `BeginSceneTransition` runs only when the game is not busy with its own scenario - no `IsInSceneTransition`/`IsLoadingSceneTransition`, the hero is not in `transitioning`, is not dying, and the white arena exit is not playing (`BossSceneController.isTransitioningOut`). The death signal is narrow: `cState.dead`/`hazardDeath`, or `health <= 0` **while the scene matches the target arena** (`controlReqlinquished` in Godhome is set even for a live hero in the hall, so it is not used as a stop factor). If the state has not cleared within 10 s, the transition is forced (a warning with the reason for waiting is written to the ModLog)
 - **Camera fade watchdog**: every state change of the `CameraFade` FSM is written to the ModLog; if the fade sticks outside `Normal` (1.5 s, 1.0 s for `FadingOut`) while the game is calm (scene loaded, hero not transitioning), the mod sends `FADE SCENE IN` - the same event the game uses. The stock `CameraController.FadeInFailSafe` never runs anywhere in this build of the game (dead code), so the white screen never fixed itself before
 - Python: `HK_ENTRY_GATE`/`--entry-gate` defaults to `door_dreamEnter`; the wait for the fight scene after a fast restart was increased to 40 s (the mod may defer the transition); victory is confirmed by the `boss_dead` event over `HK_VICTORY_FRAMES=3` frames (it used to be 20) so that the restart makes it into the `bossesDeadWaitTime` window and does not hit the white arena exit
 - The training console prints `[TIMING] reset (<reason>): X.XXs` and a summary every 10 resets - it shows how much an episode restart actually costs
 
 ### Verified live
 All of the mod's commands were tested on a running game: dumping the list (60 bosses), teleporting from the Atrium to the Vengefly King arena with the fight starting, arena restart, warp to the gate.
+
+The pipe transport was verified on a running game as well: the hello line reports `protocol=3`, telemetry streams continuously, two clients connect at the same time (training + debugger), `bosses` returns all 60 records, `set_boss`/`boss` reload the scene and the fight starts (`GG_False_Knight`, `GG_Hornet_1`, `GG_Vengefly`), `set_gate` + `warp` work, and the ModLog stays clean. The transport itself is covered by the harness in `tests/pipe_sim/` (36 checks against the same `Win32Pipe.cs` the mod uses).
 
 The mod version is deliberately pinned to `v1` and does not change with edits (see the comment on `GetVersion` in `AiDataExporter.cs`) - it exists only to tell a fresh build from old ones; the change history is kept in the "Changelog" section rather than in version numbers.
 

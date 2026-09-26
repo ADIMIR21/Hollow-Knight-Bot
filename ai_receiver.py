@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Отладчик телеметрии мода HK_AI_Mod через именованный пайп.
+"""Real-time debugger for the HK_AI_Mod telemetry over the named pipe.
 
-Подключается к \\\\.\\pipe\\hk_ai_mod как второй клиент (мод держит до 4
-инстансов, поэтому может работать параллельно с тренировкой) и печатает
-каждое новое сообщение мода.
+Connects to \\\\.\\pipe\\hk_ai_mod as a second client (the mod keeps up to 4
+instances, so it can run in parallel with training) and prints
+every new message from the mod.
 """
 import json
 import os
@@ -12,17 +12,17 @@ import time
 
 from hk_pipe import HKPipeClient, PIPE_PATH
 
-print(f"Подключаюсь к пайпу: {PIPE_PATH}")
-print("Для выхода нажмите Ctrl + C\n")
+print(f"Connecting to the pipe: {PIPE_PATH}")
+print("Press Ctrl + C to exit\n")
 
 client = HKPipeClient(verbose=False)
 
 if not client.wait_connected(timeout=30.0):
-    print("ОШИБКА: мод не ответил за 30 секунд.")
-    print("Проверь: игра запущена? HK_AI_Mod.dll установлен в Mods? Другая программа не заняла пайп?")
+    print("ERROR: the mod did not respond within 30 seconds.")
+    print("Check: is the game running? Is HK_AI_Mod.dll installed in Mods? Has another program taken the pipe?")
     sys.exit(1)
 
-print("Подключено к моду! Читаю телеметрию...\n")
+print("Connected to the mod! Reading telemetry...\n")
 
 attempt = 0
 last_seq = -1
@@ -38,30 +38,30 @@ try:
 
             status = data.get("status")
             if data.get("event"):
-                # Одноразовое событие (boss_list / boss_selected / command_error).
-                # В наблюдения RL оно не попадает, поэтому печатаем его здесь.
-                print(f"[{attempt}] (Событие) {status} -> "
+                # A one-shot event (boss_list / boss_selected / command_error).
+                # It does not reach the RL observations, so we print it here.
+                print(f"[{attempt}] (Event) {status} -> "
                       f"{json.dumps(data, ensure_ascii=False)}")
             elif status == "fight":
                 print(f"[{attempt}] HP: {data.get('hp')}/{data.get('max_hp')} | "
-                      f"Душа: {data.get('mana')} | Босс: {data.get('boss_hp')} HP | "
+                      f"Soul: {data.get('mana')} | Boss: {data.get('boss_hp')} HP | "
                       f"X: {data.get('x')}, Y: {data.get('y')} | "
-                      f"Босс атакует: {data.get('boss_is_attacking')} | "
+                      f"Boss attacking: {data.get('boss_is_attacking')} | "
                       f"restart_pending: {data.get('restart_pending')}")
             else:
-                print(f"[{attempt}] (Статус) -> {status}")
+                print(f"[{attempt}] (Status) -> {status}")
 
             clear += 1
             if clear == 200:
                 os.system('cls' if os.name == 'nt' else 'clear')
-                print(f"Подключено к {PIPE_PATH}. Для выхода Ctrl+C\n")
+                print(f"Connected to {PIPE_PATH}. Press Ctrl+C to exit\n")
                 clear = 0
                 attempt = 0
         else:
-            # Новых сообщений нет (меню/пауза/мод молчит) — короткий сон.
+            # No new messages (menu/pause/the mod is silent) — a short sleep.
             time.sleep(0.01)
 
 except KeyboardInterrupt:
-    print("\nОстанавливаю.")
+    print("\nStopping.")
     client.stop()
     sys.exit(0)
