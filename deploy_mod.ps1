@@ -64,4 +64,4 @@ if (-not (Test-Path $modsDir)) {
 }
 Copy-Item $dll (Join-Path $modsDir "HK_AI_Mod.dll") -Force
 Write-Host "Деплой выполнен: $modsDir\HK_AI_Mod.dll" -ForegroundColor Green
-Write-Host "Запусти игру и проверь ModLog — версия мода должна быть 1.2."
+Write-Host "Запусти игру и проверь ModLog — версия мода должна быть 1.3."

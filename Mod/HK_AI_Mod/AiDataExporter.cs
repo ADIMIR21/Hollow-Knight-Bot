@@ -3,10 +3,9 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
-using System.IO.Pipes;
 using System.Text;
 using System.Threading;
-using System.Threading.Tasks;
+using HKPipeInterop;
 using UnityEngine;
 using Modding;
 
@@ -17,7 +16,10 @@ namespace HK_AI_Mod
         public override string GetVersion() => "1.3";
 
         // ---------------- Транспорт: именованный пайп (протокол v3) ----------------
-        // Сервер: \\.\pipe\hk_ai_mod (duplex, построчный обмен).
+        // Сервер: \\.\pipe\hk_ai_mod (duplex, построчный обмен), поднимается
+        // напрямую через kernel32 — см. Win32Pipe.cs и объяснение там же, почему
+        // нельзя взять System.IO.Pipes.NamedPipeServerStream (в Mono игры все его
+        // конструкторы — заглушки с NotImplementedException).
         //   Мод   -> Python: строки JSON — hello при подключении, затем телеметрия,
         //                     плюс одноразовые события (список боссов, подтверждения).
         //   Python -> Мод: текстовые команды (см. HandleCommand):
@@ -768,149 +770,167 @@ namespace HK_AI_Mod
 
         // ---------------- Пайп-сервер ----------------
 
+        // Слот на клиента. Поток блокируется в ConnectNamedPipe, пока клиент не
+        // подключится, а затем сам его обслуживает (PumpClient).
         private void PipeListenerLoop()
         {
+            for (int slot = 0; slot < MAX_PIPE_CLIENTS; slot++)
+            {
+                int slotId = slot;
+                var thread = new Thread(() => PipeSlotLoop(slotId))
+                {
+                    IsBackground = true,
+                    Name = "HK_AI_PipeSlot" + slotId
+                };
+                thread.Start();
+            }
+        }
+
+        private void PipeSlotLoop(int slot)
+        {
+            byte[] readBuf = new byte[4096];
+            var lineBuf = new StringBuilder();
+            var events = new List<string>();
+            var payload = new StringBuilder();
+
             while (!_shuttingDown)
             {
-                NamedPipeServerStream server = null;
+                IntPtr pipe = Win32Pipe.Create(@"\\.\pipe\" + PIPE_NAME, MAX_PIPE_CLIENTS, 65536, 8192);
+                if (pipe == IntPtr.Zero)
+                {
+                    if (!_shuttingDown)
+                        Log($"[ИИ] Пайп-слот {slot}: CreateNamedPipe не удался (ошибка {Win32Pipe.LastError()})");
+                    Thread.Sleep(1000);
+                    continue;
+                }
+
                 try
                 {
-                    // ВАЖНО: PipeOptions.Asynchronous. С синхронным хэндлом
-                    // (PipeOptions.None) висящий блокирующий ReadAsync держит
-                    // файловый объект пайпа, из-за чего следующий WriteLine
-                    // навсегда повисает — телеметрия умирает после первого кадра,
-                    // а команды Python не доходят. Overlapped I/O обязателен.
-                    server = new NamedPipeServerStream(
-                        PIPE_NAME, PipeDirection.InOut, MAX_PIPE_CLIENTS,
-                        PipeTransmissionMode.Byte, PipeOptions.Asynchronous,
-                        inBufferSize: 8192, outBufferSize: 65536);
-                    server.WaitForConnection();
-                    Log("[ИИ] Пайп: клиент подключился");
+                    if (!Win32Pipe.Connect(pipe))
+                    {
+                        if (!_shuttingDown)
+                        {
+                            Log($"[ИИ] Пайп-слот {slot}: ConnectNamedPipe не удался (ошибка {Win32Pipe.LastError()})");
+                            Thread.Sleep(1000);
+                        }
+                        continue;
+                    }
 
-                    Thread pump = new Thread(ClientPump) { IsBackground = true, Name = "HK_AI_PipeClient" };
-                    pump.Start(server);
-                    server = null; // владение перешло потоку ClientPump
+                    Log($"[ИИ] Пайп-слот {slot}: клиент подключился");
+                    byte[] hello = Utf8("{\"status\": \"pipe_hello\", \"protocol\": " + PROTOCOL_VERSION
+                        + ", \"mod_version\": \"" + MOD_VERSION + "\"}\n");
+                    if (Win32Pipe.Write(pipe, hello, hello.Length))
+                        PumpClient(pipe, readBuf, lineBuf, events, payload);
                 }
                 catch (Exception e)
                 {
                     if (!_shuttingDown)
-                    {
-                        Log("[ИИ] Ошибка пайп-сервера: " + e.Message);
-                        Thread.Sleep(1000);
-                    }
+                        Log($"[ИИ] Пайп-слот {slot}: ошибка — {e.Message}");
                 }
                 finally
                 {
-                    if (server != null)
-                    {
-                        try { server.Dispose(); } catch (Exception) {}
-                    }
+                    Win32Pipe.Close(pipe);
                 }
             }
         }
 
-        private void ClientPump(object state)
+        // Обслуживание одного клиента. Всё на одном потоке: сначала пишем
+        // накопившееся, затем опрашиваем и читаем команды. На хэндле никогда не
+        // висит незавершённая операция, поэтому запись не может повиснуть на
+        // незавершённом чтении (именно это убивало прежнюю реализацию).
+        private void PumpClient(IntPtr pipe, byte[] readBuf, StringBuilder lineBuf,
+            List<string> events, StringBuilder payload)
         {
-            NamedPipeServerStream server = (NamedPipeServerStream)state;
-            try
+            long lastSeq = -1;
+            long lastOutboxId;
+            // События, накопившиеся до подключения, не переигрываем:
+            // клиента интересуют только ответы на его собственные команды.
+            lock (_sync) { lastOutboxId = _outboxSeq; }
+
+            while (!_shuttingDown)
             {
-                using (server)
-                using (StreamWriter writer = new StreamWriter(server, new UTF8Encoding(false)) { AutoFlush = true, NewLine = "\n" })
+                events.Clear();
+                string toSend = null;
+
+                lock (_sync)
                 {
-                    // hello-строка: клиент может проверить, что это наш протокол
-                    writer.WriteLine("{\"status\": \"pipe_hello\", \"protocol\": " + PROTOCOL_VERSION
-                        + ", \"mod_version\": \"" + MOD_VERSION + "\"}");
-
-                    long lastSeq = -1;
-                    long lastOutboxId;
-                    // События, накопившиеся до подключения, не переигрываем:
-                    // клиента интересуют только ответы на его собственные команды.
-                    lock (_sync) { lastOutboxId = _outboxSeq; }
-
-                    List<string> events = new List<string>();
-                    byte[] readBuf = new byte[4096];
-                    StringBuilder lineBuf = new StringBuilder();
-                    Task<int> readTask = BeginPipeRead(server, readBuf);
-
-                    while (server.IsConnected && !_shuttingDown)
+                    // 1) Одноразовые события: каждый клиент получает их ровно раз.
+                    if (_outboxSeq != lastOutboxId)
                     {
-                        string toSend = null;
-                        events.Clear();
-
-                        lock (_sync)
-                        {
-                            // 1) Одноразовые события: каждый клиент получает их ровно раз.
-                            if (_outboxSeq != lastOutboxId)
-                            {
-                                foreach (KeyValuePair<long, string> ev in _outbox)
-                                    if (ev.Key > lastOutboxId) events.Add(ev.Value);
-                                lastOutboxId = _outboxSeq;
-                            }
-
-                            // 2) Телеметрия: только самый свежий кадр, старые не копим.
-                            if (_seq != lastSeq)
-                            {
-                                lastSeq = _seq;
-                                toSend = _latestJson;
-                            }
-
-                            if (events.Count == 0 && toSend == null)
-                                Monitor.Wait(_sync, PIPE_POLL_MS);
-                        }
-
-                        for (int i = 0; i < events.Count; i++)
-                            writer.WriteLine(events[i]);
-                        if (toSend != null)
-                            writer.WriteLine(toSend);
-
-                        // Неблокирующее вычитывание команд клиента.
-                        readTask = DrainIncoming(server, readTask, readBuf, lineBuf);
+                        foreach (KeyValuePair<long, string> ev in _outbox)
+                            if (ev.Key > lastOutboxId) events.Add(ev.Value);
+                        lastOutboxId = _outboxSeq;
                     }
+
+                    // 2) Телеметрия: только самый свежий кадр, старые не копим.
+                    if (_seq != lastSeq)
+                    {
+                        lastSeq = _seq;
+                        toSend = _latestJson;
+                    }
+
+                    if (events.Count == 0 && toSend == null)
+                        Monitor.Wait(_sync, PIPE_POLL_MS);
                 }
-            }
-            catch (Exception)
-            {
-                // Клиент отвалился — штатно (Python перезапустился/закрылся).
-            }
-            finally
-            {
-                try { server.Dispose(); } catch (Exception) {}
+
+                if (events.Count > 0 || toSend != null)
+                {
+                    payload.Length = 0;
+                    for (int i = 0; i < events.Count; i++)
+                        payload.Append(events[i]).Append('\n');
+                    if (toSend != null)
+                        payload.Append(toSend).Append('\n');
+
+                    byte[] bytes = Utf8(payload.ToString());
+                    if (!Win32Pipe.Write(pipe, bytes, bytes.Length))
+                        return; // клиент отвалился
+                }
+
+                // Неблокирующее вычитывание команд клиента.
+                if (!DrainCommands(pipe, readBuf, lineBuf))
+                    return;
             }
         }
 
-        private Task<int> BeginPipeRead(NamedPipeServerStream server, byte[] buf)
+        // PeekNamedPipe говорит, сколько байт готово, и только после этого читаем —
+        // ReadFile не может подвиснуть в ожидании данных.
+        private bool DrainCommands(IntPtr pipe, byte[] readBuf, StringBuilder lineBuf)
         {
-            try { return server.ReadAsync(buf, 0, buf.Length); }
-            catch (Exception) { return null; }
-        }
-
-        private Task<int> DrainIncoming(NamedPipeServerStream server, Task<int> readTask, byte[] readBuf, StringBuilder lineBuf)
-        {
-            if (readTask == null || !readTask.IsCompleted)
-                return readTask;
-
-            int n;
-            try { n = readTask.Result; }
-            catch (Exception) { throw new IOException("пайп: ошибка чтения"); }
-
-            if (n <= 0)
-                throw new IOException("пайп: клиент закрыл соединение");
-
-            lineBuf.Append(Encoding.UTF8.GetString(readBuf, 0, n));
             while (true)
             {
-                string text = lineBuf.ToString();
-                int idx = text.IndexOf('\n');
-                if (idx < 0) break;
-                string line = text.Substring(0, idx).TrimEnd('\r').Trim();
-                lineBuf.Remove(0, idx + 1);
-                if (line.Length > 0)
-                    _incomingCommands.Enqueue(line);
-            }
-            if (lineBuf.Length > 65536) // поток мусора без переводов строк — сбрасываем
-                lineBuf.Remove(0, lineBuf.Length - 1024);
+                uint available;
+                if (!Win32Pipe.Peek(pipe, out available))
+                    return false; // разрыв: клиент закрылся
 
-            return BeginPipeRead(server, readBuf);
+                if (available == 0)
+                    return true;
+
+                int toRead = (int)Math.Min(available, (uint)readBuf.Length);
+                int n = Win32Pipe.Read(pipe, readBuf, toRead);
+                if (n <= 0)
+                    return false;
+
+                lineBuf.Append(Encoding.UTF8.GetString(readBuf, 0, n));
+
+                while (true)
+                {
+                    string text = lineBuf.ToString();
+                    int idx = text.IndexOf('\n');
+                    if (idx < 0) break;
+                    string line = text.Substring(0, idx).TrimEnd('\r').Trim();
+                    lineBuf.Remove(0, idx + 1);
+                    if (line.Length > 0)
+                        _incomingCommands.Enqueue(line);
+                }
+
+                if (lineBuf.Length > 65536) // поток мусора без переводов строк — сбрасываем
+                    lineBuf.Remove(0, lineBuf.Length - 1024);
+            }
+        }
+
+        private static byte[] Utf8(string text)
+        {
+            return Encoding.UTF8.GetBytes(text);
         }
 
         private void Publish(string json)

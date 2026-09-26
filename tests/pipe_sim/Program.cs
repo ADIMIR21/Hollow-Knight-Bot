@@ -6,11 +6,10 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
-using System.IO.Pipes;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
-using System.Threading.Tasks;
+using HKPipeInterop;
 
 namespace hkpipesim
 {
@@ -60,34 +59,15 @@ namespace hkpipesim
             new Thread(TelemetryLoop) { IsBackground = true, Name = "Telemetry" }.Start();
             new Thread(CommandLoop) { IsBackground = true, Name = "Commands" }.Start();
 
-            while (!_shuttingDown)
+            // Слот на клиента — ровно как в моде: поток блокируется в
+            // ConnectNamedPipe, затем сам обслуживает клиента.
+            for (int slot = 0; slot < MAX_CLIENTS; slot++)
             {
-                NamedPipeServerStream server = null;
-                try
-                {
-                    server = new NamedPipeServerStream(
-                        PIPE_NAME, PipeDirection.InOut, MAX_CLIENTS,
-                        PipeTransmissionMode.Byte, PipeOptions.Asynchronous,
-                        inBufferSize: 8192, outBufferSize: 65536);
-                    server.WaitForConnection();
-                    Console.WriteLine("[mock] клиент подключился");
-                    Thread pump = new Thread(ClientPump) { IsBackground = true, Name = "Pump" };
-                    pump.Start(server);
-                    server = null;
-                }
-                catch (Exception e)
-                {
-                    if (!_shuttingDown)
-                    {
-                        Console.WriteLine("[mock] ошибка сервера: " + e.Message);
-                        Thread.Sleep(500);
-                    }
-                }
-                finally
-                {
-                    if (server != null) { try { server.Dispose(); } catch (Exception) { } }
-                }
+                int slotId = slot;
+                new Thread(() => PipeSlotLoop(slotId)) { IsBackground = true, Name = "Slot" + slotId }.Start();
             }
+
+            while (!_shuttingDown) Thread.Sleep(200);
         }
 
         private static void Publish(string json)
@@ -237,105 +217,125 @@ namespace hkpipesim
             return json.Substring(0, start + 1) + _targetScene + json.Substring(end);
         }
 
-        private static void ClientPump(object state)
+        private static void PipeSlotLoop(int slot)
         {
-            NamedPipeServerStream server = (NamedPipeServerStream)state;
-            int writes = 0;
-            try
+            byte[] readBuf = new byte[4096];
+            var lineBuf = new StringBuilder();
+            var events = new List<string>();
+            var payload = new StringBuilder();
+
+            while (!_shuttingDown)
             {
-                using (server)
-                using (StreamWriter writer = new StreamWriter(server, new UTF8Encoding(false)) { AutoFlush = true, NewLine = "\n" })
+                IntPtr pipe = Win32Pipe.Create(@"\\.\pipe\" + PIPE_NAME, MAX_CLIENTS, 65536, 8192);
+                if (pipe == IntPtr.Zero)
                 {
-                    writer.WriteLine("{\"status\": \"pipe_hello\", \"protocol\": 3, \"mod_version\": \"1.3\"}");
-                    Console.WriteLine("[mock] hello отправлен");
+                    Console.WriteLine($"[mock] слот {slot}: CreateNamedPipe не удался, ошибка {Win32Pipe.LastError()}");
+                    Thread.Sleep(1000);
+                    continue;
+                }
 
-                    long lastSeq = -1;
-                    long lastOutboxId;
-                    lock (Sync) { lastOutboxId = _outboxSeq; }
-
-                    List<string> events = new List<string>();
-                    byte[] readBuf = new byte[4096];
-                    StringBuilder lineBuf = new StringBuilder();
-                    Task<int> readTask = BeginPipeRead(server, readBuf);
-                    Console.WriteLine($"[mock] начальное чтение: task={(readTask == null ? "null" : "ok")}");
-
-                    while (server.IsConnected && !_shuttingDown)
+                try
+                {
+                    if (!Win32Pipe.Connect(pipe))
                     {
-                        string toSend = null;
-                        events.Clear();
-
-                        lock (Sync)
-                        {
-                            if (_outboxSeq != lastOutboxId)
-                            {
-                                foreach (KeyValuePair<long, string> ev in Outbox)
-                                    if (ev.Key > lastOutboxId) events.Add(ev.Value);
-                                lastOutboxId = _outboxSeq;
-                            }
-                            if (_seq != lastSeq)
-                            {
-                                lastSeq = _seq;
-                                toSend = _latestJson;
-                            }
-                            if (events.Count == 0 && toSend == null)
-                                Monitor.Wait(Sync, POLL_MS);
-                        }
-
-                        for (int i = 0; i < events.Count; i++) writer.WriteLine(events[i]);
-                        if (toSend != null)
-                        {
-                            writer.WriteLine(toSend);
-                            writes++;
-                            if (writes <= 5 || writes % 200 == 0)
-                                Console.WriteLine($"[mock] write #{writes}: {toSend.Length} байт, isConnected={server.IsConnected}");
-                        }
-
-                        readTask = DrainIncoming(server, readTask, readBuf, lineBuf);
-                        if (writes <= 3 && readTask != null)
-                            Console.WriteLine($"[mock] после DrainIncoming: readTask completed={readTask.IsCompleted}");
+                        Console.WriteLine($"[mock] слот {slot}: ConnectNamedPipe не удался, ошибка {Win32Pipe.LastError()}");
+                        Thread.Sleep(1000);
+                        continue;
                     }
-                    Console.WriteLine("[mock] цикл pump завершён штатно");
+
+                    Console.WriteLine($"[mock] слот {slot}: клиент подключился");
+                    byte[] hello = Utf8("{\"status\": \"pipe_hello\", \"protocol\": 3, \"mod_version\": \"1.3\"}\n");
+                    if (Win32Pipe.Write(pipe, hello, hello.Length))
+                        PumpClient(pipe, readBuf, lineBuf, events, payload);
+                }
+                catch (Exception e)
+                {
+                    Console.WriteLine($"[mock] слот {slot}: ИСКЛЮЧЕНИЕ {e.GetType().Name}: {e.Message}");
+                }
+                finally
+                {
+                    Win32Pipe.Close(pipe);
+                    Console.WriteLine($"[mock] слот {slot}: клиент отключился");
                 }
             }
-            catch (Exception e)
+        }
+
+        private static void PumpClient(IntPtr pipe, byte[] readBuf, StringBuilder lineBuf,
+            List<string> events, StringBuilder payload)
+        {
+            long lastSeq = -1;
+            long lastOutboxId;
+            lock (Sync) { lastOutboxId = _outboxSeq; }
+            int writes = 0;
+
+            while (!_shuttingDown)
             {
-                Console.WriteLine($"[mock] pump ИСКЛЮЧЕНИЕ после {writes} записей: {e.GetType().Name}: {e.Message}");
-            }
-            finally
-            {
-                try { server.Dispose(); } catch (Exception) { }
+                events.Clear();
+                string toSend = null;
+
+                lock (Sync)
+                {
+                    if (_outboxSeq != lastOutboxId)
+                    {
+                        foreach (KeyValuePair<long, string> ev in Outbox)
+                            if (ev.Key > lastOutboxId) events.Add(ev.Value);
+                        lastOutboxId = _outboxSeq;
+                    }
+                    if (_seq != lastSeq)
+                    {
+                        lastSeq = _seq;
+                        toSend = _latestJson;
+                    }
+                    if (events.Count == 0 && toSend == null)
+                        Monitor.Wait(Sync, POLL_MS);
+                }
+
+                if (events.Count > 0 || toSend != null)
+                {
+                    payload.Length = 0;
+                    for (int i = 0; i < events.Count; i++) payload.Append(events[i]).Append('\n');
+                    if (toSend != null) payload.Append(toSend).Append('\n');
+
+                    byte[] bytes = Utf8(payload.ToString());
+                    if (!Win32Pipe.Write(pipe, bytes, bytes.Length)) return;
+                    writes++;
+                    if (writes <= 3 || writes % 500 == 0)
+                        Console.WriteLine($"[mock] write #{writes}: {bytes.Length} байт");
+                }
+
+                if (!DrainCommands(pipe, readBuf, lineBuf)) return;
             }
         }
 
-        private static Task<int> BeginPipeRead(NamedPipeServerStream server, byte[] buf)
+        private static bool DrainCommands(IntPtr pipe, byte[] readBuf, StringBuilder lineBuf)
         {
-            try { return server.ReadAsync(buf, 0, buf.Length); }
-            catch (Exception) { return null; }
-        }
-
-        private static Task<int> DrainIncoming(NamedPipeServerStream server, Task<int> readTask, byte[] readBuf, StringBuilder lineBuf)
-        {
-            if (readTask == null || !readTask.IsCompleted) return readTask;
-
-            int n;
-            try { n = readTask.Result; }
-            catch (Exception) { throw new IOException("пайп: ошибка чтения"); }
-
-            if (n <= 0) throw new IOException("пайп: клиент закрыл соединение");
-
-            lineBuf.Append(Encoding.UTF8.GetString(readBuf, 0, n));
             while (true)
             {
-                string text = lineBuf.ToString();
-                int idx = text.IndexOf('\n');
-                if (idx < 0) break;
-                string line = text.Substring(0, idx).TrimEnd('\r').Trim();
-                lineBuf.Remove(0, idx + 1);
-                if (line.Length > 0) Incoming.Enqueue(line);
-            }
-            if (lineBuf.Length > 65536) lineBuf.Remove(0, lineBuf.Length - 1024);
+                uint available;
+                if (!Win32Pipe.Peek(pipe, out available)) return false;
+                if (available == 0) return true;
 
-            return BeginPipeRead(server, readBuf);
+                int toRead = (int)Math.Min(available, (uint)readBuf.Length);
+                int n = Win32Pipe.Read(pipe, readBuf, toRead);
+                if (n <= 0) return false;
+
+                lineBuf.Append(Encoding.UTF8.GetString(readBuf, 0, n));
+                while (true)
+                {
+                    string text = lineBuf.ToString();
+                    int idx = text.IndexOf('\n');
+                    if (idx < 0) break;
+                    string line = text.Substring(0, idx).TrimEnd('\r').Trim();
+                    lineBuf.Remove(0, idx + 1);
+                    if (line.Length > 0) Incoming.Enqueue(line);
+                }
+                if (lineBuf.Length > 65536) lineBuf.Remove(0, lineBuf.Length - 1024);
+            }
+        }
+
+        private static byte[] Utf8(string text)
+        {
+            return Encoding.UTF8.GetBytes(text);
         }
     }
 }
