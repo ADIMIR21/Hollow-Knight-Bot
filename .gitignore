@@ -5,3 +5,6 @@ Mod/HK_AI_Mod/obj/
 HKApi/
 all.txt
 .dotnet
+tests/pipe_sim/bin/
+tests/pipe_sim/obj/
+tests/pipe_sim/bosses.json
