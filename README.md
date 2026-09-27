@@ -38,7 +38,7 @@ The mod keeps a duplex server on `\\.\pipe\hk_ai_mod` (up to 4 clients, so train
 | `bosses` | Send the full registry as a `boss_list` event (works even in the main menu) |
 | `warp` | Return the hero to the arena gate without reloading the scene (if thrown out of the fight / stuck) |
 
-Telemetry contains a `scene` field (the current scene) - so Python and the human can see which boss's arena the fight is taking place in. If a scene transition hangs (the hero stays in `transitioning`), the mod's watchdog finds the entry point after 2.5 seconds via the `TransitionPoint.TransitionPoints` registry and properly triggers `HeroController.EnterScene`; on a repeated hang it teleports the hero to the gate and lifts the freeze directly (the private `FinishedEnteringScene` + re-enabling rendering). The watchdog also raises `Time.timeScale` if the transition zeroed out time.
+Telemetry contains a `scene` field (the current scene) - so Python and the human can see which boss's arena the fight is taking place in. If a scene transition hangs (the hero stays in `transitioning`), the mod's watchdog finds the entry point after 2.5 seconds via the `TransitionPoint.TransitionPoints` registry and properly triggers `HeroController.EnterScene`; on a repeated hang it teleports the hero to the gate and lifts the freeze directly (the private `FinishedEnteringScene` + re-enabling rendering). The 2.5 s window is only the first line of defence: a hang that starts later is caught by the same repair after 5 s of frozen state, and the fade has a 15 s backstop (see the white-screen section). The watchdog also raises `Time.timeScale` if the transition zeroed out time.
 
 ### 2. Python RL framework
 
@@ -331,6 +331,17 @@ python tests/run_pipe_harness.py                         # the whole pipe harnes
 - **Automatic entry gate selection**: the mod takes `EntryGateName` from the scene's real `TransitionPoint` list (priority - the gate explicitly set with `set_gate` if it exists in the scene; otherwise a gate with `dream` in its name; otherwise the first one) and remembers `scene=gate` pairs in memory. Previously `door1` was always sent, which does not exist in Godhome arenas
 - **Deferred restart**: the `restart`/`teleport`/`boss` command is accepted immediately (`restart_pending: 1` while the mod is waiting), but `BeginSceneTransition` runs only when the game is not busy with its own scenario - no `IsInSceneTransition`/`IsLoadingSceneTransition`, the hero is not in `transitioning`, is not dying, and the white arena exit is not playing (`BossSceneController.isTransitioningOut`). The death signal is narrow: `cState.dead`/`hazardDeath`, or `health <= 0` **while the scene matches the target arena** (`controlReqlinquished` in Godhome is set even for a live hero in the hall, so it is not used as a stop factor). If the state has not cleared within 10 s, the transition is forced (a warning with the reason for waiting is written to the ModLog)
 - **Camera fade watchdog**: every state change of the `CameraFade` FSM is written to the ModLog; if the fade sticks outside `Normal` (1.5 s, 1.0 s for `FadingOut`) while the game is calm (scene loaded, hero not transitioning), the mod sends `FADE SCENE IN` - the same event the game uses. The stock `CameraController.FadeInFailSafe` never runs anywhere in this build of the game (dead code), so the white screen never fixed itself before
+- **Freeze recovery that does not expire.** The scene-change watchdog is only armed for 2.5 s
+  after a scene load, so a hang that began later had nobody left to repair it: the hero stayed
+  in `transitioning`, the white fade stayed on screen and `restart` was accepted (`restart_pending: 1`)
+  but never performed - the run kept waiting forever. The 26-27.09 overnight log shows the shape of
+  it: 543 restarts and 543 forced `FADE SCENE IN` rescues, and then a silent ModLog. The recovery is
+  now independent of the arming window: a hero stuck in `transitioning` (or a scene-transition flag
+  left up) for 5 s with no scene load running re-arms the same repair path, a stale `IsInSceneTransition`
+  no longer blocks a restart forever (past the 10 s force timeout it is cleared while the hero is free,
+  with a ModLog line), and the fade watchdog has a hard 15 s backstop that ignores `IsGameSettled` and
+  forces `FADE SCENE IN` anyway. A real `IsLoadingSceneTransition` is exempt everywhere - it fades in
+  by itself.
 - Python: `HK_ENTRY_GATE`/`--entry-gate` defaults to `door_dreamEnter`; the wait for the fight scene after a fast restart was increased to 40 s (the mod may defer the transition); victory is confirmed by the `boss_dead` event over `HK_VICTORY_FRAMES=3` frames (it used to be 20) so that the restart makes it into the `bossesDeadWaitTime` window and does not hit the white arena exit
 - The training console prints `[TIMING] reset (<reason>): X.XXs` and a summary every 10 resets - it shows how much an episode restart actually costs
 

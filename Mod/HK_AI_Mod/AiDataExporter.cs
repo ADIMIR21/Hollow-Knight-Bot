@@ -108,6 +108,17 @@ namespace HK_AI_Mod
         private BossSceneController _subscribedBsc = null;
         private float _watchdogTimer = 0f;
         private int _forcedEntryAttempts = 0;
+        // The scene-change watchdog is only armed for a couple of seconds after a scene
+        // load, so a freeze that starts later has nobody left to repair it: the hero stays
+        // in 'transitioning', the white fade stays on screen and a restart is accepted but
+        // never performed. This timer re-arms the same repair path independently of the
+        // arming window.
+        private float _heroFrozenSince = -1f;
+        private const float HERO_FROZEN_TIMEOUT = 5f;
+        // Independent of IsGameSettled: a fade left opaque while the game merely *claims* to
+        // be busy must not stay on screen for hours (see FadeWatchdogTick).
+        private float _fadeNonNormalHardSince = -1f;
+        private const float FADE_HARD_TIMEOUT = 15f;
         private const string DEFAULT_BOSS_SCENE = "GG_False_Knight";
         // Godhome arenas enter the scene through the door_dreamEnter gate — it is the only
         // TransitionPoint in GG_* boss scenes (verified live in GG_False_Knight and
@@ -470,8 +481,53 @@ namespace HK_AI_Mod
             Log($"[AI] Fast restart: target '{_targetScene}', gate '{gate}' — command accepted, I will perform the transition once the game frees up");
         }
 
+        // Runs on every tick, not only inside the scene-change arming window: if the hero is
+        // still in 'transitioning' (or the scene-transition flag is still up) HERO_FROZEN_TIMEOUT
+        // after the load, with no scene load running, the repair below is armed again. The
+        // escalation is left to the watchdog itself: EnterScene first, manual placement second.
+        private void RearmWatchdogForPersistentFreeze()
+        {
+            try
+            {
+                GameManager gm = GameManager.instance;
+                if (gm == null || _inMenuScene)
+                {
+                    _heroFrozenSince = -1f;
+                    return;
+                }
+                if (gm.IsLoadingSceneTransition)
+                {
+                    _heroFrozenSince = -1f;
+                    return;
+                }
+
+                HeroController hero = HeroController.instance;
+                bool heroFrozen = hero != null && hero.cState != null && hero.cState.transitioning;
+                if (!heroFrozen && !gm.IsInSceneTransition)
+                {
+                    _heroFrozenSince = -1f;
+                    return;
+                }
+
+                if (_heroFrozenSince < 0f || Time.unscaledTime < _heroFrozenSince)
+                {
+                    _heroFrozenSince = Time.unscaledTime;
+                    return;
+                }
+                if (Time.unscaledTime - _heroFrozenSince < HERO_FROZEN_TIMEOUT) return;
+
+                _heroFrozenSince = Time.unscaledTime;
+                _watchdogTimer = 0.01f;
+                Log($"[AI] Transition stuck for {HERO_FROZEN_TIMEOUT:F0}s with no scene load "
+                    + $"(hero transitioning: {(heroFrozen ? 1 : 0)}, scene-transition flag: "
+                    + $"{(gm.IsInSceneTransition ? 1 : 0)}) - repairing");
+            }
+            catch (Exception) {}
+        }
+
         private void TransitionWatchdogTick(float unscaledDelta)
         {
+            RearmWatchdogForPersistentFreeze();
             if (_watchdogTimer <= 0f) return;
             _watchdogTimer -= unscaledDelta;
             if (_watchdogTimer > 0f) return;
@@ -942,14 +998,29 @@ namespace HK_AI_Mod
 
                 GameManager gm = GameManager.instance;
                 if (gm == null) return;
-                if (gm.IsInSceneTransition || gm.IsLoadingSceneTransition) return;
+                if (gm.IsLoadingSceneTransition) return;
 
                 HeroController hero = HeroController.instance;
-                if (hero == null || hero.cState == null) return;
-                if (hero.cState.transitioning || hero.cState.hazardDeath || hero.cState.hazardRespawning) return;
-
                 float waited = Time.time - _restartRequestedAt;
                 bool forced = waited >= RESTART_FORCE_TIMEOUT;
+
+                // The game can leave IsInSceneTransition up after the scene has settled. Past
+                // the force timeout that flag is stale, and while it stays up this method
+                // returns before doing anything - so every restart turns into a silent no-op
+                // forever, because nothing else clears it once the scene-change window has
+                // passed. The hero being free is the same condition the transition watchdog
+                // uses to clear the same flag.
+                if (gm.IsInSceneTransition)
+                {
+                    if (!forced || (hero != null && hero.cState != null && hero.cState.transitioning))
+                        return;
+                    Log($"[AI] Restart: the scene-transition flag was still up after {waited:F1}s "
+                        + "with the hero free - clearing the stale flag");
+                    ReflectionHelper.SetField(gm, "<IsInSceneTransition>k__BackingField", false);
+                }
+
+                if (hero == null || hero.cState == null) return;
+                if (hero.cState.transitioning || hero.cState.hazardDeath || hero.cState.hazardRespawning) return;
 
                 string deferReason = null;
                 if (!forced && IsHeroDying(hero))
@@ -1024,12 +1095,34 @@ namespace HK_AI_Mod
                 {
                     _fadeNotNormalSince = -1f;
                     _fadeRescueAttempts = 0;
+                    _fadeNonNormalHardSince = -1f;
                     return;
                 }
 
                 // We only wait when the game is genuinely not busy with anything: during an
                 // honest transition the fade is also not "Normal", and we must not touch it.
-                if (!IsGameSettled(GameManager.instance, HeroController.instance))
+                // A real scene load is exempt: it fades in on its own. But a game that only
+                // *looks* busy (a stale transition flag, a hero frozen in 'transitioning') used
+                // to keep the white fade on screen for hours with this log silent, so past
+                // FADE_HARD_TIMEOUT the fade is forced regardless of IsGameSettled.
+                GameManager gm = GameManager.instance;
+                if (gm != null && gm.IsLoadingSceneTransition)
+                {
+                    _fadeNonNormalHardSince = -1f;
+                }
+                else if (_fadeNonNormalHardSince < 0f || Time.unscaledTime < _fadeNonNormalHardSince)
+                {
+                    _fadeNonNormalHardSince = Time.unscaledTime;
+                }
+                else if (Time.unscaledTime - _fadeNonNormalHardSince >= FADE_HARD_TIMEOUT)
+                {
+                    _fadeNonNormalHardSince = Time.unscaledTime;
+                    Log($"[AI] Fade has been '{state}' for over {FADE_HARD_TIMEOUT:F0}s with no "
+                        + "scene load running - forcing FADE SCENE IN");
+                    gc.cameraFadeFSM.Fsm.Event("FADE SCENE IN");
+                }
+
+                if (!IsGameSettled(gm, HeroController.instance))
                 {
                     _fadeNotNormalSince = -1f;
                     return;
