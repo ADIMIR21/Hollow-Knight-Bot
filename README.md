@@ -296,51 +296,6 @@ python tests/run_pipe_harness.py                         # the whole pipe harnes
 | Observation normalization | VecNormalize, clip_obs 10 |
 | Reward normalization | enabled |
 
-## Changelog
-
-### Mod (`Mod/HK_AI_Mod/`)
-- Built-in **Godhome boss registry** (60 entries): all combat `GG_*` scenes from the game's build settings, fight variants (`_V` = Ascended/Radiant, `GG_Mantis_Lords_V` = Sisters of Battle, `GG_Nosk_Hornet` = Winged Nosk), plus Godhome hubs
-- New commands over the pipe:
-  - `boss <query>` - select a boss and teleport to its arena (index, scene name in any register, the alias `hornet`/`nkg`/`sisters`, or part of the name); the choice becomes the mod's target
-  - `bosses` - send the registry as a `boss_list` event (works in the main menu too)
-  - `set_boss <scene>` / `set_gate <gate>` - set the target scene and the arena entry gate
-  - `teleport` - teleport to the target boss's arena
-  - `warp` - return the hero to the arena gate without reloading the scene
-- `restart`/`teleport` take the entry gate from `set_gate` (previously it was hard-coded `door1`, which does not exist in Godhome arenas); the current version additionally validates it against the scene's real `TransitionPoint`s - see the section on the white screen
-- Query resolver: index -> scene name -> alias -> exact title -> partial match (ambiguous queries are rejected with a hint)
-- Added the `scene` field to the telemetry - the current fight scene
-
-### Named-pipe transport instead of `%TEMP%` files
-- The whole mod <-> Python channel moved to the named pipe `\\.\pipe\hk_ai_mod` (protocol 3, line-delimited JSON): telemetry, commands (`restart`, `teleport`, `set_boss`, `set_gate`, `boss`, `bosses`, `warp`), one-shot events (`boss_list`, `boss_selected`, `command_error`) and the registry dump. The files `%TEMP%/hk_ai_data.json`, `hk_ai_cmd.txt`, `hk_ai_boss.txt`, `hk_ai_gate.txt`, `hk_ai_gates.txt`, `hk_ai_bosses.json` are gone - no file fallback is left
-- The mod's server is implemented on raw kernel32 (`Mod/HK_AI_Mod/Win32Pipe.cs`), because in the game's Mono every `NamedPipeServerStream` constructor is a stub that throws `NotImplementedException` (proved by the IL probe in `tests/mono_il/`). One thread per slot, up to 4 clients, synchronous handles without overlapped I/O: a hanging read cannot block a write
-- The game thread only publishes the latest frame, so Python can neither slow the game down nor break its own connection; the reader keeps reading the freshest message and never waits for old ones
-- Python side: `hk_pipe.py` (background reader thread, auto-reconnect, hello re-read on reconnect), `bosses.py` / `ai_controller.py` / `ai_environment.py` / `teleport.py` / `ai_receiver.py` switched to it
-- A client that stops reading cannot eat a slot: a write stuck for more than 3 s is cancelled (`CancelSynchronousIo`), the slot is freed and rebuilt - covered by `--selftest-stuck` in the harness
-- `tests/pipe_sim/` - a mock mod plus 36 integration checks; the harness compiles the same `Win32Pipe.cs` and refuses to start if the real mod's pipe exists on the machine (so it cannot accidentally connect to the live game)
-- Deployment is paired: the Python side requires the pipe build of the mod. With an older build deployed the pipe is simply absent - the framework reports that the mod did not answer within 20 s
-
-### Python framework
-- `bosses.py` (new) - mirror of the mod's registry + command protocol over the pipe (`send_command`, `request_boss`, `request_restart`, `request_warp`, `wait_for_scene`, etc.)
-- `hk_pipe.py` (new) - the named-pipe client the whole Python side runs on: one shared client per process, background reader with auto-reconnect, one-shot events (`wait_for_status`)
-- `teleport.py` (new) - interactive boss selection and teleport: menu, `--list`, `--boss <query>`, `--restart`, `--warp`, `--train` (teleport and train right away); fallback for mod builds without the `boss`/`warp` commands
-- `train.py` - the `--boss` flag; **training files are laid out per boss automatically** (`models/ppo_hk/<scene>/`: checkpoints, `hk_model_final.zip`, `vecnormalize.pkl`); an old save from the root of `models/ppo_hk/` migrates to `GG_False_Knight/` on the first run
-- `hk_gym.py` - `HK_BOSS_SCENE` accepts aliases and indices, `HK_ENTRY_GATE` added (the arena gate)
-- `deploy_mod.ps1` (new) - game lookup via the Steam registry, build and deployment of the DLL with the game closed
-
-### White screen at the end of an episode and the arena gate
-- **Automatic entry gate selection**: the mod takes `EntryGateName` from the scene's real `TransitionPoint` list (priority - the gate explicitly set with `set_gate` if it exists in the scene; otherwise a gate with `dream` in its name; otherwise the first one) and remembers `scene=gate` pairs in memory. Previously `door1` was always sent, which does not exist in Godhome arenas
-- **Deferred restart**: the `restart`/`teleport`/`boss` command is accepted immediately (`restart_pending: 1` while the mod is waiting), but `BeginSceneTransition` runs only when the game is not busy with its own scenario - no `IsInSceneTransition`/`IsLoadingSceneTransition`, the hero is not in `transitioning`, is not dying, and the white arena exit is not playing (`BossSceneController.isTransitioningOut`). The death signal is narrow: `cState.dead`/`hazardDeath`, or `health <= 0` **while the scene matches the target arena** (`controlReqlinquished` in Godhome is set even for a live hero in the hall, so it is not used as a stop factor). If the state has not cleared within 10 s, the transition is forced (a warning with the reason for waiting is written to the ModLog)
-- **Camera fade watchdog**: every state change of the `CameraFade` FSM is written to the ModLog; if the fade sticks outside `Normal` (1.5 s, 1.0 s for `FadingOut`) while the game is calm (scene loaded, hero not transitioning), the mod sends `FADE SCENE IN` - the same event the game uses. The stock `CameraController.FadeInFailSafe` never runs anywhere in this build of the game (dead code), so the white screen never fixed itself before
-- Python: `HK_ENTRY_GATE`/`--entry-gate` defaults to `door_dreamEnter`; the wait for the fight scene after a fast restart was increased to 40 s (the mod may defer the transition); victory is confirmed by the `boss_dead` event over `HK_VICTORY_FRAMES=3` frames (it used to be 20) so that the restart makes it into the `bossesDeadWaitTime` window and does not hit the white arena exit
-- The training console prints `[TIMING] reset (<reason>): X.XXs` and a summary every 10 resets - it shows how much an episode restart actually costs
-
-### Verified live
-All of the mod's commands were tested on a running game: dumping the list (60 bosses), teleporting from the Atrium to the Vengefly King arena with the fight starting, arena restart, warp to the gate.
-
-The pipe transport was verified on a running game as well: the hello line reports `protocol=3`, telemetry streams continuously, two clients connect at the same time (training + debugger), `bosses` returns all 60 records, `set_boss`/`boss` reload the scene and the fight starts (`GG_False_Knight`, `GG_Hornet_1`, `GG_Vengefly`), `set_gate` + `warp` work, and the ModLog stays clean. The transport itself is covered by the harness in `tests/pipe_sim/` (36 checks against the same `Win32Pipe.cs` the mod uses).
-
-The mod version is deliberately pinned to `v1` and does not change with edits (see the comment on `GetVersion` in `AiDataExporter.cs`) - it exists only to tell a fresh build from old ones; the change history is kept in the "Changelog" section rather than in version numbers.
-
 ## License
 
 MIT

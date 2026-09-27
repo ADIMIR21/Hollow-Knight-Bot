@@ -1,8 +1,8 @@
 # AGENTS.md
 
-How to work in this repository — for human contributors and for AI agents alike. Architecture,
-the command protocol and the game-side pitfalls live in `README.md`; the named-pipe harness has
-its own `tests/pipe_sim/README.md`. This file holds the rules that are easy to get wrong.
+How to work in this repository — for human contributors and for AI agents alike. Architecture and
+the command protocol live in `README.md`; the named-pipe harness has its own
+`tests/pipe_sim/README.md`. This file holds the rules that are easy to get wrong.
 
 ## 0. Keep this file up to date
 
@@ -11,8 +11,8 @@ moved, a command that changed, a new test tier, a new hard rule, a knob that app
 away — AGENTS.md is part of that change, not a follow-up task. A stale instruction here is worse
 than no instruction: the next agent will follow it and break something.
 
-The same applies to `README.md`: it is the project's documentation of record (architecture,
-protocol, parameters, changelog), and every behaviour change belongs there too.
+The same applies to `README.md`, with a warning: it documents the **current** state of the project,
+never the road to it. Keep it clean every time you touch it — see the README rule in §3.
 
 ## 1. Tests come with the change
 
@@ -94,12 +94,19 @@ python tests/run_pipe_harness.py     # builds the mock, runs --selftest-stuck, t
   messages. Conversation with the maintainer may be in Russian; the repository may not. Check
   with `git grep -n -P "[\x{0400}-\x{04FF}]"` (only the game's shipped DLL ever matched, and it
   is no longer in the tree).
+* **Do not clutter the README.** It describes what the project *is* — architecture, protocol,
+  knobs, how to run it, how to debug it — and nothing else. No "what's new" prose, no per-update
+  numbering, no inventories of files that were merely added, no historical narrative ("it used to
+  be X", "previously the gate was hard-coded"): every line must be true today. What changed is the
+  commit message's job, and a detail that only matters to whoever edits the code belongs in this
+  file or in a code comment. There is deliberately **no changelog file** in the repository — do
+  not add one, and do not let the README grow into one.
 * **Never bump a version unless the maintainer explicitly asks for it.** The mod version is
   frozen at `v1` (`MOD_VERSION`/`GetVersion()` in `AiDataExporter.cs`): it exists only to tell a
   fresh build from an old one. Do not raise it, do not introduce a new version number anywhere
   (mod, protocol, checkpoints, file naming) and do not "align" versions between files — a version
   bump is a decision for the maintainer, never a side effect of a change, and it is not a way to
-  mark a fix as important. The history lives in the README changelog, not in version numbers.
+  mark a fix as important. The history lives in the commit messages, not in version numbers.
 * **Protocol 3.** `PROTOCOL_VERSION` (mod) and `REQUIRED_PROTOCOL` (`hk_pipe.py`) move together,
   only for a genuinely incompatible change on the wire, and only when the maintainer asks (see the
   rule above). Then update the mock, the checks and the README in the same commit.
@@ -110,8 +117,11 @@ python tests/run_pipe_harness.py     # builds the mock, runs --selftest-stuck, t
 * **The pipe is the only transport.** There is no file-based fallback and no plan to add one: the
   `%TEMP%/hk_ai_*` files were removed deliberately, so do not reintroduce a second channel.
 * **The arena entry gate is `door_dreamEnter`** in Godhome arenas (the only `TransitionPoint`
-  there). Any other name makes the game search for a gate that does not exist and leaves the
-  screen stuck on a white fade — see the README section on the white screen.
+  there). Any other name makes the game search for a gate that does not exist and leaves the screen
+  stuck on a white fade; the stock `CameraController.FadeInFailSafe` that is supposed to recover
+  from it is dead code in this build, and forcing a transition while the game plays its own
+  end-of-fight scenario breaks the same way. That is why a restart is deferred (`restart_pending:
+  1` until the game is free, forced after 10 s) instead of applied on the spot.
 * **Do not invent game behaviour.** Anything about the game's internals claims a source: a
   ModLog line, an IL probe in `tests/mono_il/`, or a documented engine fact. If it was not
   verified, say it is unverified instead of writing it down as fact.
@@ -124,11 +134,24 @@ python tests/run_pipe_harness.py     # builds the mock, runs --selftest-stuck, t
 * The mod needs the game's managed `Assembly-CSharp.dll`: it is resolved from the game install,
   with `Mod/HK_AI_Mod/libs/` as an untracked fallback. A clean checkout therefore builds only on
   a machine that has the game — the build fails with an explicit error otherwise.
-* Build and deploy with the game **closed** — the DLL is locked while it runs:
+* **Always verify that the mod builds — every change, however harmless it looks.** CI never builds
+  the mod (it needs the game's DLL), so a C# error is otherwise discovered in the game. This works
+  with the game running:
+
+  ```bash
+  dotnet build Mod/HK_AI_Mod/HK_AI_Mod.csproj -c Release
+  ```
+
+* **Deploy the fresh build into the game whenever the game is closed.** The DLL is locked while
+  Hollow Knight runs, which is why the script refuses to deploy then; with the game closed it
+  builds and copies in one go:
 
   ```powershell
   powershell -ExecutionPolicy Bypass -File deploy_mod.ps1 -Build
   ```
+
+  If the game is running, build only and say in the report that the deploy is still pending — it
+  needs the game closed.
 
 * Python and the mod are deployed in pairs. A stale DLL is not a transport bug: the symptom is
   "the mod did not respond within 20 s" (no pipe at all), so redeploy before debugging.
@@ -144,9 +167,9 @@ python tests/run_pipe_harness.py     # builds the mock, runs --selftest-stuck, t
 ## 5. Commits and pushes
 
 Commit only what was asked for, in English, with a message that explains **why** (the subject
-line is the what) — the maintainer reads the history as a changelog, not as a diff dump. Do not
-commit or push until the maintainer says so: they review changes first. Never rewrite published
-history or force-push without an explicit request.
+line is the what) — the maintainer reads the commit history as the changelog, not as a diff dump.
+Do not commit or push until the maintainer says so: they review changes first. Never rewrite
+published history or force-push without an explicit request.
 
 ## 6. Definition of done
 
@@ -156,7 +179,10 @@ history or force-push without an explicit request.
       in the transport changed.
 - [ ] Both sides of a paired change (mod + Python, or registry + parity test) are in the same
       commit.
-- [ ] `README.md` reflects the change; `AGENTS.md` is updated if this file became wrong.
+- [ ] The mod builds (`dotnet build Mod/HK_AI_Mod/HK_AI_Mod.csproj -c Release`), and the fresh
+      build went into the game if the game was closed.
+- [ ] `README.md` reflects the change and stayed clean (no "what's new" prose, no history);
+      `AGENTS.md` is updated if this file became wrong.
 - [ ] No version was bumped (mod, protocol, checkpoints) — unless the maintainer asked for it.
 - [ ] No Cyrillic in tracked files, no game/run artifacts added, `.gitignore` untouched.
 - [ ] Anything that could only be checked in the game is named in the commit message.
