@@ -93,10 +93,10 @@ HEALTH_PENALTY_PER_MASK = 200.0
 # the window. The stunned window is the only place this fight can be finished, and paying the same
 # for a hit anywhere made the policy hover instead of committing (see hk_features.damage_weight).
 OPEN_WINDOW_DAMAGE_MULTIPLIER = 3.0
-# A win pays this much for every mask still standing when the boss falls. Masks spent on the way are
-# already charged, so this is what separates a controlled fight from one that merely ended well, and
-# it makes a clean kill worth more than any kill (see hk_features.victory_bonus).
-VICTORY_MASK_BONUS = 400.0
+# What a full set of masks is worth: a win is scaled by the health it was carried out with, so the
+# base reward is paid at zero masks and twice that at full health (hk_features.victory_bonus). The
+# payout itself stays VICTORY_REWARD - this is the hero's capacity, not a reward knob.
+HERO_MAX_MASKS = 9.0
 VICTORY_REWARD = 1000.0
 DEATH_PENALTY = 500.0
 STEP_PENALTY = 0.05
@@ -563,7 +563,7 @@ class HollowKnightGym(gym.Env):
             self._episode_reason = "boss missing"
 
         if self._boss_death_frames >= VICTORY_CONFIRM_FRAMES and current_boss_hp <= 0 and self._last_boss_dead >= 0.5:
-            won = victory_bonus(VICTORY_REWARD, current_hp, VICTORY_MASK_BONUS)
+            won = victory_bonus(VICTORY_REWARD, current_hp, HERO_MAX_MASKS)
             reward += won
             reward_parts["victory"] += won
             terminated = True
