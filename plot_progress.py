@@ -48,6 +48,8 @@ def main():
     parser.add_argument("--journal", default=JOURNAL)
     parser.add_argument("--out", default=os.path.join("logs", "progress.png"))
     parser.add_argument("--all", action="store_true", help="draw every run in the journal")
+    parser.add_argument("--hours", type=float, default=3.0,
+                        help="how far back to draw when not using --all (default 3 hours)")
     parser.add_argument("--show", action="store_true", help="open a window as well as saving")
     args = parser.parse_args()
 
@@ -59,10 +61,16 @@ def main():
         return 1
 
     if not args.all and episodes:
+        # The newest run starts where the episode counter restarts, but a run can also carry on
+        # from an earlier one, so the time window is applied as well: the journal reaches back over
+        # days, and drawing all of it buries today's run in a corner.
         start = run_start(episodes)
-        first = episodes[start][0]
+        newest = max(stamp for stamp, _ in blocks if stamp)
+        cutoff = (datetime.datetime.strptime(newest, "%Y-%m-%d %H:%M:%S")
+                  - datetime.timedelta(hours=args.hours)).strftime("%Y-%m-%d %H:%M:%S")
+        first = max(episodes[start][0], cutoff)
         blocks = [(stamp, values) for stamp, values in blocks if stamp >= first]
-        episodes = episodes[start:]
+        episodes = [fight for fight in episodes if fight[0] >= first]
 
     import matplotlib
     if not args.show:

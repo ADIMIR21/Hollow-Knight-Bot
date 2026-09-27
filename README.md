@@ -297,6 +297,21 @@ It is written by `ProgressFileCallback` in `train.py`. In the `CallbackList` it 
 
 Watch in real time: `Get-Content logs\progress.txt -Wait -Tail 40` (PowerShell).
 
+Draw the same history instead of reading it:
+
+```bash
+python plot_progress.py             # one figure of the current run -> logs/progress.png
+python plot_progress.py --hours 8   # widen the window (default 3 hours)
+python plot_progress.py --all       # every run in the journal
+python plot_progress.py --show      # open a window as well as saving
+```
+
+The figure carries the reward per episode and per fight with the cumulative win count, the win rate
+against the share of deaths and timeouts, the fight length, and the optimiser's own signals -
+entropy loss (is the policy still exploring) and explained variance (does the value function know
+the fight). The reward alone is not progress: it rises whenever a reward constant changes, so read
+it against the win rate and the fight length.
+
 ### Telemetry debugging
 
 ```bash
