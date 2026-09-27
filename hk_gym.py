@@ -63,6 +63,33 @@ FRAME_STACK = max(1, int(os.environ.get("HK_FRAME_STACK", "4")))
 # the mod to wait for the full dream return to the hall (+6-10 seconds per episode).
 VICTORY_CONFIRM_FRAMES = max(1, int(os.environ.get("HK_VICTORY_FRAMES", "3")))
 
+# --------------------------------------------------------------------------- #
+# Reward economics
+# --------------------------------------------------------------------------- #
+# Every number the reward is built from lives here, because they only mean anything relative to
+# each other: a fight is 1500-2600 steps long (13-26 s at one step per fresh frame), so what the
+# policy learns depends on the balance between them, not on any one value.
+#
+#   * damage dealt to the boss pays DAMAGE_REWARD_PER_HP per hit point - the dense signal that
+#     says "the nail is the way to win";
+#   * every mask the knight loses costs HEALTH_PENALTY_PER_MASK. This is the number that decides
+#     whether the policy dodges or tanks: at 10 the whole health bar was cheaper than 1% of the
+#     boss's, so standing inside an attack to land a hit was always the better trade. At 200 a
+#     mask costs as much as 13 boss hit points, i.e. a mistake costs more than the hit it buys;
+#   * the outcomes outweigh the dense part on purpose: the boss dying pays VICTORY_REWARD, the
+#     knight dying costs DEATH_PENALTY (and, through the mask term, the whole health bar);
+#   * every step costs STEP_PENALTY, so a fight that drags on is never free.
+#
+# GAMMA in train.py has to reach the end of such a fight (see test_reward_economics.py), and the
+# whole set is fingerprinted into the checkpoint folder (hk_run_config.py): changing one of them
+# makes an old model and its normalization statistics meaningless rather than resumable.
+DAMAGE_REWARD_PER_HP = 15.0
+HEALTH_PENALTY_PER_MASK = 200.0
+VICTORY_REWARD = 1000.0
+DEATH_PENALTY = 500.0
+STEP_PENALTY = 0.05
+EPISODE_STEP_LIMIT = 3000
+
 class HollowKnightGym(gym.Env):
     def __init__(self):
         super().__init__()
@@ -404,7 +431,7 @@ class HollowKnightGym(gym.Env):
     def _potential(self, hp, boss_hp):
         damage_done = max(0.0, self._boss_hp_start - boss_hp)
         hp_lost = max(0.0, self.max_hp - hp)
-        return 15.0 * damage_done - 10.0 * hp_lost
+        return DAMAGE_REWARD_PER_HP * damage_done - HEALTH_PENALTY_PER_MASK * hp_lost
 
     def step(self, action):
         # Update 10: only "attack" is aimed at the boss, see hk_features.redirect_action.
@@ -469,14 +496,14 @@ class HollowKnightGym(gym.Env):
         self.last_time = current_time
 
         step_limit = False
-        if self.episode_step > 3000:
+        if self.episode_step > EPISODE_STEP_LIMIT:
             truncated = True
             step_limit = True
             self.controller.reset_all()
             self._episode_reason = "step limit"
 
-        reward -= 0.05
-        reward_parts["step_penalty"] -= 0.05
+        reward -= STEP_PENALTY
+        reward_parts["step_penalty"] -= STEP_PENALTY
 
         phi = self._potential(current_hp, current_boss_hp)
         shaping = phi - self._last_phi
@@ -500,19 +527,20 @@ class HollowKnightGym(gym.Env):
             self._episode_reason = "boss missing"
 
         if self._boss_death_frames >= VICTORY_CONFIRM_FRAMES and current_boss_hp <= 0 and self._last_boss_dead >= 0.5:
-            reward += 1000.0
-            reward_parts["victory"] += 1000.0
+            reward += VICTORY_REWARD
+            reward_parts["victory"] += VICTORY_REWARD
             terminated = True
             self.controller.reset_all()
             self._last_episode_was_victory = True
             self._episode_reason = "victory"
 
         if current_hp <= 0 and self.last_hp > 0:
-            # Update 6: the death penalty was raised from -200. Maximum shaping
-            # per episode is ~3000+ (damage dealt to the boss) — at -200 the policy was
-            # better off "trading". -500 makes dying before the kill guaranteed bad.
-            reward -= 500.0
-            reward_parts["death"] -= 500.0
+            # The mask term has already charged the health that was spent (see the reward block
+            # at the top of this file); this is the price of ending the fight unfinished, and it
+            # has to stay smaller than a full kill is worth - otherwise the safest way to protect
+            # the knight's health is not to engage at all.
+            reward -= DEATH_PENALTY
+            reward_parts["death"] -= DEATH_PENALTY
             terminated = True
             self.controller.reset_all()
             self._episode_reason = "death"
@@ -540,7 +568,7 @@ class HollowKnightGym(gym.Env):
             cv2.putText(stats_img, f"Vel: ({vel_x:.1f}, {vel_y:.1f})", (20, 200), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 255), 2)
             cv2.putText(stats_img, f"Boss Attack: {'YES' if boss_is_attacking > 0.5 else 'no'}", (20, 240), cv2.FONT_HERSHEY_SIMPLEX, 0.7, attack_color, 2)
             cv2.putText(stats_img, f"Reward: {reward:.1f}", (20, 280), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-            cv2.putText(stats_img, f"Step: {self.episode_step} / 3000", (20, 320), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (200, 200, 200), 2)
+            cv2.putText(stats_img, f"Step: {self.episode_step} / {EPISODE_STEP_LIMIT}", (20, 320), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (200, 200, 200), 2)
             cv2.putText(stats_img, f"FPS: {fps:.1f}", (20, 360), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 0, 255), 2)
             cv2.putText(stats_img, f"AutoReset: {'ON' if self.auto_restart else 'OFF'}", (20, 400), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255) if self.auto_restart else (100, 100, 100), 2)
             

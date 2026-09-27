@@ -82,6 +82,7 @@ python tests/run_pipe_harness.py     # builds the mock, runs --selftest-stuck, t
 | `hk_pipe.py` | Named-pipe client the whole Python side runs on (one shared client per process, auto-reconnect) |
 | `bosses.py` | Python mirror of the mod's registry + command helpers |
 | `hk_features.py` | Pure environment features (action table, aiming rule, boss-state tracker) - imports nothing, so tier 1 tests it directly |
+| `hk_run_config.py` | Fingerprint of what a checkpoint was trained under (reward scale, gamma, sizes) - imports nothing; `train.py` refuses to resume a mismatch |
 | `hk_gym.py`, `ai_environment.py`, `ai_controller.py` | Gym env, observation/reward pipeline, virtual gamepad |
 | `train.py` | PPO training, checkpoint layout, `logs/progress.txt` journal |
 | `teleport.py`, `ai_receiver.py` | Boss selection/teleport tooling, live telemetry debugger |
@@ -126,6 +127,17 @@ python tests/run_pipe_harness.py     # builds the mock, runs --selftest-stuck, t
 * **Do not invent game behaviour.** Anything about the game's internals claims a source: a
   ModLog line, an IL probe in `tests/mono_il/`, or a documented engine fact. If it was not
   verified, say it is unverified instead of writing it down as fact.
+* **The reward is one block of numbers, and they are part of a checkpoint's identity.** Every
+  value the reward is built from lives in the "Reward economics" block of `hk_gym.py`, because
+  they only mean anything relative to each other: what a lost mask costs against what damage pays
+  is what decides whether the policy dodges or tanks. `train.py::run_config_values()` fingerprints
+  that block, `GAMMA` and the observation/action sizes into the boss folder, and a checkpoint
+  whose fingerprint does not match is **not** resumed - its value function and normalization
+  statistics describe a different problem, and resuming them looks like a run that has learned
+  nothing, with nothing in the logs to say why. A new knob that is not added to the fingerprint
+  fails `tests/test_run_config.py`; `tests/test_training_config.py` holds the balance those
+  numbers must satisfy (a mask dearer than the hit it buys, a discount that reaches the end of a
+  fight, a kill still worth more than refusing to engage).
 
 ## 4. Environment, build, deploy
 

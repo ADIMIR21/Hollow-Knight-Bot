@@ -12,6 +12,7 @@ from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 from ai_controller import HollowKnightController
 from bosses import resolve_query, set_boss_scene, set_gate, DEFAULT_SCENE
+import hk_run_config as run_config
 
 # hk_gym is imported in main() AFTER the boss scene is fixed:
 # the scene is read from HK_BOSS_SCENE at module import time.
@@ -95,13 +96,51 @@ def migrate_legacy_model(scene, boss_dir):
 # old configuration.
 N_STEPS = 8192
 BATCH_SIZE = 256
-GAMMA = 0.995
+# The discount has to reach the end of a fight or the win is invisible. One step is one fresh
+# game frame, so a fight is 1500-2600 steps (13-26 s) and the victory bonus arrives at the very
+# end: at 0.995 the return of a win 1950 steps away was weighted 0.995^1950 = 5.6e-5, which is
+# nothing in float32, so the policy could only ever optimise the dense part of the reward
+# (damage and health) and learned to trade hits instead of winning. At 0.9995 the same win
+# keeps 0.377 of its weight, and the far end of a capped episode (3000 steps) keeps 0.223.
+# test_reward_economics.py pins that.
+GAMMA = 0.9995
 LEARNING_RATE = 3e-4
 
 
 def constant_lr(progress_remaining: float) -> float:
     """Flat learning rate - see the note above on why a schedule is not used."""
     return LEARNING_RATE
+
+
+def run_config_values():
+    """What a checkpoint is only valid under: reward scale, discount, observation/action sizes.
+
+    hk_gym reads HK_BOSS_SCENE at import time, so it may only be imported once main() has fixed
+    the scene - hence the local imports.
+    """
+    from hk_gym import (
+        DAMAGE_REWARD_PER_HP,
+        DEATH_PENALTY,
+        EPISODE_STEP_LIMIT,
+        FRAME_STACK,
+        HEALTH_PENALTY_PER_MASK,
+        STATS_SIZE,
+        STEP_PENALTY,
+        VICTORY_REWARD,
+    )
+    from hk_features import ACTION_COUNT
+
+    return {
+        "gamma": GAMMA,
+        "damage_reward_per_hp": DAMAGE_REWARD_PER_HP,
+        "health_penalty_per_mask": HEALTH_PENALTY_PER_MASK,
+        "victory_reward": VICTORY_REWARD,
+        "death_penalty": DEATH_PENALTY,
+        "step_penalty": STEP_PENALTY,
+        "episode_step_limit": EPISODE_STEP_LIMIT,
+        "observation_size": STATS_SIZE * FRAME_STACK,
+        "action_count": ACTION_COUNT,
+    }
 
 
 class RewardComponentLoggingCallback(BaseCallback):
@@ -408,7 +447,7 @@ def make_model(env):
         n_steps=N_STEPS,
         batch_size=BATCH_SIZE,
         n_epochs=10,
-        ent_coef=0.01,
+        ent_coef=0.02,
         clip_range=0.2,
         gae_lambda=0.95,
         gamma=GAMMA,
@@ -419,7 +458,11 @@ def make_model(env):
     )
 
 
-def load_compatible_vecnorm(vec_env, vecnorm_path):
+def load_compatible_vecnorm(vec_env, vecnorm_path, resume=True):
+    if not resume:
+        # The saved statistics belong to a different reward scale or discount (see
+        # hk_run_config.py): reusing them would normalize the new rewards by the old ones.
+        return fresh_vecnorm(vec_env)
     if not os.path.exists(vecnorm_path):
         return fresh_vecnorm(vec_env)
     try:
@@ -481,9 +524,20 @@ def main():
     base_vec_env = DummyVecEnv([lambda: monitored_env])
 
     model_path = os.path.join(boss_dir, "hk_model_final.zip")
-    have_saved_model = os.path.exists(model_path)
+    config_file = run_config.config_path(boss_dir)
 
-    vec_env = load_compatible_vecnorm(base_vec_env, vecnorm_path)
+    # A checkpoint only means what it was trained to mean. If the reward scale, the discount or
+    # the observation/action sizes changed since it was written, its value function and its
+    # normalization statistics describe a different problem, and resuming them produces a run
+    # that looks as if it had learned nothing - with nothing in the logs to say why.
+    resume_allowed = run_config.matches(config_file, run_config_values())
+    have_saved_model = os.path.exists(model_path) and resume_allowed
+    if os.path.exists(model_path) and not resume_allowed:
+        print("[SYSTEM] Not resuming the saved model: the run configuration changed")
+        for line in run_config.differences(config_file, run_config_values()):
+            print(f"           {line}")
+
+    vec_env = load_compatible_vecnorm(base_vec_env, vecnorm_path, resume=resume_allowed)
 
     # A pause left behind by a trainer that was killed cannot be lifted by the process that
     # set it, and the mod only lifts it by itself after 120 s. Asking once before the first
@@ -526,6 +580,10 @@ def main():
     else:
         print("\n[SYSTEM] No save found for this boss. Creating a new one from scratch...")
         model = make_model(vec_env)
+
+    # From here on the model, the statistics and the reward agree; remember what they agree on
+    # so that a later change is detected instead of silently degrading the run.
+    run_config.write_config(config_file, run_config_values())
 
     checkpoint_callback = CheckpointCallback(
         save_freq=20000,

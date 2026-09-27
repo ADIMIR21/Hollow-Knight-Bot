@@ -86,6 +86,7 @@ Every attack action used to be rewritten to `8`/`9`, which silently dropped the 
 of `6` and the dash of `7` - while the boss was off centre, which is nearly always, neither
 skill could happen or be learned (`hk_features.redirect_action`).
 
+
 ## Observation space
 
 - A vector of **30 numeric values**: HP, soul, boss HP, player and boss positions, distance and direction to the boss, velocities, state flags (grounded, facing right for the player and the boss, attack, dash, jump, fall, recoil, `boss_is_attacking`, `near_hazard`, `was_hit`), plus what the boss is doing right now
@@ -106,13 +107,15 @@ skill could happen or be learned (`hk_features.redirect_action`).
 
 ## Reward function
 
-Potential-based shaping: `r = Φ(s') - Φ(s)`, where `Φ = 15 * (damage dealt to the boss) - 10 * (player HP lost)`.
+Potential-based shaping: `r = Φ(s') - Φ(s)`, where `Φ = DAMAGE_REWARD_PER_HP * (damage dealt to the boss) - HEALTH_PENALTY_PER_MASK * (player HP lost)`.
 
 - **+1000** for defeating the boss (terminal)
 - **-500** for player death (terminal)
 - **-0.05** per step (penalty for hesitation)
 
-The death penalty was raised from -200 to -500: the maximum shaping over an episode is ~3000+ (boss damage), so at -200 it was profitable for the policy to trade HP for boss damage; -500 makes dying before the kill strictly bad.
+Every number lives in one block in `hk_gym.py`, because they only mean anything relative to each other. The decisive one is what a lost mask costs: at 10 a whole health bar was cheaper than 1% of the boss's, so standing inside an attack to land one more hit was always the better trade and the policy learned to tank. At **200** a mask costs as much as 13 boss hit points - more than the hit it buys - so dodging pays. The terminal numbers stay inside that balance too: the death penalty has to be small enough that attacking is still worth more than refusing to engage at all, which is why it is not simply raised until dying is unprofitable.
+
+Changing any of these (or `gamma`, or the observation/action sizes) writes a different fingerprint into the boss folder (`hk_run_config.py`). A checkpoint whose fingerprint does not match is not resumed - the value function and the normalization statistics belong to the old reward scale - and the console says which value changed.
 
 Such shaping mathematically does not change the optimal policy and does not let the agent "farm" auxiliary bonuses (spamming jumps/movement) that were present in the old reward function.
 
@@ -322,10 +325,10 @@ python tests/run_pipe_harness.py                         # the whole pipe harnes
 | n_steps | 8192 |
 | batch_size | 256 |
 | n_epochs | 10 |
-| ent_coef | 0.01 |
+| ent_coef | 0.02 |
 | clip_range | 0.2 |
 | gae_lambda | 0.95 |
-| gamma | 0.995 |
+| gamma | 0.9995 (one step is one game frame: this keeps 0.377 of the weight of a win 1950 steps - one fight - away, where 0.995 kept 5.6e-5) |
 | max_grad_norm | 0.5 |
 | Observation normalization | VecNormalize, clip_obs 10 |
 | Reward normalization | enabled |
