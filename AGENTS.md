@@ -166,10 +166,16 @@ python tests/run_pipe_harness.py     # builds the mock, runs --selftest-stuck, t
 
 ## 5. Commits and pushes
 
-Commit only what was asked for, in English, with a message that explains **why** (the subject
-line is the what) — the maintainer reads the commit history as the changelog, not as a diff dump.
-Do not commit or push until the maintainer says so: they review changes first. Never rewrite
-published history or force-push without an explicit request.
+**Commit your finished work — no permission needed.** A change that passes the checklist in §6 is
+complete, and a complete change belongs in a commit: in English, with a message that explains
+**why** (the subject line is the what), because the maintainer reads the commit history as the
+changelog, not as a diff dump. Commit only what was asked for, and keep unrelated edits out of the
+commit.
+
+**Push only when the maintainer asks for it.** A local commit is cheap and reversible; a push is
+neither, and the maintainer reviews before anything leaves the machine. Leave the finished commit
+on its branch and report that it is ready to push. Never rewrite published history or force-push
+without an explicit request.
 
 ## 6. Definition of done
 
@@ -186,3 +192,5 @@ published history or force-push without an explicit request.
 - [ ] No version was bumped (mod, protocol, checkpoints) — unless the maintainer asked for it.
 - [ ] No Cyrillic in tracked files, no game/run artifacts added, `.gitignore` untouched.
 - [ ] Anything that could only be checked in the game is named in the commit message.
+- [ ] The finished change is committed on its branch (committing needs no permission); the push
+      waits for the maintainer's word (§5).
