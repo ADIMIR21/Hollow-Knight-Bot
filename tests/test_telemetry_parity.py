@@ -70,6 +70,17 @@ class TelemetryParityTest(unittest.TestCase):
         for name in ARENA_FIELDS:
             self.assertIn(name, self.debug_tool, f"ai_receiver.py stopped showing {name}")
 
+    def test_the_reward_is_driven_by_the_damage_counter(self):
+        # The boss field describes a pool the game repairs in the middle of the fight (the armour
+        # drains 260 -> 4, the boss falls, the pool is back at 260), so a damage term of
+        # "started at, minus now" collapses to zero on every repair: one -3840 step, seven times
+        # the death penalty, charged for the hit that opens the stunned window where the fight is
+        # actually won. The dense term has to come from the mod's monotone counter instead.
+        self.assertIn('telemetry.get("scene_damage_total"', self.consumer,
+                      "hk_gym.py no longer reads the mod's cumulative damage counter")
+        self.assertNotIn("_boss_hp_start", self.consumer,
+                         "hk_gym.py went back to measuring damage against the boss field")
+
 
 if __name__ == "__main__":
     unittest.main()

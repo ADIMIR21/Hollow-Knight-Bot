@@ -72,6 +72,13 @@ namespace AiTrainHK
         private long _hitCounter = 0;
         private long _bossDamageTotal = 0;
         private int _lastBossHpKnown = 0;
+        // Damage counted over every HealthManager in the scene, not just the one we latched onto.
+        // The pool the arena lists is repaired by the game a limited number of times, and the
+        // health that actually ends the fight is a different one that never shows up in the arena
+        // set. Keeping the last hp seen for each object is what makes the counter monotone: a
+        // repair raises a pool, and it must not read as negative damage.
+        private long _sceneDamageTotal = 0;
+        private readonly Dictionary<int, int> _sceneHealthLast = new Dictionary<int, int>();
 
         private float _lastBossVelX = 0f;
         private float _lastBossVelY = 0f;
@@ -313,6 +320,9 @@ namespace AiTrainHK
                     _currentBoss = null;
                     _restartPending = false;
                     _lastBossHpKnown = 0;
+                    // Per-object "last hp" cannot survive a scene change: the objects are gone and
+                    // their instance ids can be reused. The damage counter itself is cumulative.
+                    _sceneHealthLast.Clear();
                     _bossDead = false;
                     _bossDeadConfirmed = false;
                     // A stamp that was already running before the load would be "expired" in the
@@ -1774,20 +1784,48 @@ namespace AiTrainHK
                         }
                     }
 
+                    // The scene as a whole, filled by the scan below: the arena set does not hold
+                    // the health that ends this fight, so the trainer has to be able to see every
+                    // pool that is being damaged, and how much damage has been dealt in total.
+                    int sceneCount = 0;
+                    int sceneHpNow = 0;
+                    StringBuilder sceneDetail = new StringBuilder();
+
                     if (!_bossDead)
                     {
                         try
                         {
-                            // Scene-wide, so this one is only a suspicion: it may fire for an
-                            // enemy that has nothing to do with the fight, which is why it
-                            // does not count as a confirmed death (see _bossDeadConfirmed).
+                            // Scene-wide, so the dead-object test is only a suspicion: it may fire
+                            // for an enemy that has nothing to do with the fight, which is why it
+                            // does not count as a confirmed death (see _bossDeadConfirmed). The
+                            // same pass is where the damage counter is fed, so it is not wasted.
+                            sceneCount = 0;
+                            sceneHpNow = 0;
+                            sceneDetail.Length = 0;
                             foreach (HealthManager hm in GameObject.FindObjectsOfType<HealthManager>())
                             {
-                                if (hm != null && hm.hp > 20 && (hm.isDead || hm.hp <= 0))
+                                if (hm == null) continue;
+                                int hmHp = Math.Max(0, hm.hp);
+                                int id = hm.GetInstanceID();
+                                sceneCount++;
+                                sceneHpNow += hmHp;
+                                int wasHp;
+                                if (_sceneHealthLast.TryGetValue(id, out wasHp) && wasHp > hmHp)
+                                    _sceneDamageTotal += wasHp - hmHp;
+                                _sceneHealthLast[id] = hmHp;
+                                if (sceneDetail.Length < 400)
+                                {
+                                    if (sceneDetail.Length > 0) sceneDetail.Append('|');
+                                    sceneDetail.Append(hm.gameObject.name
+                                            .Replace('"', '_').Replace('|', '_').Replace(':', '_'))
+                                        .Append(':').Append(hmHp).Append(':')
+                                        .Append((hm.isDead || hm.hp <= 0) ? 1 : 0);
+                                }
+
+                                if (hm.hp > 20 && (hm.isDead || hm.hp <= 0))
                                 {
                                     _bossDead = true;
                                     Log($"[AI] Boss is dead (HM scan: {hm.gameObject.name})");
-                                    break;
                                 }
                             }
                         }
@@ -1939,6 +1977,7 @@ namespace AiTrainHK
 
                     string data = $"{{\"status\": \"fight\", \"restart_pending\": {(_restartPending ? 1 : 0)}, \"scene\": \"{CurrentSceneName()}\", \"hp\": {hp}, \"max_hp\": {max_hp}, \"mana\": {mana}, \"boss_hp\": {bossHp}, \"boss_dead\": {(_bossDead ? 1 : 0)}, " +
                         $"\"arena_bosses\": {arenaBossCount}, \"arena_alive\": {arenaAliveCount}, \"arena_hp\": {arenaHpSum}, \"arena_detail\": \"{arenaDetail}\", " +
+                        $"\"scene_count\": {sceneCount}, \"scene_hp\": {sceneHpNow}, \"scene_damage_total\": {_sceneDamageTotal}, \"scene_detail\": \"{sceneDetail}\", " +
                         $"\"x\": {x.ToString("F2", CultureInfo.InvariantCulture)}, " +
                         $"\"y\": {y.ToString("F2", CultureInfo.InvariantCulture)}, " +
                         $"\"boss_x\": {bossX.ToString("F2", CultureInfo.InvariantCulture)}, " +

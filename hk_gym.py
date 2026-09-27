@@ -32,7 +32,7 @@ _enable_precise_sleep()
 SHOW_WINDOWS = False
 
 STAT_NAMES = [
-    "hp", "mana", "boss_hp", "x", "y", "boss_x", "boss_y",
+    "hp", "mana", "boss_hp", "scene_hp", "x", "y", "boss_x", "boss_y",
     "dist_to_boss", "dx_to_boss", "dy_to_boss",
     "vel_x", "vel_y", "boss_vel_x", "boss_vel_y",
     "grounded", "facing_right", "boss_facing_right",
@@ -70,8 +70,12 @@ VICTORY_CONFIRM_FRAMES = max(1, int(os.environ.get("HK_VICTORY_FRAMES", "3")))
 # each other: a fight is 1500-2600 steps long (13-26 s at one step per fresh frame), so what the
 # policy learns depends on the balance between them, not on any one value.
 #
-#   * damage dealt to the boss pays DAMAGE_REWARD_PER_HP per hit point - the dense signal that
-#     says "the nail is the way to win";
+#   * damage dealt pays DAMAGE_REWARD_PER_HP per hit point, counted from the mod's monotone
+#     counter over every HealthManager in the scene rather than from the boss field. That field
+#     describes a pool the game repairs during the fight (the armour drains 260 -> 4, the boss
+#     falls, the pool is back at 260, three times over), so "started at minus now" collapsed to
+#     zero on every repair - one -3840 step at 15 per hit point, seven times the death penalty,
+#     charged for the very hit that opens the stunned punish window where the fight is won;
 #   * every mask the knight loses costs HEALTH_PENALTY_PER_MASK. This is the number that decides
 #     whether the policy dodges or tanks: at 10 the whole health bar was cheaper than 1% of the
 #     boss's, so standing inside an attack to land a hit was always the better trade. At 200 a
@@ -124,7 +128,8 @@ class HollowKnightGym(gym.Env):
         self.last_time = time.time()
         
         self._last_phi = 0.0
-        self._boss_hp_start = 0.0
+        self._scene_damage = 0.0
+        self._scene_damage_start = 0.0
         self.current_action = 0
         self.hold_action_counter = 0
         self._boss_state = BossStateTracker()
@@ -226,6 +231,10 @@ class HollowKnightGym(gym.Env):
         near_hazard = 0.0
         was_hit = 0.0
 
+        # The summed health of every HealthManager in the scene, and the mod's monotone damage
+        # counter over them. The boss field alone describes a pool the game repairs during the
+        # fight, so the policy cannot see how far the fight actually got from it.
+        scene_hp = 0.0
         if telemetry is not None and "hp" in telemetry:
             self._last_boss_dead = float(telemetry.get("boss_dead", self._last_boss_dead))
             hp = float(telemetry.get("hp", hp))
@@ -236,6 +245,8 @@ class HollowKnightGym(gym.Env):
             boss_x = float(telemetry.get("boss_x", boss_x))
             boss_y = float(telemetry.get("boss_y", boss_y))
             boss_hp = float(telemetry.get("boss_hp", boss_hp))
+            scene_hp = float(telemetry.get("scene_hp", scene_hp))
+            self._scene_damage = float(telemetry.get("scene_damage_total", self._scene_damage))
             
             vel_x = float(telemetry.get("vel_x", 0.0))
             vel_y = float(telemetry.get("vel_y", 0.0))
@@ -265,7 +276,7 @@ class HollowKnightGym(gym.Env):
         dy_to_boss = (boss_y - y) / (dist_to_boss + 0.001)
         
         stats = np.array([
-            hp, mana, boss_hp, x, y, boss_x, boss_y, dist_to_boss, dx_to_boss, dy_to_boss,
+            hp, mana, boss_hp, scene_hp, x, y, boss_x, boss_y, dist_to_boss, dx_to_boss, dy_to_boss,
             vel_x, vel_y, boss_vel_x, boss_vel_y,
             grounded, facing_right, boss_facing_right,
             is_attacking, is_dashing, is_jumping, is_falling, is_recoiling,
@@ -420,16 +431,22 @@ class HollowKnightGym(gym.Env):
             self.hold_action_counter = 0
             self._boss_death_frames = 0
             self._last_episode_was_victory = False
-            self._boss_hp_start = float(obs[IDX["boss_hp"]])
-            self._last_phi = self._potential(float(obs[IDX["hp"]]), float(obs[IDX["boss_hp"]]))
+            self._scene_damage_start = float(self._scene_damage)
+            self._last_phi = self._potential(float(obs[IDX["hp"]]), self._scene_damage)
             
             stacked_obs = np.concatenate(list(self._obs_deque)).astype(np.float32)
             self._log_reset_timing(reset_reason, time.time() - reset_started)
             self._episode_reason = "unknown"
             return stacked_obs, {}
 
-    def _potential(self, hp, boss_hp):
-        damage_done = max(0.0, self._boss_hp_start - boss_hp)
+    def _potential(self, hp, scene_damage):
+        # Damage comes from the mod's monotone counter over every HealthManager in the scene, not
+        # from the boss field. The pool that field describes is repaired by the game on the way to
+        # the punished window (260 -> 4 -> 260), so reading damage as "started at, minus now"
+        # turned every repair into a large negative step and charged the policy for opening the
+        # only route to the kill. A counter that only grows keeps this term monotone whatever the
+        # game does to a pool.
+        damage_done = max(0.0, scene_damage - self._scene_damage_start)
         hp_lost = max(0.0, self.max_hp - hp)
         return DAMAGE_REWARD_PER_HP * damage_done - HEALTH_PENALTY_PER_MASK * hp_lost
 
@@ -505,7 +522,7 @@ class HollowKnightGym(gym.Env):
         reward -= STEP_PENALTY
         reward_parts["step_penalty"] -= STEP_PENALTY
 
-        phi = self._potential(current_hp, current_boss_hp)
+        phi = self._potential(current_hp, self._scene_damage)
         shaping = phi - self._last_phi
         self._last_phi = phi
         reward += shaping

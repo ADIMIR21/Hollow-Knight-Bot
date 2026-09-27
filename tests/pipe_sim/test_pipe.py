@@ -62,6 +62,9 @@ check("arena reported as a whole",
       t.get("arena_bosses") == 1 and t.get("arena_alive") == 1
       and t.get("arena_hp") == 40 and t.get("arena_detail") == "MockBoss:40:0",
       f"{t.get('arena_hp')} HP, {t.get('arena_detail')}")
+check("the scene's pools and the damage counter are reported",
+      t.get("scene_count") == 1 and t.get("scene_hp") == 40 and t.get("scene_damage_total") == 0,
+      f"{t.get('scene_hp')} HP over {t.get('scene_count')}, damage {t.get('scene_damage_total')}")
 
 seq0 = client.get_seq()
 time.sleep(0.3)
