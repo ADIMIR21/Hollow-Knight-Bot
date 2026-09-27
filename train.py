@@ -535,6 +535,14 @@ def main():
     # normalization statistics describe a different problem, and resuming them produces a run
     # that looks as if it had learned nothing - with nothing in the logs to say why.
     resume_allowed = run_config.matches(config_file, run_config_values())
+    if not resume_allowed and run_config.override_requested():
+        # Deliberate warm start: the policy transfers, the critic and the running statistics do not,
+        # so say out loud what is being accepted.
+        print(f"[SYSTEM] Resuming across a changed run configuration: "
+              f"{run_config.RESUME_OVERRIDE_ENV} is set")
+        for line in run_config.differences(config_file, run_config_values()):
+            print(f"           {line}")
+        resume_allowed = True
     have_saved_model = os.path.exists(model_path) and resume_allowed
     if os.path.exists(model_path) and not resume_allowed:
         print("[SYSTEM] Not resuming the saved model: the run configuration changed")

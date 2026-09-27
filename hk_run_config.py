@@ -7,6 +7,11 @@ curve looks plausible, the policy behaves as if it had learned nothing, and noth
 says why. So the environment's configuration is written next to the model and compared before a
 resume; on a mismatch the run starts from scratch and says which part changed.
 
+The one way past it is deliberate: `HK_RESUME_CONFIG_CHANGED=1` resumes anyway and prints what is
+being accepted. That is a maintainer's decision about a warm start, never a default - the policy
+weights still transfer, but the value function and the running statistics describe the old reward
+and have to re-fit.
+
 Imports nothing but the standard library, so the unit tier checks it directly (see AGENTS.md).
 """
 
@@ -14,6 +19,7 @@ import json
 import os
 
 CONFIG_NAME = "run_config.json"
+RESUME_OVERRIDE_ENV = "HK_RESUME_CONFIG_CHANGED"
 
 
 def build_config(values):
@@ -38,6 +44,16 @@ def read_config(path):
         return {str(key): float(value) for key, value in stored.items()}
     except (TypeError, ValueError):
         return None
+
+
+def override_requested(environ=None):
+    """Whether the maintainer explicitly asked to resume across a changed configuration.
+
+    Only an affirmative value counts: an empty variable, a "0" or anything unrecognized leaves the
+    refusal in place, because the failure this guards against is silent.
+    """
+    environ = os.environ if environ is None else environ
+    return str(environ.get(RESUME_OVERRIDE_ENV, "")).strip().lower() in ("1", "true", "yes", "on")
 
 
 def matches(path, values):
