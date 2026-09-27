@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Named pipe client for the HK_AI_Mod mod (protocol v3).
+"""Named pipe client for the AiTrainHK mod (protocol v3).
 
 The mod (C#) hosts the pipe server ``\\\\.\\pipe\\hk_ai_mod`` and broadcasts telemetry
 as JSON lines (newline-delimited). Python opens the pipe through a RAW handle
@@ -12,7 +12,7 @@ next ``readline()``. Raw ``os.read``/``os.write`` work correctly and give you
 your own line-based parsing of the stream.
 
 Mod message format (one line = one JSON object):
-    {"status": "pipe_hello", "protocol": 3, "mod_version": "v1"}   — on connect
+    {"status": "pipe_hello", "protocol": 3, "mod_version": "1"}   — on connect
     {"status": "fight", "restart_pending": 0, "scene": "GG_False_Knight", "hp": 9, ...}
     {"status": "main_menu" | "loading_scene" | "initialized" | ...}  — service statuses
     {"status": "boss_list", "event": 1, "count": 60, "bosses": [...]}   — reply to "bosses"
@@ -369,7 +369,7 @@ if __name__ == "__main__":
     client = HKPipeClient()
     print("Waiting for the mod (\\\\.\\pipe\\hk_ai_mod), up to 10 seconds...")
     if not client.wait_connected(10.0):
-        print("The mod did not respond. Is the game running? Is the HK_AI_Mod.dll mod installed?")
+        print("The mod did not respond. Is the game running? Is the AiTrainHK.dll mod installed?")
         raise SystemExit(1)
 
     hello = client.wait_hello(3.0) or {}

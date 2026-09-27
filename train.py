@@ -9,7 +9,6 @@ from stable_baselines3.common.callbacks import CheckpointCallback, BaseCallback,
 from stable_baselines3.common.logger import HumanOutputFormat
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
-from stable_baselines3.common.type_aliases import Schedule
 
 from ai_controller import HollowKnightController
 from bosses import resolve_query, set_boss_scene, set_gate, DEFAULT_SCENE
@@ -74,10 +73,35 @@ def migrate_legacy_model(scene, boss_dir):
         print(f"[SYSTEM]   {os.path.basename(f)} -> {dst}")
 
 
-def linear_schedule(initial_value: float) -> Schedule:
-    def func(progress_remaining: float) -> float:
-        return progress_remaining * initial_value
-    return func
+# Update 8: the PPO configuration. The previous values were tuned for a
+# different problem and cost a large part of every night (26-27.09: 550
+# episodes, 96 victories, 2 033 664 steps):
+#   * an update of 1024 steps against an episode of ~1950 steps means one
+#     update sees half of a single fight, so every gradient carries that
+#     fight's luck - the win rate swung between 4% and 33% per 100k steps
+#     without a trend;
+#   * a discount of 0.99 at ~75 steps/sec looks ~100 steps (1.3 s) ahead
+#     while a fight lasts 13-26 s, so the +1000 victory / -500 death
+#     rewards were discounted to nothing (0.99^1000 ~ 4e-5) and only the
+#     per-step shaping was learned;
+#   * a learning rate scaled to the length of the learn() call always ends
+#     at zero: the last hours of the night ran at
+#     learning_rate 4.8e-07 with approx_kl 3.7e-06 - a frozen policy and a
+#     burning clock.
+#
+# A fresh model and a resumed one both use these values: PPO.load applies its
+# kwargs after the pickled data, which is why the load path repeats them (see
+# main()). Without that a loaded model silently keeps training under its own
+# old configuration.
+N_STEPS = 8192
+BATCH_SIZE = 256
+GAMMA = 0.995
+LEARNING_RATE = 3e-4
+
+
+def constant_lr(progress_remaining: float) -> float:
+    """Flat learning rate - see the note above on why a schedule is not used."""
+    return LEARNING_RATE
 
 
 class RewardComponentLoggingCallback(BaseCallback):
@@ -115,6 +139,58 @@ class VecNormalizeSaveCallback(BaseCallback):
     def _on_step(self) -> bool:
         if self.n_calls % self.save_freq == 0:
             self.vec_env.save(self.save_path)
+        return True
+
+
+class GamePauseCallback(BaseCallback):
+    """Freezes the game while the policy is being trained (Update 9).
+
+    The game runs in real time while learn() computes the gradient epochs and the
+    metrics table, and the environment is not stepped meanwhile: the hero stands
+    still for those seconds, the boss keeps hitting it, and the next step lumps all
+    of that damage into one transition. on_rollout_end fires after the last step of
+    the rollout and before the table and train(); the following rollout starts with
+    on_rollout_start, which unfreezes the game again.
+    """
+
+    def __init__(self, vec_env, verbose=0):
+        super().__init__(verbose)
+        self.vec_env = vec_env
+        self._paused = False
+        self._pause_requested = False
+
+    def _on_step(self) -> bool:
+        # BaseCallback declares _on_step abstract: a subclass without it cannot be
+        # instantiated at all (TypeError before the first frame is collected).
+        return True
+
+    def _on_rollout_end(self) -> bool:
+        # "We asked" is tracked apart from "the mod confirmed": the command can reach the
+        # mod while its answer misses the confirmation window (a busy machine can eat the
+        # 2 s). resume() below must still lift the pause - otherwise the game stays frozen
+        # until the mod's own 120 s backstop and the next rollout is collected against a
+        # fight that does not move.
+        self._pause_requested = True
+        self._paused = any(self.vec_env.env_method("pause_game"))
+        if not self._paused and self.verbose >= 1:
+            print("[PAUSE] The mod did not confirm the pause (the game keeps running).")
+        return True
+
+    def _on_rollout_start(self) -> bool:
+        self.resume()
+        return True
+
+    def _on_training_end(self) -> bool:
+        self.resume()
+        return True
+
+    def resume(self) -> bool:
+        """Unfreezes the game if this callback asked for a pause."""
+        if not self._pause_requested:
+            return False
+        self._pause_requested = False
+        self._paused = False
+        self.vec_env.env_method("resume_game")
         return True
 
 
@@ -326,17 +402,16 @@ def make_model(env):
         env,
         verbose=1,
         tensorboard_log=LOGS_DIR,
-        learning_rate=linear_schedule(3e-4),
-        # Update 5: 2048 -> 1024. At ~20-60 steps/sec a single rollout
-        # of 2048 steps took 0.5-2 minutes; updating the policy more often —
-        # progress is more noticeable early in training.
-        n_steps=1024,
-        batch_size=128,
+        learning_rate=constant_lr,
+        # Update 8: one update has to see more than one fight, so both the
+        # fresh and the resumed path use the constants above.
+        n_steps=N_STEPS,
+        batch_size=BATCH_SIZE,
         n_epochs=10,
         ent_coef=0.01,
         clip_range=0.2,
         gae_lambda=0.95,
-        gamma=0.99,
+        gamma=GAMMA,
         max_grad_norm=0.5,
         policy_kwargs=dict(
             net_arch=[256, 256],
@@ -356,6 +431,9 @@ def load_compatible_vecnorm(vec_env, vecnorm_path):
             return fresh_vecnorm(vec_env)
         loaded.training = True
         loaded.norm_reward = True
+        # The statistics were saved under a different discount: the policy
+        # and the reward normalization must agree on one.
+        loaded.gamma = GAMMA
         print(f"\n[SYSTEM] Restoring normalization statistics: {vecnorm_path}")
         return loaded
     except Exception as e:
@@ -369,7 +447,7 @@ def fresh_vecnorm(vec_env):
         norm_obs=True,
         norm_reward=True,
         clip_obs=10.0,
-        gamma=0.99,
+        gamma=GAMMA,
     )
 
 
@@ -407,6 +485,16 @@ def main():
 
     vec_env = load_compatible_vecnorm(base_vec_env, vecnorm_path)
 
+    # A pause left behind by a trainer that was killed cannot be lifted by the process that
+    # set it, and the mod only lifts it by itself after 120 s. Asking once before the first
+    # step is enough (both commands are idempotent, so a game that is not paused is
+    # unaffected).
+    try:
+        vec_env.env_method("resume_game")
+        print("[SYSTEM] Asked the mod to lift a pause left by a previous run.")
+    except Exception as e:
+        print(f"[SYSTEM] Could not ask the mod to resume: {e}")
+
     if have_saved_model:
         print(f"\n[SYSTEM] Save found: hk_model_final ({scene}). Loading...")
         try:
@@ -418,12 +506,17 @@ def main():
                 model_path,
                 env=vec_env,
                 custom_objects={
-                    "learning_rate": lambda progress_remaining: 3e-4 * progress_remaining,
+                    "learning_rate": constant_lr,
                     "clip_range": 0.2,
                 },
-                # Update 5: the model file has n_steps=2048 baked in; the kwarg
-                # is applied AFTER data in SB3 and overrides it.
-                n_steps=1024,
+                # Update 8: SB3 applies these kwargs AFTER the pickled data,
+                # so they are what a resumed run really trains with. Without
+                # them a loaded model keeps n_steps/batch_size/gamma from its
+                # file and the configuration above would only reach a fresh
+                # model.
+                n_steps=N_STEPS,
+                batch_size=BATCH_SIZE,
+                gamma=GAMMA,
             )
             print("[SYSTEM] Model loaded successfully.")
         except Exception as e:
@@ -449,7 +542,12 @@ def main():
     # of the other callbacks (custom/*, reward_breakdown/*), which it writes to the file.
     progress_callback = ProgressFileCallback(PROGRESS_PATH, window=PROGRESS_WINDOW)
 
+    # First in the list: the game is frozen before the bookkeeping runs and stays
+    # frozen through train().
+    game_pause_callback = GamePauseCallback(vec_env)
+
     callback_list = CallbackList([
+        game_pause_callback,
         checkpoint_callback,
         vecnorm_save_callback,
         reward_logging_callback,
@@ -470,6 +568,8 @@ def main():
         print("\n[SYSTEM] Training interrupted. Saving what we have...")
 
     finally:
+        # Ctrl+C can land inside the PPO update, with the game still frozen.
+        game_pause_callback.resume()
         final_save_path = os.path.join(boss_dir, "hk_model_final")
         model.save(final_save_path)
         vec_env.save(vecnorm_path)

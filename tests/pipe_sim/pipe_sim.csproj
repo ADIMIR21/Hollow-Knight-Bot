@@ -17,7 +17,7 @@
        code, not a retelling of it. That is how a divergence between the mock and the
        game gets caught. -->
   <ItemGroup>
-    <Compile Include="..\..\Mod\HK_AI_Mod\Win32Pipe.cs" Link="Win32Pipe.cs" />
+    <Compile Include="..\..\Mod\AiTrainHK\Win32Pipe.cs" Link="Win32Pipe.cs" />
   </ItemGroup>
 
 </Project>

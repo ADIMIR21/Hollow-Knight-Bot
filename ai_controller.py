@@ -3,7 +3,7 @@ import time
 
 DEFAULT_BOSS_SCENE = "GG_False_Knight"
 # In Godhome arenas the entry TransitionPoint is called door_dreamEnter — see
-# DEFAULT_ENTRY_GATE in the mod (Mod/HK_AI_Mod/AiDataExporter.cs).
+# DEFAULT_ENTRY_GATE in the mod (Mod/AiTrainHK/AiDataExporter.cs).
 DEFAULT_ENTRY_GATE = "door_dreamEnter"
 
 class HollowKnightController:
@@ -52,6 +52,19 @@ class HollowKnightController:
         sent = self.pipe.send_command(f"restart {scene} {gate}")
         if sent:
             print(f"[CONTROLLER] Restart command sent: {scene} ({gate})")
+        return sent
+
+    def set_paused(self, paused):
+        """Freezes or unfreezes the game around the policy update (Update 9).
+
+        The mod sets the game's time scale to zero, so the fight really stops
+        while the PPO update runs. True - the command was sent.
+        """
+        if self.pipe is None or not self.pipe.is_connected:
+            return False
+        sent = self.pipe.send_command("pause" if paused else "resume")
+        if sent:
+            print("[CONTROLLER] " + ("Pause" if paused else "Resume") + " command sent")
         return sent
 
     def set_action(self, action_id):

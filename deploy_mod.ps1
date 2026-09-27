@@ -1,4 +1,4 @@
-﻿# Deploy the HK_AI_Mod mod into the game (run while the game is CLOSED).
+﻿# Deploy the AiTrainHK mod into the game (run while the game is CLOSED).
 # Usage:
 #   powershell -ExecutionPolicy Bypass -File deploy_mod.ps1
 #   powershell -ExecutionPolicy Bypass -File deploy_mod.ps1 -Build   # rebuild before deploying
@@ -51,23 +51,23 @@ if ($game) {
 
 if ($Build) {
     Write-Host "Building the mod (Release)..."
-    dotnet build (Join-Path $PSScriptRoot "Mod\HK_AI_Mod\HK_AI_Mod.csproj") -c Release
+    dotnet build (Join-Path $PSScriptRoot "Mod\AiTrainHK\AiTrainHK.csproj") -c Release
     if ($LASTEXITCODE -ne 0) {
         Write-Host "Build failed." -ForegroundColor Red
         exit 1
     }
 }
 
-$dll = Join-Path $PSScriptRoot "Mod\HK_AI_Mod\bin\Release\net472\HK_AI_Mod.dll"
+$dll = Join-Path $PSScriptRoot "Mod\AiTrainHK\bin\Release\net472\AiTrainHK.dll"
 if (-not (Test-Path $dll)) {
     Write-Host "DLL not found: $dll (run dotnet build -c Release first)" -ForegroundColor Red
     exit 1
 }
 
-$modsDir = Join-Path $gameDir "hollow_knight_Data\Managed\Mods\HK_AI_Mod"
+$modsDir = Join-Path $gameDir "hollow_knight_Data\Managed\Mods\AiTrainHK"
 if (-not (Test-Path $modsDir)) {
     New-Item -ItemType Directory -Path $modsDir -Force | Out-Null
 }
-Copy-Item $dll (Join-Path $modsDir "HK_AI_Mod.dll") -Force
-Write-Host "Deploy finished: $modsDir\HK_AI_Mod.dll" -ForegroundColor Green
-Write-Host "Launch the game and check ModLog - the mod version should be v1."
+Copy-Item $dll (Join-Path $modsDir "AiTrainHK.dll") -Force
+Write-Host "Deploy finished: $modsDir\AiTrainHK.dll" -ForegroundColor Green
+Write-Host "Launch the game and check ModLog - the mod version should be 1."

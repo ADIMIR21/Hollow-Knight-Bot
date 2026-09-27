@@ -52,7 +52,7 @@ one-shot event, a reconnect/watchdog behaviour, a change in the mod's answers.
   the tests at the production name `hk_ai_mod`.
 
 ```bash
-python tests/run_pipe_harness.py     # builds the mock, runs --selftest-stuck, then 36 checks
+python tests/run_pipe_harness.py     # builds the mock, runs --selftest-stuck, then the checks
 ```
 
 ### Rules that apply to both tiers
@@ -78,9 +78,10 @@ python tests/run_pipe_harness.py     # builds the mock, runs --selftest-stuck, t
 
 | Path | What it is |
 | --- | --- |
-| `Mod/HK_AI_Mod/` | The C# mod: telemetry over the named pipe, command intake, boss registry, deferred restart, fade watchdog |
+| `Mod/AiTrainHK/` | The C# mod: telemetry over the named pipe, command intake, boss registry, deferred restart, fade watchdog, pause |
 | `hk_pipe.py` | Named-pipe client the whole Python side runs on (one shared client per process, auto-reconnect) |
 | `bosses.py` | Python mirror of the mod's registry + command helpers |
+| `hk_features.py` | Pure environment features (action table, aiming rule, boss-state tracker) - imports nothing, so tier 1 tests it directly |
 | `hk_gym.py`, `ai_environment.py`, `ai_controller.py` | Gym env, observation/reward pipeline, virtual gamepad |
 | `train.py` | PPO training, checkpoint layout, `logs/progress.txt` journal |
 | `teleport.py`, `ai_receiver.py` | Boss selection/teleport tooling, live telemetry debugger |
@@ -102,7 +103,7 @@ python tests/run_pipe_harness.py     # builds the mock, runs --selftest-stuck, t
   file or in a code comment. There is deliberately **no changelog file** in the repository — do
   not add one, and do not let the README grow into one.
 * **Never bump a version unless the maintainer explicitly asks for it.** The mod version is
-  frozen at `v1` (`MOD_VERSION`/`GetVersion()` in `AiDataExporter.cs`): it exists only to tell a
+  frozen at `1` (`MOD_VERSION`/`GetVersion()` in `AiDataExporter.cs`): it exists only to tell a
   fresh build from an old one. Do not raise it, do not introduce a new version number anywhere
   (mod, protocol, checkpoints, file naming) and do not "align" versions between files — a version
   bump is a decision for the maintainer, never a side effect of a change, and it is not a way to
@@ -111,7 +112,7 @@ python tests/run_pipe_harness.py     # builds the mock, runs --selftest-stuck, t
   only for a genuinely incompatible change on the wire, and only when the maintainer asks (see the
   rule above). Then update the mock, the checks and the README in the same commit.
 * **Never commit artifacts that come from the game or from a run:** the game's
-  `Assembly-CSharp.dll`, `Mod/HK_AI_Mod/libs/`, `models/`, `Save/`, `bin/`, `obj/`,
+  `Assembly-CSharp.dll`, `Mod/AiTrainHK/libs/`, `models/`, `Save/`, `bin/`, `obj/`,
   `tests/pipe_sim/bosses.json`. They are in `.gitignore` on purpose — do not weaken it, and do
   not "helpfully" add a copy of the game assembly so the build works without the game.
 * **The pipe is the only transport.** There is no file-based fallback and no plan to add one: the
@@ -132,14 +133,14 @@ python tests/run_pipe_harness.py     # builds the mock, runs --selftest-stuck, t
   for the tests). .NET SDK for the harness and the mod (the projects use
   `RollForward=LatestMajor`, so .NET 6/8/10 all work).
 * The mod needs the game's managed `Assembly-CSharp.dll`: it is resolved from the game install,
-  with `Mod/HK_AI_Mod/libs/` as an untracked fallback. A clean checkout therefore builds only on
+  with `Mod/AiTrainHK/libs/` as an untracked fallback. A clean checkout therefore builds only on
   a machine that has the game — the build fails with an explicit error otherwise.
 * **Always verify that the mod builds — every change, however harmless it looks.** CI never builds
   the mod (it needs the game's DLL), so a C# error is otherwise discovered in the game. This works
   with the game running:
 
   ```bash
-  dotnet build Mod/HK_AI_Mod/HK_AI_Mod.csproj -c Release
+  dotnet build Mod/AiTrainHK/AiTrainHK.csproj -c Release
   ```
 
 * **Deploy the fresh build into the game whenever the game is closed.** The DLL is locked while
@@ -185,7 +186,7 @@ without an explicit request.
       in the transport changed.
 - [ ] Both sides of a paired change (mod + Python, or registry + parity test) are in the same
       commit.
-- [ ] The mod builds (`dotnet build Mod/HK_AI_Mod/HK_AI_Mod.csproj -c Release`), and the fresh
+- [ ] The mod builds (`dotnet build Mod/AiTrainHK/AiTrainHK.csproj -c Release`), and the fresh
       build went into the game if the game was closed.
 - [ ] `README.md` reflects the change and stayed clean (no "what's new" prose, no history);
       `AGENTS.md` is updated if this file became wrong.

@@ -1,14 +1,14 @@
 # Named-pipe protocol harness that runs without the game
 
 `hkpipesim` is a small C# server that replicates the mod's transport
-(`Mod/HK_AI_Mod/AiDataExporter.cs`): hello, telemetry stream, one-shot
+(`Mod/AiTrainHK/AiDataExporter.cs`): hello, telemetry stream, one-shot
 events (`boss_list` / `boss_selected` / `command_error`) and command intake
 (`restart`, `teleport`, `set_boss`, `set_gate`, `boss`, `bosses`, `warp`).
 
 It lets you run `hk_pipe.py`, `bosses.py` and `teleport.py` end to end over a
 real Windows named pipe — without Hollow Knight.
 
-The project **includes `Mod/HK_AI_Mod/Win32Pipe.cs` as the very same file**, not a
+The project **includes `Mod/AiTrainHK/Win32Pipe.cs` as the very same file**, not a
 copy: the harness exercises exactly the code that runs in the game.
 
 ## Three bugs found along the way
@@ -42,7 +42,7 @@ incomplete.
 
 ## The harness must not reach the game
 
-At first the mock listened on the production name `hk_ai_mod`. The mistake surfaced
+At first the mock listened on the production name `AiTrainHK`. The mistake surfaced
 during a live run: the game had claimed that name, the mock could not create the
 pipe (and silently reconnected in a loop), and the test connected **to the mod of
 the running game** — and went off teleporting the knight: `boss GG_Hornet_1`, then

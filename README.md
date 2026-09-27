@@ -8,7 +8,7 @@
 
 The project consists of two main components:
 
-### 1. C# Mod for Hollow Knight (`Mod/HK_AI_Mod/`)
+### 1. C# Mod for Hollow Knight (`Mod/AiTrainHK/`)
 
 The mod exports game telemetry over a **named pipe** `\\.\pipe\hk_ai_mod` (protocol 3, line-delimited JSON, one line per `HeroUpdate`, ~60/s). The old `%TEMP%/hk_ai_data.json` file protocol has been removed entirely - there is no file fallback:
 
@@ -37,8 +37,10 @@ The mod keeps a duplex server on `\\.\pipe\hk_ai_mod` (up to 4 clients, so train
 | `boss <query>` | **Select a boss and teleport to it.** Query: index in the registry, scene name (`gg_hornet_1`, case-insensitive), short alias (`hornet`, `nkg`, `sisters`, `oro`) or part of the name. The selected scene becomes the mod's target, so restarts and training keep working with that arena. The mod answers with a `boss_selected` event |
 | `bosses` | Send the full registry as a `boss_list` event (works even in the main menu) |
 | `warp` | Return the hero to the arena gate without reloading the scene (if thrown out of the fight / stuck) |
+| `pause` | **Freeze the fight** (`Time.timeScale = 0`): the boss FSM, the hero's input and every animation stop while the game keeps publishing telemetry. Answered with a `paused` event |
+| `resume` | Unfreeze the fight and restore the time scale it had before. Answered with a `resumed` event. Both commands are idempotent, and the mod lifts the pause by itself after 120 s without a `resume` - a trainer that died mid-update must not leave the game frozen |
 
-Telemetry contains a `scene` field (the current scene) - so Python and the human can see which boss's arena the fight is taking place in. If a scene transition hangs (the hero stays in `transitioning`), the mod's watchdog finds the entry point after 2.5 seconds via the `TransitionPoint.TransitionPoints` registry and properly triggers `HeroController.EnterScene`; on a repeated hang it teleports the hero to the gate and lifts the freeze directly (the private `FinishedEnteringScene` + re-enabling rendering). The watchdog also raises `Time.timeScale` if the transition zeroed out time.
+Telemetry contains a `scene` field (the current scene) - so Python and the human can see which boss's arena the fight is taking place in. If a scene transition hangs (the hero stays in `transitioning`), the mod's watchdog finds the entry point after 2.5 seconds via the `TransitionPoint.TransitionPoints` registry and properly triggers `HeroController.EnterScene`; on a repeated hang it teleports the hero to the gate and lifts the freeze directly (the private `FinishedEnteringScene` + re-enabling rendering). The 2.5 s window is only the first line of defence: a hang that starts later is caught by the same repair after 5 s of frozen state, and the fade has a 15 s backstop. The watchdog also raises `Time.timeScale` if the transition zeroed out time. While a `pause` is active the watchdogs and the deferred transition stand down entirely: a frozen game is not a stuck one, and it must not start a scene transition behind the trainer's back.
 
 ### 2. Python RL framework
 
@@ -49,6 +51,7 @@ Telemetry contains a `scene` field (the current scene) - so Python and the human
 | `ai_environment.py` | The environment: combines the video stream and telemetry; steps are synced by the pipe message counter (`seq`), so there is no file polling |
 | `hk_pipe.py` | **Named-pipe client** for the mod: background reader with auto-reconnect, `get_telemetry()`, `send_command()`, one-shot events (`wait_for_status`), one shared client per process |
 | `hk_gym.py` | **Gymnasium environment** - the RL core: observation space, rewards, episode logic, fast restart |
+| `hk_features.py` | The pure part of the environment - the action table, the aiming rule, the boss-state tracker. Imports nothing, so the tests exercise it directly instead of parsing the environment |
 | `train.py` | **PPO training** via Stable-Baselines3; `--boss` picks the boss, training files are laid out per boss automatically |
 | `ai_receiver.py` | Real-time telemetry debugger (connects as a second pipe client, so it does not disturb training) |
 | `bosses.py` | Godhome boss registry (mirror of the mod's registry) + command protocol over the pipe |
@@ -64,7 +67,7 @@ The mod must be loaded into the game for the framework to work!
 | 1 | Left |
 | 2 | Right |
 | 3 | Jump |
-| 4 | Attack |
+| 4 | Attack (aimed at the boss) |
 | 5 | Dash |
 | 6 | Jump + Attack |
 | 7 | Dash + Attack |
@@ -74,16 +77,23 @@ The mod must be loaded into the game for the framework to work!
 | 11 | Right + Jump |
 | 12 | Left + Dash |
 | 13 | Right + Dash |
-| 14 | Pause (nothing) |
+| 14 | Nothing (same as 0) |
 | 15 | Jump + Dash |
+
+Only `4` is aimed: `left`/`right` is chosen from the normalised direction to the boss
+(`dx_to_boss`, threshold 0.3) and the other attack actions press exactly the buttons above.
+Every attack action used to be rewritten to `8`/`9`, which silently dropped the jump
+of `6` and the dash of `7` - while the boss was off centre, which is nearly always, neither
+skill could happen or be learned (`hk_features.redirect_action`).
 
 ## Observation space
 
-- A vector of **25 numeric values**: HP, soul, boss HP, player and boss positions, distance and direction to the boss, velocities, state flags (grounded, facing right for the player and the boss, attack, dash, jump, fall, recoil, `boss_is_attacking`, `near_hazard`, `was_hit`)
-- **Frame stack**: a stack of the last 4 vectors -> `100` features at the policy's input (set by `HK_FRAME_STACK`)
+- A vector of **30 numeric values**: HP, soul, boss HP, player and boss positions, distance and direction to the boss, velocities, state flags (grounded, facing right for the player and the boss, attack, dash, jump, fall, recoil, `boss_is_attacking`, `near_hazard`, `was_hit`), plus what the boss is doing right now
+- **Boss state**: `boss_attack_antic` (the attack is winding up), `boss_open` (stunned or recovering - the punish window), `boss_dead`, `boss_state_age` (how long the current state has been running, scaled over 60 frames) and `boss_state_changed`. The mod already sent the state name (`boss_state`, the animation clip or the attacking FSM state) in every single frame; `hk_features.BossStateTracker` turns it into these five numbers. The name as text is useless to the policy, and the frame stack only reaches back ~50 ms at 75 fps, so "the hit lands in a few frames" has to be a feature rather than something to infer
+- **Frame stack**: a stack of the last 4 vectors -> `120` features at the policy's input (set by `HK_FRAME_STACK`)
 - **Frame skip**: `HK_FRAME_SKIP` is no longer used - each step waits for a FRESH telemetry frame via `wait_for_fresh_telemetry` in `ai_environment.py` (the pipe message counter `seq` must change), so the step rate follows the game itself (roughly up to ~60 steps/s); if no fresh frame arrives (menu/pause), the step continues after a short wait
 - Observations and rewards are normalized via `VecNormalize` (reward normalization is enabled - the reward is clipped within static bounds, victory/death signals are not lost)
-- Attacks are aimed toward the boss by default (`_redirect_attack_to_boss`)
+- Only the plain attack is aimed toward the boss (`hk_features.redirect_action`)
 
 ## Episode loop
 
@@ -125,13 +135,13 @@ pip install -r requirements.txt
 ### Building and installing the mod
 
 ```bash
-dotnet build Mod/HK_AI_Mod/HK_AI_Mod.csproj -c Release
+dotnet build Mod/AiTrainHK/AiTrainHK.csproj -c Release
 ```
 
-The project locates the game by itself (Steam registry or standard paths on drives A: through Z:) and takes the game's `Assembly-CSharp.dll` from that install - the repository does not ship it, because that DLL is Team Cherry's compiled code (a byte-for-byte copy of the installed game). So the mod is built against exactly the assembly it will run against. If automatic detection fails on an unusual install path, copy `hollow_knight_Data\Managed\Assembly-CSharp.dll` into `Mod/HK_AI_Mod/libs/` (that folder is in `.gitignore`) and the build uses it as a fallback. Copy the built DLL into the mods folder:
+The project locates the game by itself (Steam registry or standard paths on drives A: through Z:) and takes the game's `Assembly-CSharp.dll` from that install - the repository does not ship it, because that DLL is Team Cherry's compiled code (a byte-for-byte copy of the installed game). So the mod is built against exactly the assembly it will run against. If automatic detection fails on an unusual install path, copy `hollow_knight_Data\Managed\Assembly-CSharp.dll` into `Mod/AiTrainHK/libs/` (that folder is in `.gitignore`) and the build uses it as a fallback. Copy the built DLL into the mods folder:
 
 ```
-<path to the game>/hollow_knight_Data/Managed/Mods/HK_AI_Mod/HK_AI_Mod.dll
+<path to the game>/hollow_knight_Data/Managed/Mods/AiTrainHK/AiTrainHK.dll
 ```
 
 The DLL cannot be overwritten while the game is running - close the game before deploying a new build. For convenience there is a script:
@@ -201,6 +211,7 @@ models/ppo_hk/
 
 - The model automatically loads the latest save from **its own** boss's folder (`models/ppo_hk/<scene>/hk_model_final.zip`) if it exists - training continues from where it left off
 - If a saved `vecnormalize.pkl` belongs to a different observation space - it is discarded and normalization starts from scratch
+- A model saved under an older observation space is not loaded either: the boss-state values were added to the vector (25 -> 30 numbers per frame), and a checkpoint whose space does not match is refused - that folder starts from scratch and says so on the console
 - Old files from the root of `models/ppo_hk/` (training from before the per-boss layout, the False Knight arena) are automatically moved to `models/ppo_hk/GG_False_Knight/` on the first run
 - First episode: training waits for the fight and teleports the bot to the arena itself (the scene is taken from `--boss` / `HK_BOSS_SCENE`)
 - From then on the loop is fully autonomous: fight -> victory/death -> fast restart via the mod
@@ -218,12 +229,32 @@ Environment variables:
 | `HK_FRAME_SKIP` | `4` | No longer used - kept for backward compatibility only / ignored; each step now syncs to a fresh telemetry write instead |
 | `HK_FRAME_STACK` | `4` | How many recent observations go into the stack |
 
+### The game is paused while the policy updates
+
+`learn()` alternates between collecting a rollout and computing the gradient epochs. The game
+runs in real time during the second half, and nothing steps the environment then: the hero used
+to stand still for several seconds (an update of 8192 steps with 10 epochs costs roughly 5-10 s
+on CPU), the boss kept hitting it, and the next step lumped all of that damage into a single
+transition - the damage was never attributed to anything the policy did.
+
+`GamePauseCallback` (in `train.py`) now freezes the fight: `on_rollout_end` fires after the last
+step of a rollout and before the metrics table and `train()`, and `on_rollout_start` fires when
+the next rollout begins, where the game is unfrozen again. The freeze itself is the mod's
+(`pause`/`resume`), so the state is real and confirmed: `hk_gym.pause_game()` releases the
+buttons, sends the command and waits for the mod's event. A keyboard interrupt inside the update
+still unfreezes the game through the `finally` block, and if the process is killed outright the
+mod lifts the pause by itself after 120 s. The resume is sent whenever a pause was requested, not
+only when the mod confirmed it (a busy machine can eat the confirmation window), a fresh run asks
+for one resume before its first step (a pause left behind by a killed trainer must not outlive
+it), and frozen time is not treated as a stuck fight: the transition watchdogs measure real time,
+so the paused interval is shifted out of their stamps.
+
 ### Training progress log
 
 All metrics that go to TensorBoard and are printed to the console are also mirrored to the text file **`logs/progress.txt`** (UTF-8, appended on every run - if training crashes, the progress already written is not lost):
 
 - a line `EPISODE ...` for each finished episode: the outcome (`outcome=victory` / `death` / `timeout`), reward, length, the victory counter and the win rate over a window of 100 episodes;
-- the metrics table after every rollout (`n_steps = 1024` steps) - exactly the block printed to the console: `custom/victories`, `custom/win_rate`, `custom/last100_*`, `reward_breakdown/*`, `rollout/*`, `train/*`. With `verbose=1` it is written by the Stable-Baselines3 logger itself through `HumanOutputFormat`; with `verbose=0` the values are collected by the callback.
+- the metrics table after every rollout (`n_steps = 8192` steps) - exactly the block printed to the console: `custom/victories`, `custom/win_rate`, `custom/last100_*`, `reward_breakdown/*`, `rollout/*`, `train/*`. With `verbose=1` it is written by the Stable-Baselines3 logger itself through `HumanOutputFormat`; with `verbose=0` the values are collected by the callback.
 
 Example:
 
@@ -274,8 +305,11 @@ python tests/run_pipe_harness.py                         # the whole pipe harnes
 ```
 
 - **Units** (`tests/test_bosses.py`) - the boss registry and `resolve_query`: lookup by number / scene / alias / exact title, the ambiguity rule (a partial match prefers the base fight over the Ascended/Radiant `_V` variant), plus the invariants that keep the menu honest: unique scenes and labels, aliases pointing at real scenes, `DEFAULT_GATE == door_dreamEnter`
-- **Registry parity** (`tests/test_registry_parity.py`) - reads `Mod/HK_AI_Mod/AiDataExporter.cs` and compares it with `bosses.py` entry by entry, in order: the mod's `BossRegistry`, `ExtraAliases`, `DEFAULT_BOSS_SCENE` and `DEFAULT_ENTRY_GATE`. The mod is the source of truth for what the game accepts, so a drift on either side (a boss added, renamed or lost in translation) is a failing test instead of a teleport into a scene the mod does not know
-- **Pipe harness** (`tests/run_pipe_harness.py`) - generates the registry the mock serves, builds it with `dotnet`, runs `--selftest-stuck` (a client that stops reading must not eat a slot: the stuck write is cancelled and the slot is freed) and then the 36 integration checks against the mock over real Win32 named pipes. One command instead of three: the mock exits as soon as its stdin reaches EOF, so the runner keeps that stdin open, waits for the mock to report its registry and shuts it down afterwards. Windows only
+- **Registry parity** (`tests/test_registry_parity.py`) - reads `Mod/AiTrainHK/AiDataExporter.cs` and compares it with `bosses.py` entry by entry, in order: the mod's `BossRegistry`, `ExtraAliases`, `DEFAULT_BOSS_SCENE` and `DEFAULT_ENTRY_GATE`. The mod is the source of truth for what the game accepts, so a drift on either side (a boss added, renamed or lost in translation) is a failing test instead of a teleport into a scene the mod does not know
+- **Training configuration** (`tests/test_training_config.py`) - parses `train.py` (it cannot be imported: torch, vgamepad and the gym environment are not installed in CI) and checks the invariants that keep a night from being wasted: one update has to cover more than one fight, the discount must not look only ~100 steps ahead, the learning rate must not decay to zero inside a run, and a resumed model must be given the same hyperparameters as a fresh one (`PPO.load` applies its kwargs after the pickled data). `HK_TRAIN_PY` points the checks at another copy of the file, which is how the red case was reproduced
+- **Environment features** (`tests/test_features.py`) - `hk_features` is the part of the environment that imports nothing, so it is tested for real instead of being parsed: the action table against `ai_controller.py`'s branches, the aiming rule (only `4` is aimed, `6`/`7`/`8`/`9` keep their buttons, the threshold is not crossed by equality), the boss-state classes over the states observed in `ModLog.txt` during a live session, and the state-age tracker (age grows, a missing frame does not advance it, `reset()` forgets the fight, and the feature order matches `STAT_NAMES`)
+- **Game pause** (`tests/test_training_config.py`) - the pause callback is in `train.py`, it calls `pause_game`/`resume_game` through the vectorised env on the right hooks, and the `finally` block unfreezes the game after a crash
+- **Pipe harness** (`tests/run_pipe_harness.py`) - generates the registry the mock serves, builds it with `dotnet`, runs `--selftest-stuck` (a client that stops reading must not eat a slot: the stuck write is cancelled and the slot is freed) and then the integration checks against the mock over real Win32 named pipes. One command instead of three: the mock exits as soon as its stdin reaches EOF, so the runner keeps that stdin open, waits for the mock to report its registry and shuts it down afterwards. Windows only
 - **CI** (`.github/workflows/ci.yml`) - on every push to `master`/`dev` and on every pull request: `ubuntu-latest` compiles every `.py` file (`compileall`, which also catches a broken encoding) and runs the units; `windows-latest` runs the pipe harness. The mod itself is not built in CI: its `.csproj` needs the game's `Assembly-CSharp.dll`, which is neither shipped nor downloadable
 
 ## Training parameters (PPO)
@@ -284,14 +318,14 @@ python tests/run_pipe_harness.py                         # the whole pipe harnes
 |----------|----------|
 | Algorithm | PPO (Stable-Baselines3) |
 | Policy | MlpPolicy, net_arch [256, 256] |
-| Learning rate | 3e-4 with linear decay |
-| n_steps | 1024 |
-| batch_size | 128 |
+| Learning rate | 3e-4, flat (a decaying schedule ends at zero before a run does) |
+| n_steps | 8192 |
+| batch_size | 256 |
 | n_epochs | 10 |
 | ent_coef | 0.01 |
 | clip_range | 0.2 |
 | gae_lambda | 0.95 |
-| gamma | 0.99 |
+| gamma | 0.995 |
 | max_grad_norm | 0.5 |
 | Observation normalization | VecNormalize, clip_obs 10 |
 | Reward normalization | enabled |

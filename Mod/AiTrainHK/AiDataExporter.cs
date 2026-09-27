@@ -9,14 +9,14 @@ using HKPipeInterop;
 using UnityEngine;
 using Modding;
 
-namespace HK_AI_Mod
+namespace AiTrainHK
 {
     public class AiDataExporter : Mod
     {
-        // IMPORTANT: the version is deliberately pinned as "v1" — do NOT bump it on every
+        // IMPORTANT: the version is deliberately pinned as "1" — do NOT bump it on every
         // mod change. It only exists so that ModLog shows which build the game
         // loaded. We keep the changelog in README, not in this string.
-        public override string GetVersion() => "v1";
+        public override string GetVersion() => "1";
 
         // ---------------- Transport: named pipe (protocol 3) ----------------
         // Server: \\.\pipe\hk_ai_mod (duplex, line-based exchange), created
@@ -35,7 +35,7 @@ namespace HK_AI_Mod
         private const int MAX_PIPE_CLIENTS = 4;
         private const int PIPE_POLL_MS = 25;
         private const int PROTOCOL_VERSION = 3;
-        private const string MOD_VERSION = "v1";
+        private const string MOD_VERSION = "1";
         private const int MAX_OUTBOX = 256;
         // A client that stops reading makes WriteFile block once the pipe's out buffer is
         // full, and the slot thread never gets back to ConnectNamedPipe — the slot would be
@@ -87,6 +87,15 @@ namespace HK_AI_Mod
         // (otherwise the game's white fade stays on screen, see TryPerformPendingTransition).
         private bool _restartRequested = false;
         private float _restartRequestedAt = 0f;
+
+        // Update 9: the training loop freezes the fight while the PPO update runs.
+        // The time scale is saved so that a game which was already slowed down is
+        // restored as it was, and the freeze lifts by itself if the trainer dies
+        // without sending "resume" (nobody is left to unfreeze the game otherwise).
+        private bool _aiPaused = false;
+        private float _savedTimeScale = 1f;
+        private float _aiPausedAt = 0f;
+        private const float PAUSE_TIMEOUT_SECONDS = 120f;
         private string _restartTargetScene = "";
         private string _restartGate = "";
         // If the scene already changed after the request, the game's own end-of-fight
@@ -105,9 +114,25 @@ namespace HK_AI_Mod
         private const float FADE_STUCK_FADINGOUT_TIMEOUT = 1.0f;
         private bool _inMenuScene = true;
         private bool _bossDead = false;
+        // True when the death came from a signal about THIS fight (the arena reports every boss
+        // of the fight dead, the tracked boss itself is dead, its death animation started)
+        // rather than from the scene-wide HealthManager scan, which can latch on an enemy that
+        // is not the boss being tracked. Only a confirmed death may report boss_hp as zero.
+        private bool _bossDeadConfirmed = false;
         private BossSceneController _subscribedBsc = null;
         private float _watchdogTimer = 0f;
         private int _forcedEntryAttempts = 0;
+        // The scene-change watchdog is only armed for a couple of seconds after a scene
+        // load, so a freeze that starts later has nobody left to repair it: the hero stays
+        // in 'transitioning', the white fade stays on screen and a restart is accepted but
+        // never performed. This timer re-arms the same repair path independently of the
+        // arming window.
+        private float _heroFrozenSince = -1f;
+        private const float HERO_FROZEN_TIMEOUT = 5f;
+        // Independent of IsGameSettled: a fade left opaque while the game merely *claims* to
+        // be busy must not stay on screen for hours (see FadeWatchdogTick).
+        private float _fadeNonNormalHardSince = -1f;
+        private const float FADE_HARD_TIMEOUT = 15f;
         private const string DEFAULT_BOSS_SCENE = "GG_False_Knight";
         // Godhome arenas enter the scene through the door_dreamEnter gate — it is the only
         // TransitionPoint in GG_* boss scenes (verified live in GG_False_Knight and
@@ -289,6 +314,11 @@ namespace HK_AI_Mod
                     _restartPending = false;
                     _lastBossHpKnown = 0;
                     _bossDead = false;
+                    _bossDeadConfirmed = false;
+                    // A stamp that was already running before the load would be "expired" in the
+                    // new arena and force a fade while the game is fading in on its own.
+                    _heroFrozenSince = -1f;
+                    _fadeNonNormalHardSince = -1f;
                     _watchdogTimer = 2.5f;
                     _forcedEntryAttempts = 0;
                     _fadeNotNormalSince = -1f;
@@ -301,7 +331,7 @@ namespace HK_AI_Mod
                 }
             };
 
-            var host = new GameObject("HK_AI_Mod_Host");
+            var host = new GameObject("AiTrainHK_Host");
             UnityEngine.Object.DontDestroyOnLoad(host);
             var ticker = host.AddComponent<AiModTicker>();
             ticker.OnTick += OnTick;
@@ -314,7 +344,7 @@ namespace HK_AI_Mod
 
             Publish(StatusJson("initialized"));
             Log($"[AI] Exporter {MOD_VERSION} is running! Pipe: \\\\.\\pipe\\{PIPE_NAME}");
-            Log("[AI] Commands: restart | teleport | set_boss <scene> | set_gate <gate> | boss <query> | bosses | warp");
+            Log("[AI] Commands: restart | teleport | set_boss <scene> | set_gate <gate> | boss <query> | bosses | warp | pause | resume");
         }
 
         private void SubscribeBossDeath()
@@ -338,12 +368,24 @@ namespace HK_AI_Mod
         private void OnBossesDeadHandler()
         {
             _bossDead = true;
+            _bossDeadConfirmed = true;
             Log("[AI] Boss is dead (BossSceneController event)");
         }
 
         private void OnTick(float unscaledDelta)
         {
+            // DrainCommands() runs even while paused: "resume" arrives through it.
             DrainCommands();
+
+            if (_aiPaused)
+            {
+                AiPauseTick();
+                // A paused game is not stuck, and it must not start a transition:
+                // the transition watchdogs measure unscaled time and would try to
+                // repair a fight that is merely frozen.
+                return;
+            }
+
             TryPerformPendingTransition();
             TransitionWatchdogTick(unscaledDelta);
             FadeWatchdogTick();
@@ -397,6 +439,15 @@ namespace HK_AI_Mod
                     WarpHeroToGate();
                     break;
 
+                // "pause" / "resume" - freeze the fight while the policy trains.
+                case "pause":
+                    SetAiPaused(true, null);
+                    break;
+
+                case "resume":
+                    SetAiPaused(false, null);
+                    break;
+
                 case "teleport":
                 case "restart":
                     if (parts.Length >= 2) SetTargetScene(parts[1]);
@@ -409,6 +460,73 @@ namespace HK_AI_Mod
                     PublishEvent(CommandErrorJson(line, "unknown command"));
                     break;
             }
+        }
+
+        // ---------------- Pause (Update 9) ----------------
+
+        // The mod owns the pause because the decision has to happen on the main
+        // thread, and because Python has no way to tell a real pause from a menu
+        // that never opened. Time.timeScale is the engine's own clock: at zero,
+        // Update() still runs (telemetry keeps flowing) while the boss's FSM, the
+        // hero's input and every animation stop. It is the same lever the game's
+        // own pause menu uses.
+        private void SetAiPaused(bool paused, string reason)
+        {
+            if (paused)
+            {
+                if (!_aiPaused)
+                {
+                    _savedTimeScale = Time.timeScale > 0f ? Time.timeScale : 1f;
+                    _aiPaused = true;
+                    _aiPausedAt = Time.unscaledTime;
+                    Time.timeScale = 0f;
+                    Log("[AI] Paused for the policy update (time scale 0)");
+                }
+                PublishEvent(PauseStateJson("paused"));
+            }
+            else
+            {
+                if (_aiPaused)
+                {
+                    _aiPaused = false;
+                    Time.timeScale = _savedTimeScale;
+                    ShiftStampsForPause(Time.unscaledTime - _aiPausedAt);
+                    Log("[AI] Resumed" + (reason == null ? "" : " (" + reason + ")")
+                        + ": time scale " + _savedTimeScale.ToString("F2", CultureInfo.InvariantCulture));
+                }
+                PublishEvent(PauseStateJson("resumed"));
+            }
+        }
+
+        private string PauseStateJson(string status)
+        {
+            return "{\"status\": \"" + status + "\", \"paused\": " + (_aiPaused ? 1 : 0)
+                + ", \"time_scale\": " + Time.timeScale.ToString("F2", CultureInfo.InvariantCulture) + "}";
+        }
+
+        // The transition watchdogs measure Time.unscaledTime — the clock that keeps running
+        // while the game is frozen (the pause backstop needs exactly that). Without shifting
+        // them, the freeze itself would look like a stuck fade or a stuck hero: the first tick
+        // after a pause longer than the watchdog timeout would fire a repair in the middle of
+        // the game's own fade. Moving the stamps forward keeps a state that was already old
+        // before the pause old (it is still repaired), while the paused time no longer counts.
+        private void ShiftStampsForPause(float pausedFor)
+        {
+            if (pausedFor <= 0f) return;
+            if (_heroFrozenSince >= 0f) _heroFrozenSince += pausedFor;
+            if (_fadeNotNormalSince >= 0f) _fadeNotNormalSince += pausedFor;
+            if (_fadeNonNormalHardSince >= 0f) _fadeNonNormalHardSince += pausedFor;
+        }
+
+        // Keeps the freeze and gives up on it if the trainer never comes back.
+        private void AiPauseTick()
+        {
+            if (Time.timeScale > 0f)
+                Time.timeScale = 0f;
+
+            if (Time.unscaledTime - _aiPausedAt > PAUSE_TIMEOUT_SECONDS)
+                SetAiPaused(false, "the trainer did not resume in "
+                    + PAUSE_TIMEOUT_SECONDS.ToString("F0", CultureInfo.InvariantCulture) + " s");
         }
 
         // The target scene may arrive as an alias ("hornet", "nkg") or as a registry
@@ -470,8 +588,53 @@ namespace HK_AI_Mod
             Log($"[AI] Fast restart: target '{_targetScene}', gate '{gate}' — command accepted, I will perform the transition once the game frees up");
         }
 
+        // Runs on every tick, not only inside the scene-change arming window: if the hero is
+        // still in 'transitioning' (or the scene-transition flag is still up) HERO_FROZEN_TIMEOUT
+        // after the load, with no scene load running, the repair below is armed again. The
+        // escalation is left to the watchdog itself: EnterScene first, manual placement second.
+        private void RearmWatchdogForPersistentFreeze()
+        {
+            try
+            {
+                GameManager gm = GameManager.instance;
+                if (gm == null || _inMenuScene)
+                {
+                    _heroFrozenSince = -1f;
+                    return;
+                }
+                if (gm.IsLoadingSceneTransition)
+                {
+                    _heroFrozenSince = -1f;
+                    return;
+                }
+
+                HeroController hero = HeroController.instance;
+                bool heroFrozen = hero != null && hero.cState != null && hero.cState.transitioning;
+                if (!heroFrozen && !gm.IsInSceneTransition)
+                {
+                    _heroFrozenSince = -1f;
+                    return;
+                }
+
+                if (_heroFrozenSince < 0f || Time.unscaledTime < _heroFrozenSince)
+                {
+                    _heroFrozenSince = Time.unscaledTime;
+                    return;
+                }
+                if (Time.unscaledTime - _heroFrozenSince < HERO_FROZEN_TIMEOUT) return;
+
+                _heroFrozenSince = Time.unscaledTime;
+                _watchdogTimer = 0.01f;
+                Log($"[AI] Transition stuck for {HERO_FROZEN_TIMEOUT:F0}s with no scene load "
+                    + $"(hero transitioning: {(heroFrozen ? 1 : 0)}, scene-transition flag: "
+                    + $"{(gm.IsInSceneTransition ? 1 : 0)}) - repairing");
+            }
+            catch (Exception) {}
+        }
+
         private void TransitionWatchdogTick(float unscaledDelta)
         {
+            RearmWatchdogForPersistentFreeze();
             if (_watchdogTimer <= 0f) return;
             _watchdogTimer -= unscaledDelta;
             if (_watchdogTimer > 0f) return;
@@ -942,14 +1105,29 @@ namespace HK_AI_Mod
 
                 GameManager gm = GameManager.instance;
                 if (gm == null) return;
-                if (gm.IsInSceneTransition || gm.IsLoadingSceneTransition) return;
+                if (gm.IsLoadingSceneTransition) return;
 
                 HeroController hero = HeroController.instance;
-                if (hero == null || hero.cState == null) return;
-                if (hero.cState.transitioning || hero.cState.hazardDeath || hero.cState.hazardRespawning) return;
-
                 float waited = Time.time - _restartRequestedAt;
                 bool forced = waited >= RESTART_FORCE_TIMEOUT;
+
+                // The game can leave IsInSceneTransition up after the scene has settled. Past
+                // the force timeout that flag is stale, and while it stays up this method
+                // returns before doing anything - so every restart turns into a silent no-op
+                // forever, because nothing else clears it once the scene-change window has
+                // passed. The hero being free is the same condition the transition watchdog
+                // uses to clear the same flag.
+                if (gm.IsInSceneTransition)
+                {
+                    if (!forced || (hero != null && hero.cState != null && hero.cState.transitioning))
+                        return;
+                    Log($"[AI] Restart: the scene-transition flag was still up after {waited:F1}s "
+                        + "with the hero free - clearing the stale flag");
+                    ReflectionHelper.SetField(gm, "<IsInSceneTransition>k__BackingField", false);
+                }
+
+                if (hero == null || hero.cState == null) return;
+                if (hero.cState.transitioning || hero.cState.hazardDeath || hero.cState.hazardRespawning) return;
 
                 string deferReason = null;
                 if (!forced && IsHeroDying(hero))
@@ -992,7 +1170,12 @@ namespace HK_AI_Mod
             }
             catch (Exception e)
             {
+                // _restartPending has to fall with _restartRequested: it is cleared only by a
+                // scene change, and a failed forced transition never changes the scene. Left
+                // standing it makes TryRestart reject every later restart for the rest of the
+                // fight (a silent no-op) while the telemetry keeps claiming "restart_pending: 1".
                 _restartRequested = false;
+                _restartPending = false;
                 Log($"[AI] Deferred transition error: {e}");
             }
         }
@@ -1024,12 +1207,34 @@ namespace HK_AI_Mod
                 {
                     _fadeNotNormalSince = -1f;
                     _fadeRescueAttempts = 0;
+                    _fadeNonNormalHardSince = -1f;
                     return;
                 }
 
                 // We only wait when the game is genuinely not busy with anything: during an
                 // honest transition the fade is also not "Normal", and we must not touch it.
-                if (!IsGameSettled(GameManager.instance, HeroController.instance))
+                // A real scene load is exempt: it fades in on its own. But a game that only
+                // *looks* busy (a stale transition flag, a hero frozen in 'transitioning') used
+                // to keep the white fade on screen for hours with this log silent, so past
+                // FADE_HARD_TIMEOUT the fade is forced regardless of IsGameSettled.
+                GameManager gm = GameManager.instance;
+                if (gm != null && gm.IsLoadingSceneTransition)
+                {
+                    _fadeNonNormalHardSince = -1f;
+                }
+                else if (_fadeNonNormalHardSince < 0f || Time.unscaledTime < _fadeNonNormalHardSince)
+                {
+                    _fadeNonNormalHardSince = Time.unscaledTime;
+                }
+                else if (Time.unscaledTime - _fadeNonNormalHardSince >= FADE_HARD_TIMEOUT)
+                {
+                    _fadeNonNormalHardSince = Time.unscaledTime;
+                    Log($"[AI] Fade has been '{state}' for over {FADE_HARD_TIMEOUT:F0}s with no "
+                        + "scene load running - forcing FADE SCENE IN");
+                    gc.cameraFadeFSM.Fsm.Event("FADE SCENE IN");
+                }
+
+                if (!IsGameSettled(gm, HeroController.instance))
                 {
                     _fadeNotNormalSince = -1f;
                     return;
@@ -1093,7 +1298,10 @@ namespace HK_AI_Mod
                 if (hero.cState != null && hero.cState.transitioning)
                     ReflectionHelper.CallMethod(hero, "FinishedEnteringScene", true, false);
 
-                if (Time.timeScale <= 0f) Time.timeScale = 1f;
+                // Staying frozen is the point of a pause: a warp must not lift it behind the
+                // trainer's back (OnTick drains commands before it checks the pause, so without
+                // this guard one live frame would run with "paused: 1" still being reported).
+                if (!_aiPaused && Time.timeScale <= 0f) Time.timeScale = 1f;
 
                 try
                 {
@@ -1442,7 +1650,7 @@ namespace HK_AI_Mod
 
         private void OnHeroUpdate()
         {
-            // v1.2: telemetry on every HeroUpdate (~60 records/sec at 60fps) is published
+            // Telemetry on every HeroUpdate (~60 records/sec at 60fps) is published
             // into the \\.\pipe\hk_ai_mod pipe. The Python side reads line by line and syncs
             // its steps to the arrival of a new record — no sleeps and no file mtime polling.
 
@@ -1528,15 +1736,28 @@ namespace HK_AI_Mod
                             BossSceneController bsc = BossSceneController.Instance;
                             if (bsc != null && bsc.bosses != null)
                             {
+                                // The fight is over when EVERY boss of the arena is down, not
+                                // when one of them is: Mantis Lords, Watcher Knights and the
+                                // phase fights keep the next one alive in the same list, and
+                                // latching on the first death ended such fights early.
+                                bool anyAlive = false;
+                                int arenaBosses = 0;
                                 foreach (HealthManager hm in bsc.bosses)
                                 {
                                     if (hm == null) continue;
-                                    if (hm.isDead || hm.hp <= 0)
+                                    arenaBosses++;
+                                    if (!hm.isDead && hm.hp > 0)
                                     {
-                                        _bossDead = true;
-                                        Log("[AI] Boss is dead (HealthManager.isDead)");
+                                        anyAlive = true;
                                         break;
                                     }
+                                }
+
+                                if (arenaBosses > 0 && !anyAlive)
+                                {
+                                    _bossDead = true;
+                                    _bossDeadConfirmed = true;
+                                    Log($"[AI] Boss is dead (all {arenaBosses} boss(es) of the arena)");
                                 }
                             }
                         }
@@ -1548,6 +1769,7 @@ namespace HK_AI_Mod
                         if (_currentBoss.hp <= 0 || _currentBoss.isDead)
                         {
                             _bossDead = true;
+                            _bossDeadConfirmed = true;
                             Log("[AI] Boss is dead (current HealthManager)");
                         }
                     }
@@ -1556,6 +1778,9 @@ namespace HK_AI_Mod
                     {
                         try
                         {
+                            // Scene-wide, so this one is only a suspicion: it may fire for an
+                            // enemy that has nothing to do with the fight, which is why it
+                            // does not count as a confirmed death (see _bossDeadConfirmed).
                             foreach (HealthManager hm in GameObject.FindObjectsOfType<HealthManager>())
                             {
                                 if (hm != null && hm.hp > 20 && (hm.isDead || hm.hp <= 0))
@@ -1569,10 +1794,10 @@ namespace HK_AI_Mod
                         catch (Exception) {}
                     }
 
-                    if (_bossDead)
+                    if (_bossDeadConfirmed || _currentBoss == null)
                         bossHp = 0;
-                    else if (_currentBoss != null)
-                        bossHp = _currentBoss.hp;
+                    else
+                        bossHp = Math.Max(0, _currentBoss.hp);
                     if (_lastBossHpKnown > bossHp)
                         _bossDamageTotal += _lastBossHpKnown - bossHp;
                     _lastBossHpKnown = bossHp;
@@ -1637,6 +1862,7 @@ namespace HK_AI_Mod
                                 if (!_bossDead && stateName == "Death Anim Start")
                                 {
                                     _bossDead = true;
+                                    _bossDeadConfirmed = true;
                                     Log("[AI] Boss is dead (FSM Death Anim Start)");
                                 }
                             }
@@ -1700,7 +1926,8 @@ namespace HK_AI_Mod
                         $"\"boss_damage_total\": {_bossDamageTotal}, " +
                         $"\"boss_is_attacking\": {(boss_is_attacking ? 1 : 0)}, " +
                         $"\"near_hazard\": {(near_hazard ? 1 : 0)}, " +
-                        $"\"boss_state\": \"{boss_state}\"" +
+                        $"\"boss_state\": \"{boss_state}\", " +
+                        $"\"paused\": {(_aiPaused ? 1 : 0)}" +
                         $"}}";
 
                     Publish(data);
