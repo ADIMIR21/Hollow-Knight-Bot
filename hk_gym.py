@@ -13,7 +13,7 @@ from ai_environment import HollowKnightEnv
 from ai_controller import HollowKnightController
 from bosses import resolve_query
 from screen_capture import USE_SCREEN_CAPTURE
-from hk_features import damage_weight, ACTION_COUNT, BossStateTracker, redirect_action
+from hk_features import damage_weight, victory_bonus, ACTION_COUNT, BossStateTracker, redirect_action
 
 
 def _enable_precise_sleep():
@@ -93,6 +93,10 @@ HEALTH_PENALTY_PER_MASK = 200.0
 # the window. The stunned window is the only place this fight can be finished, and paying the same
 # for a hit anywhere made the policy hover instead of committing (see hk_features.damage_weight).
 OPEN_WINDOW_DAMAGE_MULTIPLIER = 3.0
+# A win pays this much for every mask still standing when the boss falls. Masks spent on the way are
+# already charged, so this is what separates a controlled fight from one that merely ended well, and
+# it makes a clean kill worth more than any kill (see hk_features.victory_bonus).
+VICTORY_MASK_BONUS = 400.0
 VICTORY_REWARD = 1000.0
 DEATH_PENALTY = 500.0
 STEP_PENALTY = 0.05
@@ -559,8 +563,9 @@ class HollowKnightGym(gym.Env):
             self._episode_reason = "boss missing"
 
         if self._boss_death_frames >= VICTORY_CONFIRM_FRAMES and current_boss_hp <= 0 and self._last_boss_dead >= 0.5:
-            reward += VICTORY_REWARD
-            reward_parts["victory"] += VICTORY_REWARD
+            won = victory_bonus(VICTORY_REWARD, current_hp, VICTORY_MASK_BONUS)
+            reward += won
+            reward_parts["victory"] += won
             terminated = True
             self.controller.reset_all()
             self._last_episode_was_victory = True

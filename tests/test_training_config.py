@@ -338,7 +338,9 @@ class RewardEconomicsTest(unittest.TestCase):
         self.assertIsNotNone(body, "step() is missing from hk_gym.py")
         # assertTrue, not assertIn: a failure must name the missing needle, not print the whole
         # of step().
-        for needle in ("reward += VICTORY_REWARD", "reward -= DEATH_PENALTY", "reward -= STEP_PENALTY"):
+        # The win is paid through hk_features.victory_bonus, which also scales it by the masks still
+        # standing, so what has to be in step() is the call carrying the named constant.
+        for needle in ("victory_bonus(VICTORY_REWARD", "reward -= DEATH_PENALTY", "reward -= STEP_PENALTY"):
             self.assertTrue(needle in body, "step() does not pay %r" % needle)
         # A literal beside the names is how the block stops describing what is actually paid:
         # the victory bonus was still added as 1000.0 while the block named VICTORY_REWARD, so

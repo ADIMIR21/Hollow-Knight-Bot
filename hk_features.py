@@ -109,6 +109,18 @@ def redirect_action(action, dx_to_boss, aim_threshold=AIM_THRESHOLD):
 #   open     Opened, Opened 2, Open Uuup, Stun In Air, Stun Land, Stun Fail,
 #            Recover, S Attack Recover
 #   dead     Death Anim Start, Death Open
+def victory_bonus(base_reward, masks_left, per_mask):
+    """A win is worth more the healthier it was won at.
+
+    Winning at eight masks and winning at one are not the same fight: the first is control, the
+    second is a trade that happened to end well. The reward already charges for every mask spent on
+    the way, so without this a win that clawed itself back is worth exactly as much as a clean one,
+    and a policy prepared to tank has no reason to prefer either. Scaling the bonus by the masks
+    still standing puts that difference where the policy can act on it.
+    """
+    return base_reward + per_mask * max(0.0, masks_left)
+
+
 def damage_weight(damage, boss_open, open_multiplier):
     """Weigh damage by whether the boss was open when it landed.
 
