@@ -22,6 +22,7 @@ from hk_features import (  # noqa: E402
     ACTION_JUMP_ATTACK,
     ACTION_LEFT_ATTACK,
     ACTION_NAMES,
+    ACTION_NONE,
     ACTION_RIGHT_ATTACK,
     AIM_THRESHOLD,
     BOSS_STATE_ATTACK,
@@ -66,17 +67,50 @@ def source_of(name):
         return handle.read()
 
 
+def action_branches(source):
+    """{action id: the code its branch runs} from `HollowKnightController.set_action`."""
+    start = source.index("def set_action(")
+    body = source[start : source.index("def reset_all", start)]
+    branches = {}
+    for match in re.finditer(
+        r"(?:if|elif) action_id == (\d+):(.*?)(?=\n\s*(?:if|elif|else)\b|\Z)", body, re.S
+    ):
+        branches[int(match.group(1))] = match.group(2)
+    return branches
+
+
 class ActionTable(unittest.TestCase):
     def test_the_table_covers_the_whole_action_space(self):
-        self.assertEqual(ACTION_COUNT, 16)
+        self.assertEqual(ACTION_COUNT, 19)
         self.assertEqual(sorted(ACTION_NAMES), list(range(ACTION_COUNT)))
-        self.assertEqual(sorted(hk_features.ATTACK_ACTIONS), [4, 6, 7, 8, 9])
+        # Every action that presses the attack button, including the two vertical swings.
+        self.assertEqual(sorted(hk_features.ATTACK_ACTIONS), [4, 6, 7, 8, 9, 14, 16])
+        self.assertEqual(sorted(hk_features.ATTACK_ACTIONS),
+                         sorted(a for a, name in ACTION_NAMES.items() if "attack" in name))
 
     def test_the_ids_match_the_controller(self):
         # The table above is documentation; ai_controller.py is what presses buttons.
         ids = {int(value) for value in re.findall(r"action_id == (\d+)", source_of("ai_controller.py"))}
-        self.assertGreaterEqual(len(ids), 14, "parsed only %d action branches" % len(ids))
         self.assertTrue(ids <= set(ACTION_NAMES), ids - set(ACTION_NAMES))
+
+    def test_every_action_reaches_a_button(self):
+        branches = action_branches(source_of("ai_controller.py"))
+        self.assertGreaterEqual(len(branches), 18, "parsed only %r" % sorted(branches))
+        for action_id, name in sorted(ACTION_NAMES.items()):
+            if action_id == ACTION_NONE:
+                continue
+            code = branches.get(action_id)
+            self.assertIsNotNone(
+                code, "action %d (%s) has no branch in ai_controller.set_action" % (action_id, name)
+            )
+            # A branch that exists is not enough: 14 used to be one that did `pass`, i.e. a
+            # second name for 0, so the policy could spend probability on an action the game
+            # never sees. Every other id has to press a button or move the stick.
+            self.assertRegex(
+                code,
+                r"press_button|left_joystick_float",
+                "action %d (%s) does nothing: %r" % (action_id, name, code.strip()),
+            )
 
 
 class AimingRule(unittest.TestCase):
@@ -92,7 +126,9 @@ class AimingRule(unittest.TestCase):
         self.assertEqual(redirect_action(ACTION_RIGHT_ATTACK, left), ACTION_RIGHT_ATTACK)
 
     def test_non_attack_actions_are_untouched(self):
-        for action in (0, 1, 2, 3, 5, 10, 11, 12, 13, 14, 15):
+        others = sorted(a for a in ACTION_NAMES if a != ACTION_ATTACK)
+        self.assertGreaterEqual(len(others), 18)
+        for action in others:
             for dx in (-0.9, 0.0, 0.9):
                 self.assertEqual(redirect_action(action, dx), action)
 

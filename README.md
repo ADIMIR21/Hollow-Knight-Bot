@@ -46,7 +46,7 @@ Telemetry contains a `scene` field (the current scene) - so Python and the human
 
 | File | Purpose |
 |------|---------|
-| `ai_controller.py` | Xbox 360 gamepad emulation via `vgamepad` (16 discrete actions); sends restart/scene/gate commands into the mod's pipe |
+| `ai_controller.py` | Xbox 360 gamepad emulation via `vgamepad` (19 discrete actions); sends restart/scene/gate commands into the mod's pipe |
 | `screen_capture.py` | Game screen capture via `mss` + auto-focus on the Hollow Knight window |
 | `ai_environment.py` | The environment: combines the video stream and telemetry; steps are synced by the pipe message counter (`seq`), so there is no file polling |
 | `hk_pipe.py` | **Named-pipe client** for the mod: background reader with auto-reconnect, `get_telemetry()`, `send_command()`, one-shot events (`wait_for_status`), one shared client per process |
@@ -59,7 +59,7 @@ Telemetry contains a `scene` field (the current scene) - so Python and the human
 
 The mod must be loaded into the game for the framework to work!   
 
-## Action space (16 actions)
+## Action space (19 actions)
 
 | ID | Action |
 |----|----------|
@@ -77,8 +77,11 @@ The mod must be loaded into the game for the framework to work!
 | 11 | Right + Jump |
 | 12 | Left + Dash |
 | 13 | Right + Dash |
-| 14 | Nothing (same as 0) |
+| 14 | Up + Attack |
 | 15 | Jump + Dash |
+| 16 | Down + Attack |
+| 17 | Cast (the spell in the facing direction) |
+| 18 | Up + Cast |
 
 Only `4` is aimed: `left`/`right` is chosen from the normalised direction to the boss
 (`dx_to_boss`, threshold 0.3) and the other attack actions press exactly the buttons above.
@@ -86,6 +89,11 @@ Every attack action used to be rewritten to `8`/`9`, which silently dropped the 
 of `6` and the dash of `7` - while the boss was off centre, which is nearly always, neither
 skill could happen or be learned (`hk_features.redirect_action`).
 
+`14`, `16`, `17` and `18` are the actions the knight cannot fight without: the nail swings up and
+down (a boss that spends the fight in the air can only be hit by the first) and the soul in the
+observation is only worth anything if there is an action that spends it. `14` used to be a second
+id for "nothing" - `ai_controller` had no branch for it - so the policy split probability between
+two names for one outcome.
 
 ## Observation space
 

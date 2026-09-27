@@ -13,7 +13,7 @@ standard library only (see AGENTS.md, tier 1).
 # An action id travels to the mod as one number; ai_controller maps it to gamepad
 # buttons. Keep this table and that mapping in step - README.md carries the same
 # table for humans.
-ACTION_COUNT = 16
+ACTION_COUNT = 19
 
 ACTION_NONE = 0
 ACTION_LEFT = 1
@@ -29,8 +29,17 @@ ACTION_LEFT_JUMP = 10
 ACTION_RIGHT_JUMP = 11
 ACTION_LEFT_DASH = 12
 ACTION_RIGHT_DASH = 13
-ACTION_IDLE = 14
+# 14 used to be "idle", which ai_controller did nothing for: it was byte for byte the same
+# behaviour as "none" (0) and split the policy's probability between two names for one outcome.
+ACTION_UP_ATTACK = 14
 ACTION_JUMP_DASH = 15
+# False Knight spends most of the fight in the air, and the nail can be swung upwards and
+# downwards: without these two the policy could never hit a boss that is above it, which no
+# amount of training fixes. Casting is the other half of the knight's kit - the mana was in the
+# observation all along with no action able to spend it.
+ACTION_DOWN_ATTACK = 16
+ACTION_CAST = 17
+ACTION_UP_CAST = 18
 
 ACTION_NAMES = {
     ACTION_NONE: "none",
@@ -47,13 +56,17 @@ ACTION_NAMES = {
     ACTION_RIGHT_JUMP: "right+jump",
     ACTION_LEFT_DASH: "left+dash",
     ACTION_RIGHT_DASH: "right+dash",
-    ACTION_IDLE: "idle",
+    ACTION_UP_ATTACK: "up+attack",
     ACTION_JUMP_DASH: "jump+dash",
+    ACTION_DOWN_ATTACK: "down+attack",
+    ACTION_CAST: "cast",
+    ACTION_UP_CAST: "up+cast",
 }
 
 # Actions that press the attack button; the aiming rule below only touches one.
 ATTACK_ACTIONS = (ACTION_ATTACK, ACTION_JUMP_ATTACK, ACTION_DASH_ATTACK,
-                  ACTION_LEFT_ATTACK, ACTION_RIGHT_ATTACK)
+                  ACTION_LEFT_ATTACK, ACTION_RIGHT_ATTACK, ACTION_UP_ATTACK,
+                  ACTION_DOWN_ATTACK)
 
 # The dx_to_boss threshold (normalised direction) beyond which the boss counts as
 # "to the left" or "to the right" of the hero.

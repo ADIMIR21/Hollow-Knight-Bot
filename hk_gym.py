@@ -13,7 +13,7 @@ from ai_environment import HollowKnightEnv
 from ai_controller import HollowKnightController
 from bosses import resolve_query
 from screen_capture import USE_SCREEN_CAPTURE
-from hk_features import BossStateTracker, redirect_action
+from hk_features import ACTION_COUNT, BossStateTracker, redirect_action
 
 
 def _enable_precise_sleep():
@@ -100,7 +100,7 @@ class HollowKnightGym(gym.Env):
         # The gate is kept in the controller as well: the restart command carries both scene and gate.
         self.controller.set_entry_gate(ENTRY_GATE)
         
-        self.action_space = spaces.Discrete(16)
+        self.action_space = spaces.Discrete(ACTION_COUNT)
         
         self.observation_space = spaces.Box(
             low=-np.inf, high=np.inf, shape=(STATS_SIZE * FRAME_STACK,), dtype=np.float32

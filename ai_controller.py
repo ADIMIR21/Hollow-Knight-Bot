@@ -102,10 +102,19 @@ class HollowKnightController:
                 self.gamepad.left_joystick_float(x_value_float=1.0, y_value_float=0.0)
                 self.gamepad.press_button(button=self.buttons["dash"])
             elif action_id == 14:
-                pass
+                self.gamepad.left_joystick_float(x_value_float=0.0, y_value_float=1.0)
+                self.gamepad.press_button(button=self.buttons["attack"])
             elif action_id == 15:
                 self.gamepad.press_button(button=self.buttons["jump"])
                 self.gamepad.press_button(button=self.buttons["dash"])
+            elif action_id == 16:
+                self.gamepad.left_joystick_float(x_value_float=0.0, y_value_float=-1.0)
+                self.gamepad.press_button(button=self.buttons["attack"])
+            elif action_id == 17:
+                self.gamepad.press_button(button=self.buttons["focus"])
+            elif action_id == 18:
+                self.gamepad.left_joystick_float(x_value_float=0.0, y_value_float=1.0)
+                self.gamepad.press_button(button=self.buttons["focus"])
 
             self.gamepad.update()
 
