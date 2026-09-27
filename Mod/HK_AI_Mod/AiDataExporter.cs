@@ -87,6 +87,15 @@ namespace HK_AI_Mod
         // (otherwise the game's white fade stays on screen, see TryPerformPendingTransition).
         private bool _restartRequested = false;
         private float _restartRequestedAt = 0f;
+
+        // Update 9: the training loop freezes the fight while the PPO update runs.
+        // The time scale is saved so that a game which was already slowed down is
+        // restored as it was, and the freeze lifts by itself if the trainer dies
+        // without sending "resume" (nobody is left to unfreeze the game otherwise).
+        private bool _aiPaused = false;
+        private float _savedTimeScale = 1f;
+        private float _aiPausedAt = 0f;
+        private const float PAUSE_TIMEOUT_SECONDS = 120f;
         private string _restartTargetScene = "";
         private string _restartGate = "";
         // If the scene already changed after the request, the game's own end-of-fight
@@ -325,7 +334,7 @@ namespace HK_AI_Mod
 
             Publish(StatusJson("initialized"));
             Log($"[AI] Exporter {MOD_VERSION} is running! Pipe: \\\\.\\pipe\\{PIPE_NAME}");
-            Log("[AI] Commands: restart | teleport | set_boss <scene> | set_gate <gate> | boss <query> | bosses | warp");
+            Log("[AI] Commands: restart | teleport | set_boss <scene> | set_gate <gate> | boss <query> | bosses | warp | pause | resume");
         }
 
         private void SubscribeBossDeath()
@@ -354,7 +363,18 @@ namespace HK_AI_Mod
 
         private void OnTick(float unscaledDelta)
         {
+            // DrainCommands() runs even while paused: "resume" arrives through it.
             DrainCommands();
+
+            if (_aiPaused)
+            {
+                AiPauseTick();
+                // A paused game is not stuck, and it must not start a transition:
+                // the transition watchdogs measure unscaled time and would try to
+                // repair a fight that is merely frozen.
+                return;
+            }
+
             TryPerformPendingTransition();
             TransitionWatchdogTick(unscaledDelta);
             FadeWatchdogTick();
@@ -408,6 +428,15 @@ namespace HK_AI_Mod
                     WarpHeroToGate();
                     break;
 
+                // "pause" / "resume" - freeze the fight while the policy trains.
+                case "pause":
+                    SetAiPaused(true, null);
+                    break;
+
+                case "resume":
+                    SetAiPaused(false, null);
+                    break;
+
                 case "teleport":
                 case "restart":
                     if (parts.Length >= 2) SetTargetScene(parts[1]);
@@ -420,6 +449,58 @@ namespace HK_AI_Mod
                     PublishEvent(CommandErrorJson(line, "unknown command"));
                     break;
             }
+        }
+
+        // ---------------- Pause (Update 9) ----------------
+
+        // The mod owns the pause because the decision has to happen on the main
+        // thread, and because Python has no way to tell a real pause from a menu
+        // that never opened. Time.timeScale is the engine's own clock: at zero,
+        // Update() still runs (telemetry keeps flowing) while the boss's FSM, the
+        // hero's input and every animation stop. It is the same lever the game's
+        // own pause menu uses.
+        private void SetAiPaused(bool paused, string reason)
+        {
+            if (paused)
+            {
+                if (!_aiPaused)
+                {
+                    _savedTimeScale = Time.timeScale > 0f ? Time.timeScale : 1f;
+                    _aiPaused = true;
+                    _aiPausedAt = Time.unscaledTime;
+                    Time.timeScale = 0f;
+                    Log("[AI] Paused for the policy update (time scale 0)");
+                }
+                PublishEvent(PauseStateJson("paused"));
+            }
+            else
+            {
+                if (_aiPaused)
+                {
+                    _aiPaused = false;
+                    Time.timeScale = _savedTimeScale;
+                    Log("[AI] Resumed" + (reason == null ? "" : " (" + reason + ")")
+                        + ": time scale " + _savedTimeScale.ToString("F2", CultureInfo.InvariantCulture));
+                }
+                PublishEvent(PauseStateJson("resumed"));
+            }
+        }
+
+        private string PauseStateJson(string status)
+        {
+            return "{\"status\": \"" + status + "\", \"paused\": " + (_aiPaused ? 1 : 0)
+                + ", \"time_scale\": " + Time.timeScale.ToString("F2", CultureInfo.InvariantCulture) + "}";
+        }
+
+        // Keeps the freeze and gives up on it if the trainer never comes back.
+        private void AiPauseTick()
+        {
+            if (Time.timeScale > 0f)
+                Time.timeScale = 0f;
+
+            if (Time.unscaledTime - _aiPausedAt > PAUSE_TIMEOUT_SECONDS)
+                SetAiPaused(false, "the trainer did not resume in "
+                    + PAUSE_TIMEOUT_SECONDS.ToString("F0", CultureInfo.InvariantCulture) + " s");
         }
 
         // The target scene may arrive as an alias ("hornet", "nkg") or as a registry
@@ -1793,7 +1874,8 @@ namespace HK_AI_Mod
                         $"\"boss_damage_total\": {_bossDamageTotal}, " +
                         $"\"boss_is_attacking\": {(boss_is_attacking ? 1 : 0)}, " +
                         $"\"near_hazard\": {(near_hazard ? 1 : 0)}, " +
-                        $"\"boss_state\": \"{boss_state}\"" +
+                        $"\"boss_state\": \"{boss_state}\", " +
+                        $"\"paused\": {(_aiPaused ? 1 : 0)}" +
                         $"}}";
 
                     Publish(data);

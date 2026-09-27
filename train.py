@@ -142,6 +142,50 @@ class VecNormalizeSaveCallback(BaseCallback):
         return True
 
 
+class GamePauseCallback(BaseCallback):
+    """Freezes the game while the policy is being trained (Update 9).
+
+    The game runs in real time while learn() computes the gradient epochs and the
+    metrics table, and the environment is not stepped meanwhile: the hero stands
+    still for those seconds, the boss keeps hitting it, and the next step lumps all
+    of that damage into one transition. on_rollout_end fires after the last step of
+    the rollout and before the table and train(); the following rollout starts with
+    on_rollout_start, which unfreezes the game again.
+    """
+
+    def __init__(self, vec_env, verbose=0):
+        super().__init__(verbose)
+        self.vec_env = vec_env
+        self._paused = False
+
+    def _on_step(self) -> bool:
+        # BaseCallback declares _on_step abstract: a subclass without it cannot be
+        # instantiated at all (TypeError before the first frame is collected).
+        return True
+
+    def _on_rollout_end(self) -> bool:
+        self._paused = any(self.vec_env.env_method("pause_game"))
+        if not self._paused and self.verbose >= 1:
+            print("[PAUSE] The game could not be paused (is the mod connected?)")
+        return True
+
+    def _on_rollout_start(self) -> bool:
+        self.resume()
+        return True
+
+    def _on_training_end(self) -> bool:
+        self.resume()
+        return True
+
+    def resume(self) -> bool:
+        """Unfreezes the game if this callback is holding a pause."""
+        if not self._paused:
+            return False
+        self._paused = False
+        self.vec_env.env_method("resume_game")
+        return True
+
+
 class WinRateLoggingCallback(BaseCallback):
     """
     Update 4: win rate over the last N episodes and the reasons episodes end.
@@ -480,7 +524,12 @@ def main():
     # of the other callbacks (custom/*, reward_breakdown/*), which it writes to the file.
     progress_callback = ProgressFileCallback(PROGRESS_PATH, window=PROGRESS_WINDOW)
 
+    # First in the list: the game is frozen before the bookkeeping runs and stays
+    # frozen through train().
+    game_pause_callback = GamePauseCallback(vec_env)
+
     callback_list = CallbackList([
+        game_pause_callback,
         checkpoint_callback,
         vecnorm_save_callback,
         reward_logging_callback,
@@ -501,6 +550,8 @@ def main():
         print("\n[SYSTEM] Training interrupted. Saving what we have...")
 
     finally:
+        # Ctrl+C can land inside the PPO update, with the game still frozen.
+        game_pause_callback.resume()
         final_save_path = os.path.join(boss_dir, "hk_model_final")
         model.save(final_save_path)
         vec_env.save(vecnorm_path)

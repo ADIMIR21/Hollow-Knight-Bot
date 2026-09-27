@@ -13,6 +13,7 @@ from ai_environment import HollowKnightEnv
 from ai_controller import HollowKnightController
 from bosses import resolve_query
 from screen_capture import USE_SCREEN_CAPTURE
+from hk_features import BossStateTracker, redirect_action
 
 
 def _enable_precise_sleep():
@@ -36,7 +37,11 @@ STAT_NAMES = [
     "vel_x", "vel_y", "boss_vel_x", "boss_vel_y",
     "grounded", "facing_right", "boss_facing_right",
     "is_attacking", "is_dashing", "is_jumping", "is_falling", "is_recoiling",
-    "boss_is_attacking", "near_hazard", "was_hit"
+    "boss_is_attacking", "near_hazard", "was_hit",
+    # Update 10: what the boss is doing right now. The mod already sends the
+    # state name every frame; the tracker turns it into features (hk_features.py).
+    "boss_attack_antic", "boss_open", "boss_dead",
+    "boss_state_age", "boss_state_changed"
 ]
 IDX = {name: i for i, name in enumerate(STAT_NAMES)}
 STATS_SIZE = len(STAT_NAMES)
@@ -95,6 +100,7 @@ class HollowKnightGym(gym.Env):
         self._boss_hp_start = 0.0
         self.current_action = 0
         self.hold_action_counter = 0
+        self._boss_state = BossStateTracker()
         
         self.auto_restart = True
         self._last_episode_was_victory = False
@@ -130,6 +136,41 @@ class HollowKnightGym(gym.Env):
     def close(self):
         self._running = False
         super().close()
+
+    def set_paused(self, paused, timeout=2.0):
+        """Freezes or unfreezes the fight through the mod.
+
+        Update 9: the training loop calls this around the PPO update. The game
+        runs in real time while the gradients are computed and nothing is
+        stepping the environment, so the hero used to stand still for seconds
+        while the boss kept hitting it. True - the mod confirmed the new state.
+        """
+        pipe = getattr(self.game_env, "pipe", None)
+        if pipe is None:
+            print("[PAUSE] No pipe client, the game keeps running.")
+            return False
+        # Taken BEFORE the command: the mod can answer within the same millisecond,
+        # and a sequence number captured afterwards would hide that answer.
+        before = pipe.get_seq()
+        status = "paused" if paused else "resumed"
+        if not self.controller.set_paused(paused):
+            print("[PAUSE] The mod is not connected, the game keeps running.")
+            return False
+        reply = pipe.wait_for_status(status, timeout=timeout, after_seq=before)
+        if reply is None:
+            print(f"[PAUSE] No '{status}' confirmation from the mod within {timeout} s.")
+            return False
+        print(f"[PAUSE] The game is {status} (time_scale={reply.get('time_scale')}).")
+        return True
+
+    def pause_game(self, timeout=2.0):
+        # Release the buttons as well: a held attack would fire on the frame the
+        # game unfreezes, and the hero must not act while the policy is not looking.
+        self.controller.reset_all()
+        return self.set_paused(True, timeout=timeout)
+
+    def resume_game(self, timeout=2.0):
+        return self.set_paused(False, timeout=timeout)
         
     def _get_obs(self):
         frame, telemetry = self.game_env.get_observation()
@@ -185,6 +226,11 @@ class HollowKnightGym(gym.Env):
             near_hazard = float(telemetry.get("near_hazard", 0))
             was_hit = float(telemetry.get("was_hit", 0))
         
+        # The boss state string never reaches the policy as text: the tracker turns it
+        # into "an attack is winding up", "he is open for a hit" and the state's age.
+        frame_state = telemetry.get("boss_state") if (telemetry is not None and "hp" in telemetry) else None
+        boss_state_features = self._boss_state.update(frame_state)
+
         dist_to_boss = np.sqrt((x - boss_x)**2 + (y - boss_y)**2)
         angle_to_boss = math.atan2(boss_y - y, boss_x - x)
         
@@ -196,7 +242,9 @@ class HollowKnightGym(gym.Env):
             vel_x, vel_y, boss_vel_x, boss_vel_y,
             grounded, facing_right, boss_facing_right,
             is_attacking, is_dashing, is_jumping, is_falling, is_recoiling,
-            boss_is_attacking, near_hazard, was_hit
+            boss_is_attacking, near_hazard, was_hit,
+            # Same order as the tail of STAT_NAMES (see hk_features.py).
+            *boss_state_features
         ], dtype=np.float32)
         
         return stats
@@ -299,6 +347,9 @@ class HollowKnightGym(gym.Env):
             reset_started = time.time()
 
             self.controller.reset_all()
+            # The state of the previous fight says nothing about this one, and the
+            # tracker is read by _get_obs() below.
+            self._boss_state.reset()
 
             if reset_reason == "step limit" and self._fight_in_progress():
                 # The step cap is only a bookkeeping boundary of the episode, not a fight
@@ -355,20 +406,9 @@ class HollowKnightGym(gym.Env):
         hp_lost = max(0.0, self.max_hp - hp)
         return 15.0 * damage_done - 10.0 * hp_lost
 
-    def _redirect_attack_to_boss(self, action):
-        attack_actions = {4, 6, 7, 8, 9}
-        if action not in attack_actions:
-            return action
-        
-        if self.last_dx_to_boss > 0.3:
-            return 9
-        elif self.last_dx_to_boss < -0.3:
-            return 8
-        else:
-            return action
-
     def step(self, action):
-        action = self._redirect_attack_to_boss(action)
+        # Update 10: only "attack" is aimed at the boss, see hk_features.redirect_action.
+        action = redirect_action(action, self.last_dx_to_boss)
         
         if action == self.current_action:
             self.hold_action_counter += 1

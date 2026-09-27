@@ -54,6 +54,19 @@ class HollowKnightController:
             print(f"[CONTROLLER] Restart command sent: {scene} ({gate})")
         return sent
 
+    def set_paused(self, paused):
+        """Freezes or unfreezes the game around the policy update (Update 9).
+
+        The mod sets the game's time scale to zero, so the fight really stops
+        while the PPO update runs. True - the command was sent.
+        """
+        if self.pipe is None or not self.pipe.is_connected:
+            return False
+        sent = self.pipe.send_command("pause" if paused else "resume")
+        if sent:
+            print("[CONTROLLER] " + ("Pause" if paused else "Resume") + " command sent")
+        return sent
+
     def set_action(self, action_id):
             self.gamepad.left_joystick_float(x_value_float=0.0, y_value_float=0.0)
             for btn in self.buttons.values():

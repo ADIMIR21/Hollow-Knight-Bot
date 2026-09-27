@@ -52,7 +52,7 @@ one-shot event, a reconnect/watchdog behaviour, a change in the mod's answers.
   the tests at the production name `hk_ai_mod`.
 
 ```bash
-python tests/run_pipe_harness.py     # builds the mock, runs --selftest-stuck, then 36 checks
+python tests/run_pipe_harness.py     # builds the mock, runs --selftest-stuck, then the checks
 ```
 
 ### Rules that apply to both tiers
@@ -78,9 +78,10 @@ python tests/run_pipe_harness.py     # builds the mock, runs --selftest-stuck, t
 
 | Path | What it is |
 | --- | --- |
-| `Mod/HK_AI_Mod/` | The C# mod: telemetry over the named pipe, command intake, boss registry, deferred restart, fade watchdog |
+| `Mod/HK_AI_Mod/` | The C# mod: telemetry over the named pipe, command intake, boss registry, deferred restart, fade watchdog, pause |
 | `hk_pipe.py` | Named-pipe client the whole Python side runs on (one shared client per process, auto-reconnect) |
 | `bosses.py` | Python mirror of the mod's registry + command helpers |
+| `hk_features.py` | Pure environment features (action table, aiming rule, boss-state tracker) - imports nothing, so tier 1 tests it directly |
 | `hk_gym.py`, `ai_environment.py`, `ai_controller.py` | Gym env, observation/reward pipeline, virtual gamepad |
 | `train.py` | PPO training, checkpoint layout, `logs/progress.txt` journal |
 | `teleport.py`, `ai_receiver.py` | Boss selection/teleport tooling, live telemetry debugger |

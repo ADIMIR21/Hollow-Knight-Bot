@@ -201,5 +201,39 @@ class TrainingConfigurationTest(unittest.TestCase):
         )
 
 
+class GamePauseCallbackTests(unittest.TestCase):
+    """Update 9: the game is frozen while the PPO update runs.
+
+    Same reason as the rest of this file: the game keeps running while learn()
+    computes the gradient epochs, so the hero used to stand still for seconds and
+    the boss kept hitting it.
+    """
+
+    def setUp(self):
+        self.source = read_source()
+
+    def test_the_callback_exists_and_freezes_the_game(self):
+        self.assertIn("class GamePauseCallback(BaseCallback):", self.source)
+        start = self.source.index("class GamePauseCallback(BaseCallback):")
+        body = self.source[start:self.source.index("class WinRateLoggingCallback", start)]
+        self.assertIn('env_method("pause_game")', body)
+        self.assertIn('env_method("resume_game")', body)
+        # BaseCallback declares _on_step abstract: a subclass without it cannot be
+        # constructed at all, which happens before the first frame is collected.
+        self.assertIn("def _on_step", body)
+        self.assertIn("def _on_rollout_end", body)
+        self.assertIn("def _on_rollout_start", body)
+
+    def test_it_is_in_the_callback_list(self):
+        callback_list = call_text(self.source, "CallbackList(")
+        self.assertIsNotNone(callback_list)
+        self.assertIn("game_pause_callback", callback_list)
+
+    def test_a_crash_unfreezes_the_game(self):
+        # Ctrl+C lands inside the update, and _on_training_end never runs then.
+        finally_block = self.source[self.source.rindex("finally:"):]
+        self.assertIn("game_pause_callback.resume()", finally_block)
+
+
 if __name__ == "__main__":
     unittest.main()

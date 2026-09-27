@@ -37,8 +37,10 @@ The mod keeps a duplex server on `\\.\pipe\hk_ai_mod` (up to 4 clients, so train
 | `boss <query>` | **Select a boss and teleport to it.** Query: index in the registry, scene name (`gg_hornet_1`, case-insensitive), short alias (`hornet`, `nkg`, `sisters`, `oro`) or part of the name. The selected scene becomes the mod's target, so restarts and training keep working with that arena. The mod answers with a `boss_selected` event |
 | `bosses` | Send the full registry as a `boss_list` event (works even in the main menu) |
 | `warp` | Return the hero to the arena gate without reloading the scene (if thrown out of the fight / stuck) |
+| `pause` | **Freeze the fight** (`Time.timeScale = 0`): the boss FSM, the hero's input and every animation stop while the game keeps publishing telemetry. Answered with a `paused` event |
+| `resume` | Unfreeze the fight and restore the time scale it had before. Answered with a `resumed` event. Both commands are idempotent, and the mod lifts the pause by itself after 120 s without a `resume` - a trainer that died mid-update must not leave the game frozen |
 
-Telemetry contains a `scene` field (the current scene) - so Python and the human can see which boss's arena the fight is taking place in. If a scene transition hangs (the hero stays in `transitioning`), the mod's watchdog finds the entry point after 2.5 seconds via the `TransitionPoint.TransitionPoints` registry and properly triggers `HeroController.EnterScene`; on a repeated hang it teleports the hero to the gate and lifts the freeze directly (the private `FinishedEnteringScene` + re-enabling rendering). The 2.5 s window is only the first line of defence: a hang that starts later is caught by the same repair after 5 s of frozen state, and the fade has a 15 s backstop (see the white-screen section). The watchdog also raises `Time.timeScale` if the transition zeroed out time.
+Telemetry contains a `scene` field (the current scene) - so Python and the human can see which boss's arena the fight is taking place in. If a scene transition hangs (the hero stays in `transitioning`), the mod's watchdog finds the entry point after 2.5 seconds via the `TransitionPoint.TransitionPoints` registry and properly triggers `HeroController.EnterScene`; on a repeated hang it teleports the hero to the gate and lifts the freeze directly (the private `FinishedEnteringScene` + re-enabling rendering). The 2.5 s window is only the first line of defence: a hang that starts later is caught by the same repair after 5 s of frozen state, and the fade has a 15 s backstop (see the white-screen section). The watchdog also raises `Time.timeScale` if the transition zeroed out time. While a `pause` is active the watchdogs and the deferred transition stand down entirely: a frozen game is not a stuck one, and it must not start a scene transition behind the trainer's back.
 
 ### 2. Python RL framework
 
@@ -64,7 +66,7 @@ The mod must be loaded into the game for the framework to work!
 | 1 | Left |
 | 2 | Right |
 | 3 | Jump |
-| 4 | Attack |
+| 4 | Attack (aimed at the boss) |
 | 5 | Dash |
 | 6 | Jump + Attack |
 | 7 | Dash + Attack |
@@ -74,16 +76,23 @@ The mod must be loaded into the game for the framework to work!
 | 11 | Right + Jump |
 | 12 | Left + Dash |
 | 13 | Right + Dash |
-| 14 | Pause (nothing) |
+| 14 | Nothing (same as 0) |
 | 15 | Jump + Dash |
+
+Only `4` is aimed: `left`/`right` is chosen from the normalised direction to the boss
+(`dx_to_boss`, threshold 0.3) and the other attack actions press exactly the buttons above.
+Until Update 10 every attack action was rewritten to `8`/`9`, which silently dropped the jump
+of `6` and the dash of `7` - while the boss was off centre, which is nearly always, neither
+skill could happen or be learned (`hk_features.redirect_action`).
 
 ## Observation space
 
-- A vector of **25 numeric values**: HP, soul, boss HP, player and boss positions, distance and direction to the boss, velocities, state flags (grounded, facing right for the player and the boss, attack, dash, jump, fall, recoil, `boss_is_attacking`, `near_hazard`, `was_hit`)
-- **Frame stack**: a stack of the last 4 vectors -> `100` features at the policy's input (set by `HK_FRAME_STACK`)
+- A vector of **30 numeric values**: HP, soul, boss HP, player and boss positions, distance and direction to the boss, velocities, state flags (grounded, facing right for the player and the boss, attack, dash, jump, fall, recoil, `boss_is_attacking`, `near_hazard`, `was_hit`), plus what the boss is doing right now
+- **Boss state** (Update 10): `boss_attack_antic` (the attack is winding up), `boss_open` (stunned or recovering - the punish window), `boss_dead`, `boss_state_age` (how long the current state has been running, scaled over 60 frames) and `boss_state_changed`. The mod already sent the state name (`boss_state`, the animation clip or the attacking FSM state) in every single frame; `hk_features.BossStateTracker` turns it into these five numbers. The name as text is useless to the policy, and the frame stack only reaches back ~50 ms at 75 fps, so "the hit lands in a few frames" has to be a feature rather than something to infer
+- **Frame stack**: a stack of the last 4 vectors -> `120` features at the policy's input (set by `HK_FRAME_STACK`)
 - **Frame skip**: `HK_FRAME_SKIP` is no longer used - each step waits for a FRESH telemetry frame via `wait_for_fresh_telemetry` in `ai_environment.py` (the pipe message counter `seq` must change), so the step rate follows the game itself (roughly up to ~60 steps/s); if no fresh frame arrives (menu/pause), the step continues after a short wait
 - Observations and rewards are normalized via `VecNormalize` (reward normalization is enabled - the reward is clipped within static bounds, victory/death signals are not lost)
-- Attacks are aimed toward the boss by default (`_redirect_attack_to_boss`)
+- Only the plain attack is aimed toward the boss (`hk_features.redirect_action`)
 
 ## Episode loop
 
@@ -218,6 +227,22 @@ Environment variables:
 | `HK_FRAME_SKIP` | `4` | No longer used - kept for backward compatibility only / ignored; each step now syncs to a fresh telemetry write instead |
 | `HK_FRAME_STACK` | `4` | How many recent observations go into the stack |
 
+### The game is paused while the policy updates
+
+`learn()` alternates between collecting a rollout and computing the gradient epochs. The game
+runs in real time during the second half, and nothing steps the environment then: the hero used
+to stand still for several seconds (an update of 8192 steps with 10 epochs costs roughly 5-10 s
+on CPU), the boss kept hitting it, and the next step lumped all of that damage into a single
+transition - the damage was never attributed to anything the policy did.
+
+`GamePauseCallback` (in `train.py`) now freezes the fight: `on_rollout_end` fires after the last
+step of a rollout and before the metrics table and `train()`, and `on_rollout_start` fires when
+the next rollout begins, where the game is unfrozen again. The freeze itself is the mod's
+(`pause`/`resume`), so the state is real and confirmed: `hk_gym.pause_game()` releases the
+buttons, sends the command and waits for the mod's event. A keyboard interrupt inside the update
+still unfreezes the game through the `finally` block, and if the process is killed outright the
+mod lifts the pause by itself after 120 s.
+
 ### Training progress log
 
 All metrics that go to TensorBoard and are printed to the console are also mirrored to the text file **`logs/progress.txt`** (UTF-8, appended on every run - if training crashes, the progress already written is not lost):
@@ -276,7 +301,9 @@ python tests/run_pipe_harness.py                         # the whole pipe harnes
 - **Units** (`tests/test_bosses.py`) - the boss registry and `resolve_query`: lookup by number / scene / alias / exact title, the ambiguity rule (a partial match prefers the base fight over the Ascended/Radiant `_V` variant), plus the invariants that keep the menu honest: unique scenes and labels, aliases pointing at real scenes, `DEFAULT_GATE == door_dreamEnter`
 - **Registry parity** (`tests/test_registry_parity.py`) - reads `Mod/HK_AI_Mod/AiDataExporter.cs` and compares it with `bosses.py` entry by entry, in order: the mod's `BossRegistry`, `ExtraAliases`, `DEFAULT_BOSS_SCENE` and `DEFAULT_ENTRY_GATE`. The mod is the source of truth for what the game accepts, so a drift on either side (a boss added, renamed or lost in translation) is a failing test instead of a teleport into a scene the mod does not know
 - **Training configuration** (`tests/test_training_config.py`) - parses `train.py` (it cannot be imported: torch, vgamepad and the gym environment are not installed in CI) and checks the invariants that keep a night from being wasted: one update has to cover more than one fight, the discount must not look only ~100 steps ahead, the learning rate must not decay to zero inside a run, and a resumed model must be given the same hyperparameters as a fresh one (`PPO.load` applies its kwargs after the pickled data). `HK_TRAIN_PY` points the checks at another copy of the file, which is how the red case was reproduced
-- **Pipe harness** (`tests/run_pipe_harness.py`) - generates the registry the mock serves, builds it with `dotnet`, runs `--selftest-stuck` (a client that stops reading must not eat a slot: the stuck write is cancelled and the slot is freed) and then the 36 integration checks against the mock over real Win32 named pipes. One command instead of three: the mock exits as soon as its stdin reaches EOF, so the runner keeps that stdin open, waits for the mock to report its registry and shuts it down afterwards. Windows only
+- **Environment features** (`tests/test_features.py`) - `hk_features` is the part of the environment that imports nothing, so it is tested for real instead of being parsed: the action table against `ai_controller.py`'s branches, the aiming rule (only `4` is aimed, `6`/`7`/`8`/`9` keep their buttons, the threshold is not crossed by equality), the boss-state classes over the states observed in `ModLog.txt` during a live session, and the state-age tracker (age grows, a missing frame does not advance it, `reset()` forgets the fight, and the feature order matches `STAT_NAMES`)
+- **Game pause** (`tests/test_training_config.py`) - the pause callback is in `train.py`, it calls `pause_game`/`resume_game` through the vectorised env on the right hooks, and the `finally` block unfreezes the game after a crash
+- **Pipe harness** (`tests/run_pipe_harness.py`) - generates the registry the mock serves, builds it with `dotnet`, runs `--selftest-stuck` (a client that stops reading must not eat a slot: the stuck write is cancelled and the slot is freed) and then the integration checks against the mock over real Win32 named pipes. One command instead of three: the mock exits as soon as its stdin reaches EOF, so the runner keeps that stdin open, waits for the mock to report its registry and shuts it down afterwards. Windows only
 - **CI** (`.github/workflows/ci.yml`) - on every push to `master`/`dev` and on every pull request: `ubuntu-latest` compiles every `.py` file (`compileall`, which also catches a broken encoding) and runs the units; `windows-latest` runs the pipe harness. The mod itself is not built in CI: its `.csproj` needs the game's `Assembly-CSharp.dll`, which is neither shipped nor downloadable
 
 ## Training parameters (PPO)
@@ -307,17 +334,21 @@ python tests/run_pipe_harness.py                         # the whole pipe harnes
   - `set_boss <scene>` / `set_gate <gate>` - set the target scene and the arena entry gate
   - `teleport` - teleport to the target boss's arena
   - `warp` - return the hero to the arena gate without reloading the scene
+  - `pause` / `resume` - freeze the fight around the PPO update (Update 9); the pause answers
+    with a `paused`/`resumed` event, survives a trainer that crashed (120 s backstop), is
+    reported in every telemetry frame as the `paused` field, and stops the watchdogs from
+    "repairing" a game that is merely frozen
 - `restart`/`teleport` take the entry gate from `set_gate` (previously it was hard-coded `door1`, which does not exist in Godhome arenas); the current version additionally validates it against the scene's real `TransitionPoint`s - see the section on the white screen
 - Query resolver: index -> scene name -> alias -> exact title -> partial match (ambiguous queries are rejected with a hint)
 - Added the `scene` field to the telemetry - the current fight scene
 
 ### Named-pipe transport instead of `%TEMP%` files
-- The whole mod <-> Python channel moved to the named pipe `\\.\pipe\hk_ai_mod` (protocol 3, line-delimited JSON): telemetry, commands (`restart`, `teleport`, `set_boss`, `set_gate`, `boss`, `bosses`, `warp`), one-shot events (`boss_list`, `boss_selected`, `command_error`) and the registry dump. The files `%TEMP%/hk_ai_data.json`, `hk_ai_cmd.txt`, `hk_ai_boss.txt`, `hk_ai_gate.txt`, `hk_ai_gates.txt`, `hk_ai_bosses.json` are gone - no file fallback is left
+- The whole mod <-> Python channel moved to the named pipe `\\.\pipe\hk_ai_mod` (protocol 3, line-delimited JSON): telemetry, commands (`restart`, `teleport`, `set_boss`, `set_gate`, `boss`, `bosses`, `warp`, `pause`, `resume`), one-shot events (`boss_list`, `boss_selected`, `command_error`, `paused`, `resumed`) and the registry dump. The files `%TEMP%/hk_ai_data.json`, `hk_ai_cmd.txt`, `hk_ai_boss.txt`, `hk_ai_gate.txt`, `hk_ai_gates.txt`, `hk_ai_bosses.json` are gone - no file fallback is left
 - The mod's server is implemented on raw kernel32 (`Mod/HK_AI_Mod/Win32Pipe.cs`), because in the game's Mono every `NamedPipeServerStream` constructor is a stub that throws `NotImplementedException` (proved by the IL probe in `tests/mono_il/`). One thread per slot, up to 4 clients, synchronous handles without overlapped I/O: a hanging read cannot block a write
 - The game thread only publishes the latest frame, so Python can neither slow the game down nor break its own connection; the reader keeps reading the freshest message and never waits for old ones
 - Python side: `hk_pipe.py` (background reader thread, auto-reconnect, hello re-read on reconnect), `bosses.py` / `ai_controller.py` / `ai_environment.py` / `teleport.py` / `ai_receiver.py` switched to it
 - A client that stops reading cannot eat a slot: a write stuck for more than 3 s is cancelled (`CancelSynchronousIo`), the slot is freed and rebuilt - covered by `--selftest-stuck` in the harness
-- `tests/pipe_sim/` - a mock mod plus 36 integration checks; the harness compiles the same `Win32Pipe.cs` and refuses to start if the real mod's pipe exists on the machine (so it cannot accidentally connect to the live game)
+- `tests/pipe_sim/` - a mock mod plus the integration checks; the harness compiles the same `Win32Pipe.cs` and refuses to start if the real mod's pipe exists on the machine (so it cannot accidentally connect to the live game)
 - Deployment is paired: the Python side requires the pipe build of the mod. With an older build deployed the pipe is simply absent - the framework reports that the mod did not answer within 20 s
 
 ### Python framework
@@ -325,6 +356,9 @@ python tests/run_pipe_harness.py                         # the whole pipe harnes
 - `hk_pipe.py` (new) - the named-pipe client the whole Python side runs on: one shared client per process, background reader with auto-reconnect, one-shot events (`wait_for_status`)
 - `teleport.py` (new) - interactive boss selection and teleport: menu, `--list`, `--boss <query>`, `--restart`, `--warp`, `--train` (teleport and train right away); fallback for mod builds without the `boss`/`warp` commands
 - `train.py` - the `--boss` flag; **training files are laid out per boss automatically** (`models/ppo_hk/<scene>/`: checkpoints, `hk_model_final.zip`, `vecnormalize.pkl`); an old save from the root of `models/ppo_hk/` migrates to `GG_False_Knight/` on the first run
+- `train.py` - **Update 9: the game is frozen while the policy updates** (`GamePauseCallback`): between the rollout and the next one the trainer is not stepping the environment, so the hero stood still for the 5-10 s of the gradient epochs and took free hits - damage that the next transition silently inherited. The mod freezes the fight (`pause`/`resume`, `Time.timeScale = 0`), the callback unfreezes it on the next `on_rollout_start`, and a crash unfreezes it from the `finally` block; the mod gives up on the pause after 120 s by itself
+- `hk_features.py` (new) - the parts of the environment that are pure Python: the action table, the aiming rule and the boss-state tracker. It exists so that they can be tested without a game and without the heavy dependencies (see the tests section)
+- `hk_gym.py` - **Update 10: the boss's attack is visible to the policy** (five new observation values from the state name the mod already sent: winding up, open/punish window, dead, the age of the state, the change flag), and **only the plain attack is aimed at the boss** - previously every attack action was rewritten to `8`/`9`, which dropped the jump of `6` and the dash of `7` whenever the boss was off centre, so those two skills were unreachable
 - `train.py` - **Update 8: the PPO configuration**, after the 26-27.09 overnight run (550 episodes, 96 victories = 17.5 %, 2 033 664 steps) showed where the steps were going: `n_steps` 1024 -> 8192 and `batch_size` 128 -> 256 (an episode lasts ~1950 steps, so an update used to see half of a single fight and every gradient carried that fight's luck - the win rate swung between 4 % and 33 % per 100k steps without a trend); `gamma` 0.99 -> 0.995 (at ~75 steps/sec, 0.99 looks 1.3 s ahead against fights of 13-26 s, so the +1000 victory and -500 death rewards were discounted to nothing - `0.99^1000` is ~4e-5 - and only the per-step shaping was learned); and a flat learning rate of 3e-4 instead of `linear_schedule(3e-4)`, which is scaled to the current `learn()` call and therefore always ends at zero (the last hours of the night ran at `learning_rate 4.8e-07` with `approx_kl 3.7e-06` - a frozen policy and a burning clock). A resumed model gets the same values: `PPO.load` applies its kwargs *after* the pickled data, so without repeating them there a loaded model keeps training under its own old settings. The reward normalization discounts like the policy now too
 - `hk_gym.py` - `HK_BOSS_SCENE` accepts aliases and indices, `HK_ENTRY_GATE` added (the arena gate)
 - `deploy_mod.ps1` (new) - game lookup via the Steam registry, build and deployment of the DLL with the game closed
@@ -350,7 +384,7 @@ python tests/run_pipe_harness.py                         # the whole pipe harnes
 ### Verified live
 All of the mod's commands were tested on a running game: dumping the list (60 bosses), teleporting from the Atrium to the Vengefly King arena with the fight starting, arena restart, warp to the gate.
 
-The pipe transport was verified on a running game as well: the hello line reports `protocol=3`, telemetry streams continuously, two clients connect at the same time (training + debugger), `bosses` returns all 60 records, `set_boss`/`boss` reload the scene and the fight starts (`GG_False_Knight`, `GG_Hornet_1`, `GG_Vengefly`), `set_gate` + `warp` work, and the ModLog stays clean. The transport itself is covered by the harness in `tests/pipe_sim/` (36 checks against the same `Win32Pipe.cs` the mod uses).
+The pipe transport was verified on a running game as well: the hello line reports `protocol=3`, telemetry streams continuously, two clients connect at the same time (training + debugger), `bosses` returns all 60 records, `set_boss`/`boss` reload the scene and the fight starts (`GG_False_Knight`, `GG_Hornet_1`, `GG_Vengefly`), `set_gate` + `warp` work, and the ModLog stays clean. The transport itself is covered by the harness in `tests/pipe_sim/` (the checks run against the same `Win32Pipe.cs` the mod uses).
 
 The mod version is deliberately pinned to `v1` and does not change with edits (see the comment on `GetVersion` in `AiDataExporter.cs`) - it exists only to tell a fresh build from old ones; the change history is kept in the "Changelog" section rather than in version numbers.
 

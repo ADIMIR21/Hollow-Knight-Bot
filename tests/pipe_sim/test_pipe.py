@@ -134,6 +134,45 @@ check("mod_has_scene_field()", bosses.mod_has_scene_field() is True)
 check("mod_protocol() == 3", bosses.mod_protocol() == 3)
 check("is_connected()", bosses.is_connected(timeout=2.0) is True)
 
+print("\n[12] pause / resume (Update 9)")
+before = client.get_status_seq("paused")
+check("pause sent", bosses.send_command("pause"))
+ev = client.wait_for_status("paused", timeout=5.0, after_seq=before)
+check("paused event received", ev is not None, ev)
+check("paused event reports paused=1", (ev or {}).get("paused") == 1, ev)
+check("paused event reports time_scale 0", (ev or {}).get("time_scale") == 0.0, ev)
+check("the event did not replace telemetry",
+      (client.get_telemetry() or {}).get("event") is None, client.get_telemetry())
+time.sleep(0.3)
+check("telemetry reports paused=1",
+      int((client.get_telemetry() or {}).get("paused", 0)) == 1,
+      (client.get_telemetry() or {}).get("paused"))
+
+# A second pause is not an error: the command is idempotent.
+before = client.get_status_seq("paused")
+check("second pause sent", bosses.send_command("pause"))
+ev = client.wait_for_status("paused", timeout=5.0, after_seq=before)
+check("still paused after a second pause", (ev or {}).get("paused") == 1, ev)
+
+before = client.get_status_seq("resumed")
+check("resume sent", bosses.send_command("resume"))
+ev = client.wait_for_status("resumed", timeout=5.0, after_seq=before)
+check("resumed event received", ev is not None, ev)
+check("resumed event reports paused=0", (ev or {}).get("paused") == 0, ev)
+check("resumed event reports time_scale 1", (ev or {}).get("time_scale") == 1.0, ev)
+time.sleep(0.3)
+check("telemetry reports paused=0",
+      int((client.get_telemetry() or {}).get("paused", 1)) == 0,
+      (client.get_telemetry() or {}).get("paused"))
+
+# resume without a pause: a fresh trainer may clear a pause left by a dead one.
+before = client.get_status_seq("resumed")
+check("resume without a pause sent", bosses.send_command("resume"))
+ev = client.wait_for_status("resumed", timeout=5.0, after_seq=before)
+check("an idle resume still reports paused=0", (ev or {}).get("paused") == 0, ev)
+check("telemetry still reports paused=0",
+      int((client.get_telemetry() or {}).get("paused", 1)) == 0)
+
 print()
 if FAILS:
     print(f"CHECKS FAILED: {len(FAILS)}")

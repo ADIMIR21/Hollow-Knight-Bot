@@ -101,6 +101,16 @@ namespace hkpipesim
             }
         }
 
+        // Update 9: the mock mirrors the mod's pause flag. There is no game to freeze
+        // here, so it only has to answer and report the flag the way the mod does.
+        private static bool _paused = false;
+
+        private static string PauseStateJson(string status)
+        {
+            return "{\"status\": \"" + status + "\", \"paused\": " + (_paused ? 1 : 0)
+                + ", \"time_scale\": " + (_paused ? "0.00" : "1.00") + "}";
+        }
+
         private static void TelemetryLoop()
         {
             int published = 0;
@@ -129,7 +139,7 @@ namespace hkpipesim
                         + ", \"is_recoiling\": 0, \"is_dead\": 0, \"was_hit\": 0"
                         + ", \"hit_counter\": 0, \"boss_damage_total\": 0"
                         + ", \"boss_is_attacking\": 0, \"near_hazard\": 0"
-                        + ", \"boss_state\": \"idle\"}";
+                        + ", \"boss_state\": \"idle\", \"paused\": " + (_paused ? 1 : 0) + "}";
                     Publish(json);
                     published++;
                     if (published % 100 == 0)
@@ -178,6 +188,16 @@ namespace hkpipesim
                     break;
                 case "warp":
                     Console.WriteLine($"[mock] warp to gate {_targetGate}");
+                    break;
+                case "pause":
+                    _paused = true;
+                    Console.WriteLine("[mock] paused");
+                    PublishEvent(PauseStateJson("paused"));
+                    break;
+                case "resume":
+                    _paused = false;
+                    Console.WriteLine("[mock] resumed");
+                    PublishEvent(PauseStateJson("resumed"));
                     break;
                 case "restart":
                 case "teleport":
