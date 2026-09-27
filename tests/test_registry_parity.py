@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Parity check between the mod's boss registry (C#) and its Python mirror (bosses.py).
 
-bosses.py states that it mirrors BossRegistry in Mod/HK_AI_Mod/AiDataExporter.cs, but nothing
+bosses.py states that it mirrors BossRegistry in Mod/AiTrainHK/AiDataExporter.cs, but nothing
 enforced it: an entry could be added, renamed or lost on one side only, and Python would then
 happily ask the mod to teleport into a scene it does not know (the mod answers
 "boss not recognized" and the run stalls). This test reads the C# source directly, so it needs
@@ -19,7 +19,7 @@ sys.path.insert(0, ROOT)
 
 import bosses  # noqa: E402
 
-MOD_SOURCE = os.path.join(ROOT, "Mod", "HK_AI_Mod", "AiDataExporter.cs")
+MOD_SOURCE = os.path.join(ROOT, "Mod", "AiTrainHK", "AiDataExporter.cs")
 
 ENTRY_RE = re.compile(r'new\s+BossEntry\(\s*"([^"]*)"\s*,\s*"([^"]*)"\s*\)')
 ALIAS_RE = re.compile(r'\{\s*"([^"]*)"\s*,\s*"([^"]*)"\s*\}')

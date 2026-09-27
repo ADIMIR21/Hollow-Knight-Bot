@@ -3,7 +3,7 @@ import time
 
 DEFAULT_BOSS_SCENE = "GG_False_Knight"
 # In Godhome arenas the entry TransitionPoint is called door_dreamEnter — see
-# DEFAULT_ENTRY_GATE in the mod (Mod/HK_AI_Mod/AiDataExporter.cs).
+# DEFAULT_ENTRY_GATE in the mod (Mod/AiTrainHK/AiDataExporter.cs).
 DEFAULT_ENTRY_GATE = "door_dreamEnter"
 
 class HollowKnightController:

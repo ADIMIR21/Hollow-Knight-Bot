@@ -38,7 +38,7 @@ check("wait_connected", client.wait_connected(timeout=10.0))
 hello = client.wait_hello(timeout=5.0)
 check("hello received", hello is not None, hello)
 check("protocol == 3", client.protocol == 3, client.protocol)
-check("mod_version == v1", client.mod_version == "v1", client.mod_version)
+check("mod_version == 1", client.mod_version == "1", client.mod_version)
 check("hello event available", (client.hello or {}).get("status") == "pipe_hello")
 
 # Guard against the harness's most expensive mistake: connecting to the pipe of a

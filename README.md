@@ -8,7 +8,7 @@
 
 The project consists of two main components:
 
-### 1. C# Mod for Hollow Knight (`Mod/HK_AI_Mod/`)
+### 1. C# Mod for Hollow Knight (`Mod/AiTrainHK/`)
 
 The mod exports game telemetry over a **named pipe** `\\.\pipe\hk_ai_mod` (protocol 3, line-delimited JSON, one line per `HeroUpdate`, ~60/s). The old `%TEMP%/hk_ai_data.json` file protocol has been removed entirely - there is no file fallback:
 
@@ -135,13 +135,13 @@ pip install -r requirements.txt
 ### Building and installing the mod
 
 ```bash
-dotnet build Mod/HK_AI_Mod/HK_AI_Mod.csproj -c Release
+dotnet build Mod/AiTrainHK/AiTrainHK.csproj -c Release
 ```
 
-The project locates the game by itself (Steam registry or standard paths on drives A: through Z:) and takes the game's `Assembly-CSharp.dll` from that install - the repository does not ship it, because that DLL is Team Cherry's compiled code (a byte-for-byte copy of the installed game). So the mod is built against exactly the assembly it will run against. If automatic detection fails on an unusual install path, copy `hollow_knight_Data\Managed\Assembly-CSharp.dll` into `Mod/HK_AI_Mod/libs/` (that folder is in `.gitignore`) and the build uses it as a fallback. Copy the built DLL into the mods folder:
+The project locates the game by itself (Steam registry or standard paths on drives A: through Z:) and takes the game's `Assembly-CSharp.dll` from that install - the repository does not ship it, because that DLL is Team Cherry's compiled code (a byte-for-byte copy of the installed game). So the mod is built against exactly the assembly it will run against. If automatic detection fails on an unusual install path, copy `hollow_knight_Data\Managed\Assembly-CSharp.dll` into `Mod/AiTrainHK/libs/` (that folder is in `.gitignore`) and the build uses it as a fallback. Copy the built DLL into the mods folder:
 
 ```
-<path to the game>/hollow_knight_Data/Managed/Mods/HK_AI_Mod/HK_AI_Mod.dll
+<path to the game>/hollow_knight_Data/Managed/Mods/AiTrainHK/AiTrainHK.dll
 ```
 
 The DLL cannot be overwritten while the game is running - close the game before deploying a new build. For convenience there is a script:
@@ -305,7 +305,7 @@ python tests/run_pipe_harness.py                         # the whole pipe harnes
 ```
 
 - **Units** (`tests/test_bosses.py`) - the boss registry and `resolve_query`: lookup by number / scene / alias / exact title, the ambiguity rule (a partial match prefers the base fight over the Ascended/Radiant `_V` variant), plus the invariants that keep the menu honest: unique scenes and labels, aliases pointing at real scenes, `DEFAULT_GATE == door_dreamEnter`
-- **Registry parity** (`tests/test_registry_parity.py`) - reads `Mod/HK_AI_Mod/AiDataExporter.cs` and compares it with `bosses.py` entry by entry, in order: the mod's `BossRegistry`, `ExtraAliases`, `DEFAULT_BOSS_SCENE` and `DEFAULT_ENTRY_GATE`. The mod is the source of truth for what the game accepts, so a drift on either side (a boss added, renamed or lost in translation) is a failing test instead of a teleport into a scene the mod does not know
+- **Registry parity** (`tests/test_registry_parity.py`) - reads `Mod/AiTrainHK/AiDataExporter.cs` and compares it with `bosses.py` entry by entry, in order: the mod's `BossRegistry`, `ExtraAliases`, `DEFAULT_BOSS_SCENE` and `DEFAULT_ENTRY_GATE`. The mod is the source of truth for what the game accepts, so a drift on either side (a boss added, renamed or lost in translation) is a failing test instead of a teleport into a scene the mod does not know
 - **Training configuration** (`tests/test_training_config.py`) - parses `train.py` (it cannot be imported: torch, vgamepad and the gym environment are not installed in CI) and checks the invariants that keep a night from being wasted: one update has to cover more than one fight, the discount must not look only ~100 steps ahead, the learning rate must not decay to zero inside a run, and a resumed model must be given the same hyperparameters as a fresh one (`PPO.load` applies its kwargs after the pickled data). `HK_TRAIN_PY` points the checks at another copy of the file, which is how the red case was reproduced
 - **Environment features** (`tests/test_features.py`) - `hk_features` is the part of the environment that imports nothing, so it is tested for real instead of being parsed: the action table against `ai_controller.py`'s branches, the aiming rule (only `4` is aimed, `6`/`7`/`8`/`9` keep their buttons, the threshold is not crossed by equality), the boss-state classes over the states observed in `ModLog.txt` during a live session, and the state-age tracker (age grows, a missing frame does not advance it, `reset()` forgets the fight, and the feature order matches `STAT_NAMES`)
 - **Game pause** (`tests/test_training_config.py`) - the pause callback is in `train.py`, it calls `pause_game`/`resume_game` through the vectorised env on the right hooks, and the `finally` block unfreezes the game after a crash

@@ -9,14 +9,14 @@ using HKPipeInterop;
 using UnityEngine;
 using Modding;
 
-namespace HK_AI_Mod
+namespace AiTrainHK
 {
     public class AiDataExporter : Mod
     {
-        // IMPORTANT: the version is deliberately pinned as "v1" — do NOT bump it on every
+        // IMPORTANT: the version is deliberately pinned as "1" — do NOT bump it on every
         // mod change. It only exists so that ModLog shows which build the game
         // loaded. We keep the changelog in README, not in this string.
-        public override string GetVersion() => "v1";
+        public override string GetVersion() => "1";
 
         // ---------------- Transport: named pipe (protocol 3) ----------------
         // Server: \\.\pipe\hk_ai_mod (duplex, line-based exchange), created
@@ -35,7 +35,7 @@ namespace HK_AI_Mod
         private const int MAX_PIPE_CLIENTS = 4;
         private const int PIPE_POLL_MS = 25;
         private const int PROTOCOL_VERSION = 3;
-        private const string MOD_VERSION = "v1";
+        private const string MOD_VERSION = "1";
         private const int MAX_OUTBOX = 256;
         // A client that stops reading makes WriteFile block once the pipe's out buffer is
         // full, and the slot thread never gets back to ConnectNamedPipe — the slot would be
@@ -331,7 +331,7 @@ namespace HK_AI_Mod
                 }
             };
 
-            var host = new GameObject("HK_AI_Mod_Host");
+            var host = new GameObject("AiTrainHK_Host");
             UnityEngine.Object.DontDestroyOnLoad(host);
             var ticker = host.AddComponent<AiModTicker>();
             ticker.OnTick += OnTick;
@@ -1650,7 +1650,7 @@ namespace HK_AI_Mod
 
         private void OnHeroUpdate()
         {
-            // v1.2: telemetry on every HeroUpdate (~60 records/sec at 60fps) is published
+            // Telemetry on every HeroUpdate (~60 records/sec at 60fps) is published
             // into the \\.\pipe\hk_ai_mod pipe. The Python side reads line by line and syncs
             // its steps to the arrival of a new record — no sleeps and no file mtime polling.
 

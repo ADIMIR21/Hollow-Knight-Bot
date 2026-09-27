@@ -1,4 +1,4 @@
-"""Registry — mirror of BossRegistry in Mod/HK_AI_Mod/AiDataExporter.cs.
+"""Registry — mirror of BossRegistry in Mod/AiTrainHK/AiDataExporter.cs.
 Scenes are taken from the game build settings (hollow_knight_Data/globalgamemanagers).
 Entries with the _V suffix are harder versions of the fights (Ascended/Radiant),
 GG_Mantis_Lords_V = Sisters of Battle, GG_Nosk_Hornet = Winged Nosk.

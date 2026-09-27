@@ -1,4 +1,4 @@
-// Mock named-pipe server for the HK_AI_Mod mod: tests the Python client without the game.
+// Mock named-pipe server for the AiTrainHK mod: tests the Python client without the game.
 // Replicates the transport of the merged AiDataExporter.cs: hello, telemetry stream,
 // one-shot events (_outbox), command intake. The boss registry is read from JSON.
 using System;
@@ -290,7 +290,7 @@ namespace hkpipesim
                     // is talking to the mock and not to the mod of a running game (their
                     // hellos are otherwise indistinguishable, and the test would start
                     // driving the game).
-                    byte[] hello = Utf8("{\"status\": \"pipe_hello\", \"protocol\": 3, \"mod_version\": \"v1\", \"server\": \"hkpipesim\"}\n");
+                    byte[] hello = Utf8("{\"status\": \"pipe_hello\", \"protocol\": 3, \"mod_version\": \"1\", \"server\": \"hkpipesim\"}\n");
                     if (Win32Pipe.Write(pipe, hello, hello.Length))
                         PumpClient(pipe, readBuf, lineBuf, events, payload);
                 }

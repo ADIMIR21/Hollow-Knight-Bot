@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Real-time debugger for the HK_AI_Mod telemetry over the named pipe.
+"""Real-time debugger for the AiTrainHK telemetry over the named pipe.
 
 Connects to \\\\.\\pipe\\hk_ai_mod as a second client (the mod keeps up to 4
 instances, so it can run in parallel with training) and prints
@@ -19,7 +19,7 @@ client = HKPipeClient(verbose=False)
 
 if not client.wait_connected(timeout=30.0):
     print("ERROR: the mod did not respond within 30 seconds.")
-    print("Check: is the game running? Is HK_AI_Mod.dll installed in Mods? Has another program taken the pipe?")
+    print("Check: is the game running? Is AiTrainHK.dll installed in Mods? Has another program taken the pipe?")
     sys.exit(1)
 
 print("Connected to the mod! Reading telemetry...\n")

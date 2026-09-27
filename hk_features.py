@@ -84,7 +84,7 @@ def redirect_action(action, dx_to_boss, aim_threshold=AIM_THRESHOLD):
 # --------------------------------------------------------------------------- #
 # The mod sends the boss's current animation clip name in "boss_state" and
 # replaces it with the attacking FSM state name when its own IsAttackFsmState()
-# matches (Mod/HK_AI_Mod/AiDataExporter.cs). The names in the comments below were
+# matches (Mod/AiTrainHK/AiDataExporter.cs). The names in the comments below were
 # observed in ModLog.txt during a live False Knight session, and the keyword
 # families are the ones the mod itself matches on - this file does not invent game
 # internals.

@@ -37,7 +37,7 @@ constructors of `System.IO.Pipes.NamedPipeServerStream` collapse into two stubs:
 
 That is, the type cannot even be instantiated — the problem is not the choice of
 `PipeOptions`. That is why the pipe server in the mod comes up through `kernel32`
-(`Mod/HK_AI_Mod/Win32Pipe.cs`), while `PipeStream.Read/Write/BeginRead/EndRead` in
+(`Mod/AiTrainHK/Win32Pipe.cs`), while `PipeStream.Read/Write/BeginRead/EndRead` in
 Mono are, incidentally, implemented — but you cannot reach them without a working
 constructor.
 

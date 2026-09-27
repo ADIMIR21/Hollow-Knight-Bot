@@ -50,7 +50,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- The game's assembly is NOT shipped with this repository: Mod/HK_AI_Mod/libs/ is in
+    <!-- The game's assembly is NOT shipped with this repository: Mod/AiTrainHK/libs/ is in
          .gitignore, because that DLL is Team Cherry's compiled code (and a byte-for-byte copy
          of the installed game). It is taken from the detected game install - which also means
          the mod is built against exactly the assembly it will run against. A local libs\ copy
@@ -87,7 +87,7 @@
 
   <Target Name="CheckGameAssembly" BeforeTargets="ResolveAssemblyReferences"
           Condition="!Exists('$(HollowKnightManagedDir)Assembly-CSharp.dll') And !Exists('libs\Assembly-CSharp.dll')">
-    <Error Text="Assembly-CSharp.dll was not found. Install Hollow Knight (the build looks for it through the Steam registry and on drives A:-Z:), or copy hollow_knight_Data\Managed\Assembly-CSharp.dll into Mod/HK_AI_Mod/libs/." />
+    <Error Text="Assembly-CSharp.dll was not found. Install Hollow Knight (the build looks for it through the Steam registry and on drives A:-Z:), or copy hollow_knight_Data\Managed\Assembly-CSharp.dll into Mod/AiTrainHK/libs/." />
   </Target>
 
 </Project>

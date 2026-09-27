@@ -6,7 +6,7 @@ name: CI
 #   * the C# <-> Python registry parity (the mod is the source of truth),
 #   * the named-pipe harness on Windows: the mock mod, the stuck-client selftest and the
 #     integration checks against the same Win32Pipe.cs the mod uses.
-# The mod itself (Mod/HK_AI_Mod) is deliberately NOT built: its .csproj references the game's
+# The mod itself (Mod/AiTrainHK) is deliberately NOT built: its .csproj references the game's
 # Assembly-CSharp.dll, which is neither shipped nor downloadable (see README, "Building and
 # installing the mod").
 

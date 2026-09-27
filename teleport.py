@@ -1,6 +1,6 @@
 """Teleport to pantheon bosses (Godhome) — boss selection and training launch.
 
-Requires the HK_AI_Mod mod in the game: the boss/teleport/bosses/warp commands
+Requires the AiTrainHK mod in the game: the boss/teleport/bosses/warp commands
 go through the named pipe ``\\\\.\\pipe\\hk_ai_mod``. The %TEMP% file protocol
 is gone, there is no fallback for the old mod v1.1 anymore.
 
@@ -65,22 +65,22 @@ def print_boss_list():
 def check_mod():
     """Checks that the mod pipe is connected and its protocol supports pantheon commands."""
     if not is_connected(timeout=10.0):
-        print("[TELEPORT] The mod pipe is not responding — is the game running with the HK_AI_Mod mod?")
+        print("[TELEPORT] The mod pipe is not responding — is the game running with the AiTrainHK mod?")
         print(f"           The mod hosts the server {PIPE_PATH}. Check that the game is running")
-        print("           and that HK_AI_Mod.dll is in the Mods folder.")
+        print("           and that AiTrainHK.dll is in the Mods folder.")
         return False
 
     if wait_hello(timeout=3.0) is None:
         print("[TELEPORT] The pipe is open, but no hello message came from the mod.")
-        print("           Looks like the pipe is held by something other than the HK_AI_Mod mod.")
+        print("           Looks like the pipe is held by something other than the AiTrainHK mod.")
         return False
 
     proto = mod_protocol()
     if proto < REQUIRED_PROTOCOL:
         print(f"[TELEPORT] The mod responds, but protocol {proto} — pantheon commands "
               f"require >= {REQUIRED_PROTOCOL}.")
-        print("           Update the DLL: dotnet build Mod/HK_AI_Mod/HK_AI_Mod.csproj -c Release")
-        print("           and copy bin/Release/net472/HK_AI_Mod.dll into the Mods folder.")
+        print("           Update the DLL: dotnet build Mod/AiTrainHK/AiTrainHK.csproj -c Release")
+        print("           and copy bin/Release/net472/AiTrainHK.dll into the Mods folder.")
         return False
 
     if not mod_has_scene_field():
