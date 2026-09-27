@@ -124,6 +124,7 @@ def run_config_values():
         EPISODE_STEP_LIMIT,
         FRAME_STACK,
         HEALTH_PENALTY_PER_MASK,
+        OPEN_WINDOW_DAMAGE_MULTIPLIER,
         STATS_SIZE,
         STEP_PENALTY,
         VICTORY_REWARD,
@@ -133,6 +134,7 @@ def run_config_values():
     return {
         "gamma": GAMMA,
         "damage_reward_per_hp": DAMAGE_REWARD_PER_HP,
+        "open_window_damage_multiplier": OPEN_WINDOW_DAMAGE_MULTIPLIER,
         "health_penalty_per_mask": HEALTH_PENALTY_PER_MASK,
         "victory_reward": VICTORY_REWARD,
         "death_penalty": DEATH_PENALTY,

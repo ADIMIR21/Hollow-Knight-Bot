@@ -109,6 +109,19 @@ def redirect_action(action, dx_to_boss, aim_threshold=AIM_THRESHOLD):
 #   open     Opened, Opened 2, Open Uuup, Stun In Air, Stun Land, Stun Fail,
 #            Recover, S Attack Recover
 #   dead     Death Anim Start, Death Open
+def damage_weight(damage, boss_open, open_multiplier):
+    """Weigh damage by whether the boss was open when it landed.
+
+    The stunned window is the only place this fight can be finished: while the armour is up it
+    takes the hits and is repaired, and the pool that actually ends the fight is exposed only
+    while the boss is down. The open state already reaches the policy as an observation, but the
+    same hit pays the same inside and outside the window, so a fresh policy treats "hit it now"
+    and "hit it later" as near-equal options and drifts into hovering instead of committing.
+    Weighting the damage that lands in the window restores the difference the fight actually has.
+    """
+    return damage * open_multiplier if boss_open else damage
+
+
 BOSS_STATE_IDLE = 0
 BOSS_STATE_WINDUP = 1
 BOSS_STATE_ATTACK = 2

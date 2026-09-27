@@ -13,7 +13,7 @@ from ai_environment import HollowKnightEnv
 from ai_controller import HollowKnightController
 from bosses import resolve_query
 from screen_capture import USE_SCREEN_CAPTURE
-from hk_features import ACTION_COUNT, BossStateTracker, redirect_action
+from hk_features import damage_weight, ACTION_COUNT, BossStateTracker, redirect_action
 
 
 def _enable_precise_sleep():
@@ -89,6 +89,10 @@ VICTORY_CONFIRM_FRAMES = max(1, int(os.environ.get("HK_VICTORY_FRAMES", "3")))
 # makes an old model and its normalization statistics meaningless rather than resumable.
 DAMAGE_REWARD_PER_HP = 15.0
 HEALTH_PENALTY_PER_MASK = 200.0
+# Damage that lands while the boss is open is worth this much more than the same damage outside
+# the window. The stunned window is the only place this fight can be finished, and paying the same
+# for a hit anywhere made the policy hover instead of committing (see hk_features.damage_weight).
+OPEN_WINDOW_DAMAGE_MULTIPLIER = 3.0
 VICTORY_REWARD = 1000.0
 DEATH_PENALTY = 500.0
 STEP_PENALTY = 0.05
@@ -129,7 +133,9 @@ class HollowKnightGym(gym.Env):
         
         self._last_phi = 0.0
         self._scene_damage = 0.0
-        self._scene_damage_start = 0.0
+        self._last_scene_damage = 0.0
+        self._weighted_damage = 0.0
+        self._weighted_damage_start = 0.0
         self.current_action = 0
         self.hold_action_counter = 0
         self._boss_state = BossStateTracker()
@@ -431,22 +437,23 @@ class HollowKnightGym(gym.Env):
             self.hold_action_counter = 0
             self._boss_death_frames = 0
             self._last_episode_was_victory = False
-            self._scene_damage_start = float(self._scene_damage)
-            self._last_phi = self._potential(float(obs[IDX["hp"]]), self._scene_damage)
+            self._last_scene_damage = self._scene_damage
+            self._weighted_damage_start = self._weighted_damage
+            self._last_phi = self._potential(float(obs[IDX["hp"]]), self._weighted_damage)
             
             stacked_obs = np.concatenate(list(self._obs_deque)).astype(np.float32)
             self._log_reset_timing(reset_reason, time.time() - reset_started)
             self._episode_reason = "unknown"
             return stacked_obs, {}
 
-    def _potential(self, hp, scene_damage):
+    def _potential(self, hp, weighted_damage):
         # Damage comes from the mod's monotone counter over every HealthManager in the scene, not
         # from the boss field. The pool that field describes is repaired by the game on the way to
         # the punished window (260 -> 4 -> 260), so reading damage as "started at, minus now"
         # turned every repair into a large negative step and charged the policy for opening the
         # only route to the kill. A counter that only grows keeps this term monotone whatever the
         # game does to a pool.
-        damage_done = max(0.0, scene_damage - self._scene_damage_start)
+        damage_done = max(0.0, weighted_damage - self._weighted_damage_start)
         hp_lost = max(0.0, self.max_hp - hp)
         return DAMAGE_REWARD_PER_HP * damage_done - HEALTH_PENALTY_PER_MASK * hp_lost
 
@@ -494,6 +501,7 @@ class HollowKnightGym(gym.Env):
         vel_x = obs[IDX["vel_x"]]
         vel_y = obs[IDX["vel_y"]]
         boss_is_attacking = obs[IDX["boss_is_attacking"]]
+        boss_is_open = obs[IDX["boss_open"]] > 0.5
         
         reward = 0.0
         reward_parts = {
@@ -522,7 +530,14 @@ class HollowKnightGym(gym.Env):
         reward -= STEP_PENALTY
         reward_parts["step_penalty"] -= STEP_PENALTY
 
-        phi = self._potential(current_hp, self._scene_damage)
+        # The counter only ever grows, so the damage of this step is its increment, and what that
+        # damage is worth depends on whether the boss was open when it landed.
+        damage_now = max(0.0, self._scene_damage - self._last_scene_damage)
+        self._last_scene_damage = self._scene_damage
+        self._weighted_damage += damage_weight(
+            damage_now, boss_is_open, OPEN_WINDOW_DAMAGE_MULTIPLIER)
+
+        phi = self._potential(current_hp, self._weighted_damage)
         shaping = phi - self._last_phi
         self._last_phi = phi
         reward += shaping
