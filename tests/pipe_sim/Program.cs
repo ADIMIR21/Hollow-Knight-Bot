@@ -132,6 +132,8 @@ namespace hkpipesim
                         + ", \"scene\": \"" + _curScene + "\""
                         + ", \"hp\": 9, \"max_hp\": 9, \"mana\": 33"
                         + ", \"boss_hp\": 40, \"boss_dead\": 0"
+                        + ", \"arena_bosses\": 1, \"arena_alive\": 1, \"arena_hp\": 40"
+                        + ", \"arena_detail\": \"MockBoss:40:0\""
                         + ", \"x\": 10.00, \"y\": 5.00, \"boss_x\": 15.00, \"boss_y\": 5.00"
                         + ", \"vel_x\": 0.00, \"vel_y\": 0.00, \"boss_vel_x\": 0.00, \"boss_vel_y\": 0.00"
                         + ", \"grounded\": 1, \"facing_right\": 1, \"boss_facing_right\": 1"

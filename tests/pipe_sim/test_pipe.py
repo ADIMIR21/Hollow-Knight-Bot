@@ -58,6 +58,10 @@ t = client.get_telemetry() or {}
 check("status == fight", t.get("status") == "fight", t.get("status"))
 check("scene field present", "scene" in t, t.get("scene"))
 check("hp == 9 and boss_hp == 40", t.get("hp") == 9 and t.get("boss_hp") == 40)
+check("arena reported as a whole",
+      t.get("arena_bosses") == 1 and t.get("arena_alive") == 1
+      and t.get("arena_hp") == 40 and t.get("arena_detail") == "MockBoss:40:0",
+      f"{t.get('arena_hp')} HP, {t.get('arena_detail')}")
 
 seq0 = client.get_seq()
 time.sleep(0.3)

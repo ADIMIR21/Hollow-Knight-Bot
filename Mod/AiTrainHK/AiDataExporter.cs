@@ -1798,6 +1798,40 @@ namespace AiTrainHK
                         bossHp = 0;
                     else
                         bossHp = Math.Max(0, _currentBoss.hp);
+
+                    // The whole arena, not just the boss we latched onto. A single HealthManager can
+                    // sit at a floor (an armour whose last points come off somewhere else, a boss
+                    // whose death is the death of a second entity) while the fight is decided by
+                    // something this track does not name - the trainer then optimises a number that
+                    // stops moving halfway through. These four fields expose the set the game itself
+                    // uses to end the arena, so the truth is readable instead of guessed at.
+                    int arenaBossCount = 0;
+                    int arenaAliveCount = 0;
+                    int arenaHpSum = 0;
+                    StringBuilder arenaDetail = new StringBuilder();
+                    try
+                    {
+                        BossSceneController bscArena = BossSceneController.Instance;
+                        if (bscArena != null && bscArena.bosses != null)
+                        {
+                            foreach (HealthManager hm in bscArena.bosses)
+                            {
+                                if (hm == null) continue;
+                                arenaBossCount++;
+                                bool hmDead = hm.isDead || hm.hp <= 0;
+                                int hmHp = Math.Max(0, hm.hp);
+                                if (!hmDead) arenaAliveCount++;
+                                arenaHpSum += hmHp;
+                                if (arenaDetail.Length > 0) arenaDetail.Append('|');
+                                arenaDetail.Append(hm.gameObject.name
+                                        .Replace('"', '_').Replace('\\', '_')
+                                        .Replace('|', '_').Replace(':', '_'))
+                                    .Append(':').Append(hmHp).Append(':').Append(hmDead ? 1 : 0);
+                            }
+                        }
+                    }
+                    catch (Exception) {}
+
                     if (_lastBossHpKnown > bossHp)
                         _bossDamageTotal += _lastBossHpKnown - bossHp;
                     _lastBossHpKnown = bossHp;
@@ -1904,6 +1938,7 @@ namespace AiTrainHK
                     }
 
                     string data = $"{{\"status\": \"fight\", \"restart_pending\": {(_restartPending ? 1 : 0)}, \"scene\": \"{CurrentSceneName()}\", \"hp\": {hp}, \"max_hp\": {max_hp}, \"mana\": {mana}, \"boss_hp\": {bossHp}, \"boss_dead\": {(_bossDead ? 1 : 0)}, " +
+                        $"\"arena_bosses\": {arenaBossCount}, \"arena_alive\": {arenaAliveCount}, \"arena_hp\": {arenaHpSum}, \"arena_detail\": \"{arenaDetail}\", " +
                         $"\"x\": {x.ToString("F2", CultureInfo.InvariantCulture)}, " +
                         $"\"y\": {y.ToString("F2", CultureInfo.InvariantCulture)}, " +
                         $"\"boss_x\": {bossX.ToString("F2", CultureInfo.InvariantCulture)}, " +

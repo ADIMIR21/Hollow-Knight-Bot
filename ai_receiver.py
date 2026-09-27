@@ -45,6 +45,9 @@ try:
             elif status == "fight":
                 print(f"[{attempt}] HP: {data.get('hp')}/{data.get('max_hp')} | "
                       f"Soul: {data.get('mana')} | Boss: {data.get('boss_hp')} HP | "
+                      f"Arena: {data.get('arena_hp')} HP, "
+                      f"{data.get('arena_alive')}/{data.get('arena_bosses')} alive "
+                      f"[{data.get('arena_detail')}] | "
                       f"X: {data.get('x')}, Y: {data.get('y')} | "
                       f"Boss attacking: {data.get('boss_is_attacking')} | "
                       f"restart_pending: {data.get('restart_pending')}")

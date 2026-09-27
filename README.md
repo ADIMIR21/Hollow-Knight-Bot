@@ -14,7 +14,7 @@ The mod exports game telemetry over a **named pipe** `\\.\pipe\hk_ai_mod` (proto
 
 - **Player position** (X, Y) and velocity
 - **Player HP**, soul (MP) reserve
-- **Boss HP**, boss position and velocity. The boss is taken from `BossSceneController.bosses` (the same boss set the game itself uses to detect the end of the arena); fallback - iterating `HealthManager` entries with HP > 20
+- **Boss HP**, boss position and velocity. The boss is taken from `BossSceneController.bosses` (the same boss set the game itself uses to detect the end of the arena); fallback - iterating `HealthManager` entries with HP > 20. The arena is reported as a whole too: `arena_bosses` and `arena_alive` (how many members the set has, how many are up), `arena_hp` (their summed health) and `arena_detail` (`name:hp:dead` per member). The latched boss alone can sit at a health floor while the fight is decided by another member of that set, so the number that actually moves is visible instead of assumed
 - **State flags**: grounded, attack, dash, jump, fall, recoil, `boss_is_attacking`, `near_hazard`, `was_hit`, `is_dead`
 - **Monotonic counters**: `hit_counter` (hits taken) and `boss_damage_total` (total damage dealt to the boss)
 - **Boss death**: the `boss_dead` field - detected via the FSM state `Death Anim Start`, the `BossSceneController.OnBossesDead` event, `isDead`, and HP <= 0; after death `boss_hp` is pinned to 0
