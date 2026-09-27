@@ -121,39 +121,6 @@ def redirect_action(action, dx_to_boss, boss_open=False, aim_threshold=AIM_THRES
 #   open     Opened, Opened 2, Open Uuup, Stun In Air, Stun Land, Stun Fail,
 #            Recover, S Attack Recover
 #   dead     Death Anim Start, Death Open
-# How long an open boss may take no damage before the seek rule walks instead of swinging. At one
-# step per fresh frame this is about a second of the fight: long enough that a slow swing is not
-# mistaken for being stuck, short enough to matter in an open window that lasts seconds.
-SEEK_AFTER_FRAMES = 45
-
-# How far the hero may drift from the boss before it should turn round instead of sweeping on. The
-# coordinates are the game's own, and this is a starting value rather than a measured one.
-SEEK_DISTANCE = 3.0
-
-
-def seek_action(action, boss_open, idle_frames, dist_to_boss, dx_to_boss, facing_right,
-                idle_threshold=SEEK_AFTER_FRAMES, far_distance=SEEK_DISTANCE):
-    """Walks instead of swinging when an open boss is taking no damage.
-
-    A directional attack swings where it stands: it aims the nail but does not move the knight, and
-    the recoil of the hit pushes it back where it came from. An open False Knight therefore turns
-    into a swing on the spot, with the hero bouncing around the middle of a body that cannot be
-    hurt, while the part that bleeds lies to one side of it. Walking has no recoil, so while nothing
-    is landing the policy is overruled with a plain step: in the direction the knight already faces
-    (it approached the boss, so that is the way across the body), or back towards the boss if it has
-    drifted away from it entirely.
-    """
-    if not boss_open or idle_frames < idle_threshold:
-        return action
-    if dist_to_boss > far_distance:
-        if dx_to_boss > 0:
-            return ACTION_RIGHT
-        if dx_to_boss < 0:
-            return ACTION_LEFT
-        return action
-    return ACTION_RIGHT if facing_right > 0.5 else ACTION_LEFT
-
-
 def victory_bonus(base_reward, masks_left, max_masks):
     """A win is worth more the healthier it was won at.
 
