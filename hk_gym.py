@@ -13,7 +13,7 @@ from ai_environment import HollowKnightEnv
 from ai_controller import HollowKnightController
 from bosses import resolve_query
 from screen_capture import USE_SCREEN_CAPTURE
-from hk_features import damage_weight, victory_bonus, ACTION_COUNT, BossStateTracker, redirect_action
+from hk_features import damage_weight, victory_bonus, ACTION_COUNT, BossStateTracker, redirect_action, seek_action
 
 
 def _enable_precise_sleep():
@@ -130,6 +130,8 @@ class HollowKnightGym(gym.Env):
         self.last_boss_y = 0.0
         self.last_dist = 0.0
         self.last_dx_to_boss = 0.0
+        self.last_facing_right = 0.0
+        self._no_damage_frames = 0
         self.last_boss_open = False
         self.last_dy_to_boss = 0.0
         self.last_angle_to_boss = 0.0
@@ -465,6 +467,8 @@ class HollowKnightGym(gym.Env):
     def step(self, action):
         # Update 10: only "attack" is aimed at the boss, see hk_features.redirect_action.
         action = redirect_action(action, self.last_dx_to_boss, self.last_boss_open)
+        action = seek_action(action, self.last_boss_open, self._no_damage_frames,
+                           self.last_dist, self.last_dx_to_boss, self.last_facing_right)
         
         if action == self.current_action:
             self.hold_action_counter += 1
@@ -539,6 +543,9 @@ class HollowKnightGym(gym.Env):
         # damage is worth depends on whether the boss was open when it landed.
         damage_now = max(0.0, self._scene_damage - self._last_scene_damage)
         self._last_scene_damage = self._scene_damage
+        # How long an open boss has been taking nothing: the seek rule reads it to tell poking the
+        # body from actually fighting it (see hk_features.seek_action).
+        self._no_damage_frames = 0 if damage_now > 0 else self._no_damage_frames + 1
         self._weighted_damage += damage_weight(
             damage_now, boss_is_open, OPEN_WINDOW_DAMAGE_MULTIPLIER)
 
@@ -591,6 +598,7 @@ class HollowKnightGym(gym.Env):
         self.last_boss_y = current_boss_y
         self.last_dist = current_dist
         self.last_dx_to_boss = obs[IDX["dx_to_boss"]]
+        self.last_facing_right = obs[IDX["facing_right"]]
         self.last_boss_open = obs[IDX["boss_open"]] > 0.5
         self.last_dy_to_boss = obs[IDX["dy_to_boss"]]
         self.last_angle_to_boss = math.atan2(obs[IDX["dy_to_boss"]], obs[IDX["dx_to_boss"]])
