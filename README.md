@@ -223,7 +223,7 @@ Environment variables:
 All metrics that go to TensorBoard and are printed to the console are also mirrored to the text file **`logs/progress.txt`** (UTF-8, appended on every run - if training crashes, the progress already written is not lost):
 
 - a line `EPISODE ...` for each finished episode: the outcome (`outcome=victory` / `death` / `timeout`), reward, length, the victory counter and the win rate over a window of 100 episodes;
-- the metrics table after every rollout (`n_steps = 1024` steps) - exactly the block printed to the console: `custom/victories`, `custom/win_rate`, `custom/last100_*`, `reward_breakdown/*`, `rollout/*`, `train/*`. With `verbose=1` it is written by the Stable-Baselines3 logger itself through `HumanOutputFormat`; with `verbose=0` the values are collected by the callback.
+- the metrics table after every rollout (`n_steps = 8192` steps) - exactly the block printed to the console: `custom/victories`, `custom/win_rate`, `custom/last100_*`, `reward_breakdown/*`, `rollout/*`, `train/*`. With `verbose=1` it is written by the Stable-Baselines3 logger itself through `HumanOutputFormat`; with `verbose=0` the values are collected by the callback.
 
 Example:
 
@@ -275,6 +275,7 @@ python tests/run_pipe_harness.py                         # the whole pipe harnes
 
 - **Units** (`tests/test_bosses.py`) - the boss registry and `resolve_query`: lookup by number / scene / alias / exact title, the ambiguity rule (a partial match prefers the base fight over the Ascended/Radiant `_V` variant), plus the invariants that keep the menu honest: unique scenes and labels, aliases pointing at real scenes, `DEFAULT_GATE == door_dreamEnter`
 - **Registry parity** (`tests/test_registry_parity.py`) - reads `Mod/HK_AI_Mod/AiDataExporter.cs` and compares it with `bosses.py` entry by entry, in order: the mod's `BossRegistry`, `ExtraAliases`, `DEFAULT_BOSS_SCENE` and `DEFAULT_ENTRY_GATE`. The mod is the source of truth for what the game accepts, so a drift on either side (a boss added, renamed or lost in translation) is a failing test instead of a teleport into a scene the mod does not know
+- **Training configuration** (`tests/test_training_config.py`) - parses `train.py` (it cannot be imported: torch, vgamepad and the gym environment are not installed in CI) and checks the invariants that keep a night from being wasted: one update has to cover more than one fight, the discount must not look only ~100 steps ahead, the learning rate must not decay to zero inside a run, and a resumed model must be given the same hyperparameters as a fresh one (`PPO.load` applies its kwargs after the pickled data). `HK_TRAIN_PY` points the checks at another copy of the file, which is how the red case was reproduced
 - **Pipe harness** (`tests/run_pipe_harness.py`) - generates the registry the mock serves, builds it with `dotnet`, runs `--selftest-stuck` (a client that stops reading must not eat a slot: the stuck write is cancelled and the slot is freed) and then the 36 integration checks against the mock over real Win32 named pipes. One command instead of three: the mock exits as soon as its stdin reaches EOF, so the runner keeps that stdin open, waits for the mock to report its registry and shuts it down afterwards. Windows only
 - **CI** (`.github/workflows/ci.yml`) - on every push to `master`/`dev` and on every pull request: `ubuntu-latest` compiles every `.py` file (`compileall`, which also catches a broken encoding) and runs the units; `windows-latest` runs the pipe harness. The mod itself is not built in CI: its `.csproj` needs the game's `Assembly-CSharp.dll`, which is neither shipped nor downloadable
 
@@ -284,14 +285,14 @@ python tests/run_pipe_harness.py                         # the whole pipe harnes
 |----------|----------|
 | Algorithm | PPO (Stable-Baselines3) |
 | Policy | MlpPolicy, net_arch [256, 256] |
-| Learning rate | 3e-4 with linear decay |
-| n_steps | 1024 |
-| batch_size | 128 |
+| Learning rate | 3e-4, flat (a decaying schedule ends at zero before a run does) |
+| n_steps | 8192 |
+| batch_size | 256 |
 | n_epochs | 10 |
 | ent_coef | 0.01 |
 | clip_range | 0.2 |
 | gae_lambda | 0.95 |
-| gamma | 0.99 |
+| gamma | 0.995 |
 | max_grad_norm | 0.5 |
 | Observation normalization | VecNormalize, clip_obs 10 |
 | Reward normalization | enabled |
@@ -324,6 +325,7 @@ python tests/run_pipe_harness.py                         # the whole pipe harnes
 - `hk_pipe.py` (new) - the named-pipe client the whole Python side runs on: one shared client per process, background reader with auto-reconnect, one-shot events (`wait_for_status`)
 - `teleport.py` (new) - interactive boss selection and teleport: menu, `--list`, `--boss <query>`, `--restart`, `--warp`, `--train` (teleport and train right away); fallback for mod builds without the `boss`/`warp` commands
 - `train.py` - the `--boss` flag; **training files are laid out per boss automatically** (`models/ppo_hk/<scene>/`: checkpoints, `hk_model_final.zip`, `vecnormalize.pkl`); an old save from the root of `models/ppo_hk/` migrates to `GG_False_Knight/` on the first run
+- `train.py` - **Update 8: the PPO configuration**, after the 26-27.09 overnight run (550 episodes, 96 victories = 17.5 %, 2 033 664 steps) showed where the steps were going: `n_steps` 1024 -> 8192 and `batch_size` 128 -> 256 (an episode lasts ~1950 steps, so an update used to see half of a single fight and every gradient carried that fight's luck - the win rate swung between 4 % and 33 % per 100k steps without a trend); `gamma` 0.99 -> 0.995 (at ~75 steps/sec, 0.99 looks 1.3 s ahead against fights of 13-26 s, so the +1000 victory and -500 death rewards were discounted to nothing - `0.99^1000` is ~4e-5 - and only the per-step shaping was learned); and a flat learning rate of 3e-4 instead of `linear_schedule(3e-4)`, which is scaled to the current `learn()` call and therefore always ends at zero (the last hours of the night ran at `learning_rate 4.8e-07` with `approx_kl 3.7e-06` - a frozen policy and a burning clock). A resumed model gets the same values: `PPO.load` applies its kwargs *after* the pickled data, so without repeating them there a loaded model keeps training under its own old settings. The reward normalization discounts like the policy now too
 - `hk_gym.py` - `HK_BOSS_SCENE` accepts aliases and indices, `HK_ENTRY_GATE` added (the arena gate)
 - `deploy_mod.ps1` (new) - game lookup via the Steam registry, build and deployment of the DLL with the game closed
 
