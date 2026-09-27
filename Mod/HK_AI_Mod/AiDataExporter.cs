@@ -114,6 +114,11 @@ namespace HK_AI_Mod
         private const float FADE_STUCK_FADINGOUT_TIMEOUT = 1.0f;
         private bool _inMenuScene = true;
         private bool _bossDead = false;
+        // True when the death came from a signal about THIS fight (the arena reports every boss
+        // of the fight dead, the tracked boss itself is dead, its death animation started)
+        // rather than from the scene-wide HealthManager scan, which can latch on an enemy that
+        // is not the boss being tracked. Only a confirmed death may report boss_hp as zero.
+        private bool _bossDeadConfirmed = false;
         private BossSceneController _subscribedBsc = null;
         private float _watchdogTimer = 0f;
         private int _forcedEntryAttempts = 0;
@@ -309,6 +314,11 @@ namespace HK_AI_Mod
                     _restartPending = false;
                     _lastBossHpKnown = 0;
                     _bossDead = false;
+                    _bossDeadConfirmed = false;
+                    // A stamp that was already running before the load would be "expired" in the
+                    // new arena and force a fade while the game is fading in on its own.
+                    _heroFrozenSince = -1f;
+                    _fadeNonNormalHardSince = -1f;
                     _watchdogTimer = 2.5f;
                     _forcedEntryAttempts = 0;
                     _fadeNotNormalSince = -1f;
@@ -358,6 +368,7 @@ namespace HK_AI_Mod
         private void OnBossesDeadHandler()
         {
             _bossDead = true;
+            _bossDeadConfirmed = true;
             Log("[AI] Boss is dead (BossSceneController event)");
         }
 
@@ -479,6 +490,7 @@ namespace HK_AI_Mod
                 {
                     _aiPaused = false;
                     Time.timeScale = _savedTimeScale;
+                    ShiftStampsForPause(Time.unscaledTime - _aiPausedAt);
                     Log("[AI] Resumed" + (reason == null ? "" : " (" + reason + ")")
                         + ": time scale " + _savedTimeScale.ToString("F2", CultureInfo.InvariantCulture));
                 }
@@ -490,6 +502,20 @@ namespace HK_AI_Mod
         {
             return "{\"status\": \"" + status + "\", \"paused\": " + (_aiPaused ? 1 : 0)
                 + ", \"time_scale\": " + Time.timeScale.ToString("F2", CultureInfo.InvariantCulture) + "}";
+        }
+
+        // The transition watchdogs measure Time.unscaledTime — the clock that keeps running
+        // while the game is frozen (the pause backstop needs exactly that). Without shifting
+        // them, the freeze itself would look like a stuck fade or a stuck hero: the first tick
+        // after a pause longer than the watchdog timeout would fire a repair in the middle of
+        // the game's own fade. Moving the stamps forward keeps a state that was already old
+        // before the pause old (it is still repaired), while the paused time no longer counts.
+        private void ShiftStampsForPause(float pausedFor)
+        {
+            if (pausedFor <= 0f) return;
+            if (_heroFrozenSince >= 0f) _heroFrozenSince += pausedFor;
+            if (_fadeNotNormalSince >= 0f) _fadeNotNormalSince += pausedFor;
+            if (_fadeNonNormalHardSince >= 0f) _fadeNonNormalHardSince += pausedFor;
         }
 
         // Keeps the freeze and gives up on it if the trainer never comes back.
@@ -1144,7 +1170,12 @@ namespace HK_AI_Mod
             }
             catch (Exception e)
             {
+                // _restartPending has to fall with _restartRequested: it is cleared only by a
+                // scene change, and a failed forced transition never changes the scene. Left
+                // standing it makes TryRestart reject every later restart for the rest of the
+                // fight (a silent no-op) while the telemetry keeps claiming "restart_pending: 1".
                 _restartRequested = false;
+                _restartPending = false;
                 Log($"[AI] Deferred transition error: {e}");
             }
         }
@@ -1267,7 +1298,10 @@ namespace HK_AI_Mod
                 if (hero.cState != null && hero.cState.transitioning)
                     ReflectionHelper.CallMethod(hero, "FinishedEnteringScene", true, false);
 
-                if (Time.timeScale <= 0f) Time.timeScale = 1f;
+                // Staying frozen is the point of a pause: a warp must not lift it behind the
+                // trainer's back (OnTick drains commands before it checks the pause, so without
+                // this guard one live frame would run with "paused: 1" still being reported).
+                if (!_aiPaused && Time.timeScale <= 0f) Time.timeScale = 1f;
 
                 try
                 {
@@ -1702,15 +1736,28 @@ namespace HK_AI_Mod
                             BossSceneController bsc = BossSceneController.Instance;
                             if (bsc != null && bsc.bosses != null)
                             {
+                                // The fight is over when EVERY boss of the arena is down, not
+                                // when one of them is: Mantis Lords, Watcher Knights and the
+                                // phase fights keep the next one alive in the same list, and
+                                // latching on the first death ended such fights early.
+                                bool anyAlive = false;
+                                int arenaBosses = 0;
                                 foreach (HealthManager hm in bsc.bosses)
                                 {
                                     if (hm == null) continue;
-                                    if (hm.isDead || hm.hp <= 0)
+                                    arenaBosses++;
+                                    if (!hm.isDead && hm.hp > 0)
                                     {
-                                        _bossDead = true;
-                                        Log("[AI] Boss is dead (HealthManager.isDead)");
+                                        anyAlive = true;
                                         break;
                                     }
+                                }
+
+                                if (arenaBosses > 0 && !anyAlive)
+                                {
+                                    _bossDead = true;
+                                    _bossDeadConfirmed = true;
+                                    Log($"[AI] Boss is dead (all {arenaBosses} boss(es) of the arena)");
                                 }
                             }
                         }
@@ -1722,6 +1769,7 @@ namespace HK_AI_Mod
                         if (_currentBoss.hp <= 0 || _currentBoss.isDead)
                         {
                             _bossDead = true;
+                            _bossDeadConfirmed = true;
                             Log("[AI] Boss is dead (current HealthManager)");
                         }
                     }
@@ -1730,6 +1778,9 @@ namespace HK_AI_Mod
                     {
                         try
                         {
+                            // Scene-wide, so this one is only a suspicion: it may fire for an
+                            // enemy that has nothing to do with the fight, which is why it
+                            // does not count as a confirmed death (see _bossDeadConfirmed).
                             foreach (HealthManager hm in GameObject.FindObjectsOfType<HealthManager>())
                             {
                                 if (hm != null && hm.hp > 20 && (hm.isDead || hm.hp <= 0))
@@ -1743,10 +1794,10 @@ namespace HK_AI_Mod
                         catch (Exception) {}
                     }
 
-                    if (_bossDead)
+                    if (_bossDeadConfirmed || _currentBoss == null)
                         bossHp = 0;
-                    else if (_currentBoss != null)
-                        bossHp = _currentBoss.hp;
+                    else
+                        bossHp = Math.Max(0, _currentBoss.hp);
                     if (_lastBossHpKnown > bossHp)
                         _bossDamageTotal += _lastBossHpKnown - bossHp;
                     _lastBossHpKnown = bossHp;
@@ -1811,6 +1862,7 @@ namespace HK_AI_Mod
                                 if (!_bossDead && stateName == "Death Anim Start")
                                 {
                                     _bossDead = true;
+                                    _bossDeadConfirmed = true;
                                     Log("[AI] Boss is dead (FSM Death Anim Start)");
                                 }
                             }

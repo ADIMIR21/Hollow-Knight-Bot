@@ -34,7 +34,7 @@ jobs:
         run: python -m unittest discover -s tests -p "test_*.py" -v
 
   pipe-harness:
-    name: Named-pipe harness (mock mod, 36 checks)
+    name: Named-pipe harness (mock mod, integration checks)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4

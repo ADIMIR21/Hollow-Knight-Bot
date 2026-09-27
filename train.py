@@ -157,6 +157,7 @@ class GamePauseCallback(BaseCallback):
         super().__init__(verbose)
         self.vec_env = vec_env
         self._paused = False
+        self._pause_requested = False
 
     def _on_step(self) -> bool:
         # BaseCallback declares _on_step abstract: a subclass without it cannot be
@@ -164,9 +165,15 @@ class GamePauseCallback(BaseCallback):
         return True
 
     def _on_rollout_end(self) -> bool:
+        # "We asked" is tracked apart from "the mod confirmed": the command can reach the
+        # mod while its answer misses the confirmation window (a busy machine can eat the
+        # 2 s). resume() below must still lift the pause - otherwise the game stays frozen
+        # until the mod's own 120 s backstop and the next rollout is collected against a
+        # fight that does not move.
+        self._pause_requested = True
         self._paused = any(self.vec_env.env_method("pause_game"))
         if not self._paused and self.verbose >= 1:
-            print("[PAUSE] The game could not be paused (is the mod connected?)")
+            print("[PAUSE] The mod did not confirm the pause (the game keeps running).")
         return True
 
     def _on_rollout_start(self) -> bool:
@@ -178,9 +185,10 @@ class GamePauseCallback(BaseCallback):
         return True
 
     def resume(self) -> bool:
-        """Unfreezes the game if this callback is holding a pause."""
-        if not self._paused:
+        """Unfreezes the game if this callback asked for a pause."""
+        if not self._pause_requested:
             return False
+        self._pause_requested = False
         self._paused = False
         self.vec_env.env_method("resume_game")
         return True
@@ -476,6 +484,16 @@ def main():
     have_saved_model = os.path.exists(model_path)
 
     vec_env = load_compatible_vecnorm(base_vec_env, vecnorm_path)
+
+    # A pause left behind by a trainer that was killed cannot be lifted by the process that
+    # set it, and the mod only lifts it by itself after 120 s. Asking once before the first
+    # step is enough (both commands are idempotent, so a game that is not paused is
+    # unaffected).
+    try:
+        vec_env.env_method("resume_game")
+        print("[SYSTEM] Asked the mod to lift a pause left by a previous run.")
+    except Exception as e:
+        print(f"[SYSTEM] Could not ask the mod to resume: {e}")
 
     if have_saved_model:
         print(f"\n[SYSTEM] Save found: hk_model_final ({scene}). Loading...")

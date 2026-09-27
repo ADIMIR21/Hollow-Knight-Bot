@@ -166,6 +166,27 @@ class BossStateTrackerTests(unittest.TestCase):
         self.assertGreaterEqual(len(names), 30, names)
         self.assertEqual(names[-len(BOSS_STATE_FEATURES):], list(BOSS_STATE_FEATURES))
 
+        # The list above is only a promise until the vector itself is read: _get_obs is
+        # what the policy sees, so it has to build exactly these names in this order.
+        stats = source[source.index("stats = np.array([")::]
+        stats = stats[stats.index("np.array([") + len("np.array([")::]
+        stats = stats[:stats.index("]")]
+
+        built = []
+        without_comments = "\n".join(line.split("#", 1)[0] for line in stats.splitlines())
+        for item in without_comments.split(","):
+            item = item.strip()
+            if not item:
+                continue
+            if item.startswith("*"):
+                built.extend(BOSS_STATE_FEATURES)
+            else:
+                built.append(item)
+
+        self.assertEqual(
+            built, names, "the vector built in _get_obs does not match STAT_NAMES"
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

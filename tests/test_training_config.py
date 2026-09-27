@@ -36,10 +36,28 @@ TRAIN_PY = os.environ.get(
 FIGHT_STEPS = 1950
 STEPS_PER_SECOND = 75.0
 
+# hk_gym.py cannot be imported here (numpy, torch, the gamepad), but the episode cap it
+# enforces is what the worst case looks like: an update that covers two of those fights
+# sees more than one fight even when every episode runs into the cap.
+GYM_PY = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hk_gym.py"
+)
+
 
 def read_source():
     with open(TRAIN_PY, "r", encoding="utf-8") as handle:
         return handle.read()
+
+
+def read_gym_source():
+    with open(GYM_PY, "r", encoding="utf-8") as handle:
+        return handle.read()
+
+
+def episode_step_cap(source):
+    """The step cap hk_gym.py puts on one episode, or None."""
+    match = re.search(r"episode_step\s*>\s*([0-9]+)", source)
+    return int(match.group(1)) if match else None
 
 
 def module_number(source, name):
@@ -121,6 +139,17 @@ class TrainingConfigurationTest(unittest.TestCase):
             "BATCH_SIZE=%s is not a fraction of N_STEPS=%s" % (batch_size, n_steps),
         )
 
+        # The mean fight is the easy case: an episode that runs into the cap is longer.
+        cap = episode_step_cap(read_gym_source())
+        self.assertIsNotNone(cap, "the episode step cap could not be read from hk_gym.py")
+        self.assertGreaterEqual(
+            n_steps,
+            2 * cap,
+            "N_STEPS=%s covers less than two capped episodes (%s steps each): an update "
+            "collected from a single fight learns from that fight's luck"
+            % (n_steps, cap),
+        )
+
     def test_the_discount_keeps_a_useful_horizon(self):
         gamma = module_number(self.source, "GAMMA")
         self.assertIsNotNone(gamma, "GAMMA is missing from train.py")
@@ -136,11 +165,20 @@ class TrainingConfigurationTest(unittest.TestCase):
         self.assertLess(gamma, 1.0, "GAMMA must discount, or the critic is unbounded")
 
     def test_the_learning_rate_does_not_decay_to_zero(self):
-        self.assertFalse(
-            re.search(r"learning_rate\s*=\s*linear_schedule", self.source),
-            "a schedule is scaled to the current learn() call, so it always ends "
-            "at zero - that freezes the policy for the last hours of a night",
+        # Every binding site is checked, not one spelling of one schedule: a schedule is
+        # scaled to the current learn() call, so it always ends at zero and freezes the
+        # policy for the last hours of a night, whatever the schedule is called.
+        bindings = re.findall(r"learning_rate\s*=\s*([A-Za-z_][A-Za-z0-9_.]*)", self.source)
+        self.assertTrue(
+            bindings, "train.py has no learning_rate= binding to check"
         )
+        for binding in bindings:
+            self.assertEqual(
+                binding,
+                "constant_lr",
+                "learning_rate=%s: only the constant schedule is allowed, a decaying one "
+                "ends at zero" % binding,
+            )
         body = function_body(self.source, "constant_lr")
         self.assertIsNotNone(body, "constant_lr() is missing from train.py")
         after_signature = body.split(")", 1)[1] if ")" in body else body

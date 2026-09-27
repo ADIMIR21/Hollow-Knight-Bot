@@ -211,6 +211,7 @@ models/ppo_hk/
 
 - The model automatically loads the latest save from **its own** boss's folder (`models/ppo_hk/<scene>/hk_model_final.zip`) if it exists - training continues from where it left off
 - If a saved `vecnormalize.pkl` belongs to a different observation space - it is discarded and normalization starts from scratch
+- A model saved under an older observation space is not loaded either: the boss-state values were added to the vector (25 -> 30 numbers per frame), and a checkpoint whose space does not match is refused - that folder starts from scratch and says so on the console
 - Old files from the root of `models/ppo_hk/` (training from before the per-boss layout, the False Knight arena) are automatically moved to `models/ppo_hk/GG_False_Knight/` on the first run
 - First episode: training waits for the fight and teleports the bot to the arena itself (the scene is taken from `--boss` / `HK_BOSS_SCENE`)
 - From then on the loop is fully autonomous: fight -> victory/death -> fast restart via the mod
@@ -242,7 +243,11 @@ the next rollout begins, where the game is unfrozen again. The freeze itself is 
 (`pause`/`resume`), so the state is real and confirmed: `hk_gym.pause_game()` releases the
 buttons, sends the command and waits for the mod's event. A keyboard interrupt inside the update
 still unfreezes the game through the `finally` block, and if the process is killed outright the
-mod lifts the pause by itself after 120 s.
+mod lifts the pause by itself after 120 s. The resume is sent whenever a pause was requested, not
+only when the mod confirmed it (a busy machine can eat the confirmation window), a fresh run asks
+for one resume before its first step (a pause left behind by a killed trainer must not outlive
+it), and frozen time is not treated as a stuck fight: the transition watchdogs measure real time,
+so the paused interval is shifted out of their stamps.
 
 ### Training progress log
 
