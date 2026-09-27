@@ -23,7 +23,7 @@ import datetime
 import os
 import sys
 
-from progress_log import parse_journal, run_start, series
+from progress_log import parse_journal, run_start, run_starts, series
 
 JOURNAL = os.path.join("logs", "progress.txt")
 
@@ -48,8 +48,10 @@ def main():
     parser.add_argument("--journal", default=JOURNAL)
     parser.add_argument("--out", default=os.path.join("logs", "progress.png"))
     parser.add_argument("--all", action="store_true", help="draw every run in the journal")
-    parser.add_argument("--hours", type=float, default=3.0,
-                        help="how far back to draw when not using --all (default 3 hours)")
+    parser.add_argument("--runs", type=int, default=1,
+                        help="how many of the newest runs to draw (default 1)")
+    parser.add_argument("--hours", type=float, default=None,
+                        help="trim the drawn runs to the last N hours")
     parser.add_argument("--show", action="store_true", help="open a window as well as saving")
     args = parser.parse_args()
 
@@ -61,14 +63,17 @@ def main():
         return 1
 
     if not args.all and episodes:
-        # The newest run starts where the episode counter restarts, but a run can also carry on
-        # from an earlier one, so the time window is applied as well: the journal reaches back over
-        # days, and drawing all of it buries today's run in a corner.
-        start = run_start(episodes)
-        newest = max(stamp for stamp, _ in blocks if stamp)
-        cutoff = (datetime.datetime.strptime(newest, "%Y-%m-%d %H:%M:%S")
-                  - datetime.timedelta(hours=args.hours)).strftime("%Y-%m-%d %H:%M:%S")
-        first = max(episodes[start][0], cutoff)
+        # A run starts where the episode counter restarts. The newest one is drawn by default;
+        # --runs takes in more of them, which is what a stretch of restarts needs - and --hours
+        # then trims whatever was selected, so it can only ever cut, never widen.
+        starts = run_starts(episodes)
+        first_index = starts[max(0, len(starts) - max(1, args.runs))] if starts else 0
+        first = episodes[first_index][0]
+        if args.hours is not None:
+            newest = max(stamp for stamp, _ in blocks if stamp)
+            cutoff = (datetime.datetime.strptime(newest, "%Y-%m-%d %H:%M:%S")
+                      - datetime.timedelta(hours=args.hours)).strftime("%Y-%m-%d %H:%M:%S")
+            first = max(first, cutoff)
         blocks = [(stamp, values) for stamp, values in blocks if stamp >= first]
         episodes = [fight for fight in episodes if fight[0] >= first]
 

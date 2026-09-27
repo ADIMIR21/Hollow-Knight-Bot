@@ -300,8 +300,9 @@ Watch in real time: `Get-Content logs\progress.txt -Wait -Tail 40` (PowerShell).
 Draw the same history instead of reading it:
 
 ```bash
-python plot_progress.py             # one figure of the current run -> logs/progress.png
-python plot_progress.py --hours 8   # widen the window (default 3 hours)
+python plot_progress.py             # one figure of the newest run -> logs/progress.png
+python plot_progress.py --runs 3    # the three newest runs (default 1)
+python plot_progress.py --hours 2   # trim to the last two hours
 python plot_progress.py --all       # every run in the journal
 python plot_progress.py --show      # open a window as well as saving
 ```

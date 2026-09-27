@@ -74,6 +74,19 @@ def series(blocks, key):
     return [(stamp, values[key]) for stamp, values in blocks if key in values]
 
 
+def run_starts(episodes):
+    """Every index where a run begins, oldest first.
+
+    A run is delimited by its episode counter falling back to 1, which is what a fresh `train.py`
+    does. Index 0 always counts: the journal may open in the middle of a run.
+    """
+    starts = [0]
+    for index, (_, number, _, _, _) in enumerate(episodes):
+        if number == 1 and index > 0:
+            starts.append(index)
+    return starts
+
+
 def run_start(episodes):
     """Index of the first episode of the newest run.
 

@@ -10,7 +10,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from progress_log import parse_journal, run_start, series  # noqa: E402
+from progress_log import parse_journal, run_start, run_starts, series  # noqa: E402
 
 TABLE = """[2026-09-27 17:41:10] EPISODE #64 step=347195 outcome=death reward=7223.80 len=2324 | wins=3/64 win_rate(100)=0.047 death=0.953 timeout=0.000
 -----------------------------------------
@@ -75,6 +75,19 @@ class RunBoundaryTest(unittest.TestCase):
             "[2026-09-27 15:20:00] EPISODE #2 step=2 outcome=victory reward=3.0 len=30\n")
         self.assertEqual(run_start(episodes), 1)
         self.assertEqual([number for _, number, _, _, _ in episodes[run_start(episodes):]], [1, 2])
+
+
+    def test_every_run_start_is_reported(self):
+        _, episodes = parse_journal(
+            "[2026-09-27 15:00:00] EPISODE #9 step=100 outcome=death reward=1.0 len=10\n"
+            "[2026-09-27 15:10:00] EPISODE #1 step=1 outcome=death reward=2.0 len=20\n"
+            "[2026-09-27 15:20:00] EPISODE #2 step=2 outcome=victory reward=3.0 len=30\n"
+            "[2026-09-27 15:30:00] EPISODE #1 step=1 outcome=death reward=4.0 len=40\n")
+        self.assertEqual(run_starts(episodes), [0, 1, 3])
+        # The last N runs is what the plotter draws, so the arithmetic has to be right.
+        starts = run_starts(episodes)
+        self.assertEqual(starts[-1], 3)
+        self.assertEqual(starts[max(0, len(starts) - 3)], 0)
 
 
 if __name__ == "__main__":
