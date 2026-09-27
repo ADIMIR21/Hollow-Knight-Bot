@@ -130,6 +130,7 @@ class HollowKnightGym(gym.Env):
         self.last_boss_y = 0.0
         self.last_dist = 0.0
         self.last_dx_to_boss = 0.0
+        self.last_boss_open = False
         self.last_dy_to_boss = 0.0
         self.last_angle_to_boss = 0.0
         self.episode_step = 0
@@ -463,7 +464,7 @@ class HollowKnightGym(gym.Env):
 
     def step(self, action):
         # Update 10: only "attack" is aimed at the boss, see hk_features.redirect_action.
-        action = redirect_action(action, self.last_dx_to_boss)
+        action = redirect_action(action, self.last_dx_to_boss, self.last_boss_open)
         
         if action == self.current_action:
             self.hold_action_counter += 1
@@ -590,6 +591,7 @@ class HollowKnightGym(gym.Env):
         self.last_boss_y = current_boss_y
         self.last_dist = current_dist
         self.last_dx_to_boss = obs[IDX["dx_to_boss"]]
+        self.last_boss_open = obs[IDX["boss_open"]] > 0.5
         self.last_dy_to_boss = obs[IDX["dy_to_boss"]]
         self.last_angle_to_boss = math.atan2(obs[IDX["dy_to_boss"]], obs[IDX["dx_to_boss"]])
         

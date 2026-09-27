@@ -73,7 +73,7 @@ ATTACK_ACTIONS = (ACTION_ATTACK, ACTION_JUMP_ATTACK, ACTION_DASH_ATTACK,
 AIM_THRESHOLD = 0.3
 
 
-def redirect_action(action, dx_to_boss, aim_threshold=AIM_THRESHOLD):
+def redirect_action(action, dx_to_boss, boss_open=False, aim_threshold=AIM_THRESHOLD):
     """Aims the plain attack at the boss; every other action is left alone.
 
     Update 10. Before it, all five attack actions were rewritten to 8 or 9
@@ -83,6 +83,18 @@ def redirect_action(action, dx_to_boss, aim_threshold=AIM_THRESHOLD):
     neither skill could ever happen and neither could be learned. Only "attack"
     (4) is aimed now, which is also what the ppo action table in README.md says.
     """
+    if boss_open and action in ATTACK_ACTIONS:
+        # While the boss is open its body takes no damage: the part that can be hurt lies off to
+        # one side of it, so a swing that stays put keeps hitting armour for nothing - which is
+        # exactly what the policy does, standing at the body and poking it. During the open window
+        # every attack collapses into a swing that also moves towards the boss, so the hero is
+        # carried across the body until it runs into the part that bleeds. Update 10 warns against
+        # rewriting the attack buttons in general, because that threw the jump and the dash away;
+        # while the boss is open neither has anything to do, so nothing is lost by doing it here.
+        if dx_to_boss > 0:
+            return ACTION_RIGHT_ATTACK
+        if dx_to_boss < 0:
+            return ACTION_LEFT_ATTACK
     if action != ACTION_ATTACK:
         return action
     if dx_to_boss > aim_threshold:
