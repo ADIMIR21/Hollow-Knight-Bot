@@ -436,12 +436,19 @@ namespace AiTrainHK
             // arrives. InputHandler keeps the movement vector in fields of its own, so it is
             // written here too, after the game has already computed its own value for this frame -
             // which is why this runs from the hero update hook rather than an earlier point.
-            handler.inputX = (id == 1 || id == 8 || id == 10 || id == 12) ? -1f
-                           : (id == 2 || id == 9 || id == 11 || id == 13) ? 1f
-                           : 0f;
-            handler.inputY = (id == 14 || id == 18) ? 1f
-                           : (id == 16) ? -1f
-                           : 0f;
+            // Only while a command is actually held: writing zero on every frame, held command or
+            // not, also overwrites whatever the player does on the keyboard, and the hero then
+            // cannot be moved by hand at all. With no command the axis is left exactly as the
+            // game computed it.
+            if (id != 0)
+            {
+                handler.inputX = (id == 1 || id == 8 || id == 10 || id == 12) ? -1f
+                               : (id == 2 || id == 9 || id == 11 || id == 13) ? 1f
+                               : 0f;
+                handler.inputY = (id == 14 || id == 18) ? 1f
+                               : (id == 16) ? -1f
+                               : 0f;
+            }
 
             Commit(a.left,   id == 1 || id == 8 || id == 10 || id == 12, tick);
             Commit(a.right,  id == 2 || id == 9 || id == 11 || id == 13, tick);
