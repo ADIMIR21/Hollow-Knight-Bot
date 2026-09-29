@@ -20,6 +20,46 @@ Console.WriteLine($"Types in assembly: {md.TypeDefinitions.Count}");
 // A discovery mode: print every type whose full name contains the given substring. The type probe
 // below can only look for names it is told, and the game's own classes are in the global namespace
 // with names nobody can guess, so this is how they are found in the first place.
+// Where a field is written and where it is read, across the whole assembly. The type probe above
+// prints what a type holds; this answers the next question - which code touches one of those fields
+// and in which direction. The pair is what a diagnosis actually needs. Field tokens are scanned
+// straight out of the IL bytes the same way the stub check does it: 0x7D is stfld (a write), 0x7B is
+// ldfld and 0x7C is ldflda (reads).
+if (args.Length > 1 && args[1] == "--field")
+{
+    string wantField = args.Length > 2 ? args[2] : "";
+    string wantType = args.Length > 3 ? args[3] : "";
+    foreach (TypeDefinitionHandle tdh in md.TypeDefinitions)
+    {
+        TypeDefinition td = md.GetTypeDefinition(tdh);
+        string tname = md.GetString(td.Name);
+        string nsName = md.GetString(td.Namespace);
+        string full = nsName.Length == 0 ? tname : nsName + "." + tname;
+        if (wantType.Length > 0 && !tname.Equals(wantType, StringComparison.Ordinal)) continue;
+        foreach (MethodDefinitionHandle mh in td.GetMethods())
+        {
+            MethodDefinition m = md.GetMethodDefinition(mh);
+            if (m.RelativeVirtualAddress == 0) continue;
+            MethodBodyBlock body;
+            try { body = pe.GetMethodBody(m.RelativeVirtualAddress); } catch { continue; }
+            byte[] il = body.GetILBytes();
+            if (il == null) continue;
+            int writes = 0, reads = 0;
+            for (int i = 0; i < il.Length - 4; i++)
+            {
+                byte op = il[i];
+                if (op != 0x7B && op != 0x7C && op != 0x7D) continue;
+                string tn = ResolveToken(md, BitConverter.ToInt32(il, i + 1));
+                string bare = tn.Contains('(') ? tn.Substring(0, tn.IndexOf('(')) : tn;
+                if (!bare.EndsWith("." + wantField, StringComparison.Ordinal) && !bare.Equals(wantField, StringComparison.Ordinal)) continue;
+                if (op == 0x7D) writes++; else reads++;
+            }
+            if (writes > 0 || reads > 0)
+                Console.WriteLine($"  {full}.{md.GetString(m.Name)}  writes={writes} reads={reads}");
+        }
+    }
+    return;
+}
 if (args.Length > 1 && args[1] == "--list")
 {
     string needle = args.Length > 2 ? args[2] : "";
@@ -125,6 +165,11 @@ static string ResolveToken(MetadataReader md, int token)
         EntityHandle handle = MetadataTokens.EntityHandle(token);
         switch (handle.Kind)
         {
+            case HandleKind.FieldDefinition:
+            {
+                FieldDefinition fd = md.GetFieldDefinition((FieldDefinitionHandle)handle);
+                return md.GetString(fd.Name);
+            }
             case HandleKind.MemberReference:
                 MemberReference mr = md.GetMemberReference((MemberReferenceHandle)handle);
                 string pars = "";
