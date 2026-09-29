@@ -56,3 +56,24 @@ dotnet run --project tests/mono_il/mono_il.csproj -- `
 If you need a different API (sockets, `MemoryMappedFile`, `Stopwatch`) — plug in the
 required assembly and type name. Remember: the limitation here is on the Mono side,
 not the mod's, and the only ways around it are P/Invoke or a different API class.
+
+## Listing types, fields and visibility
+
+The probe only ever looks at types it is told by name, so finding an unknown class means listing
+first:
+
+```powershell
+# every type whose full name contains the substring, case-insensitive
+dotnet run --project tests/mono_il/mono_il.csproj -- "...\Assembly-CSharp.dll" --list Input
+
+# one type: its fields, its methods, the visibility of each, and what the IL does
+dotnet run --project tests/mono_il/mono_il.csproj -- "...\Assembly-CSharp.dll" InputHandler
+```
+
+A type filter widens the probe to every namespace; without one it stays on `System.IO.Pipes`,
+which is what the tool was written for. Both were needed to find the game's input classes:
+`InputHandler` and `HeroActions` are plain types in the global namespace, so the old hard-coded
+namespace filter hid them no matter how they were named.
+
+The visibility column is what decides whether the mod can call something directly - in
+`OneAxisInputControl`, `CommitWithState` is `public` while `PrepareForUpdate` is `internal`.

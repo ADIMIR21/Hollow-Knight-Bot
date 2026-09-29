@@ -17,18 +17,41 @@ MetadataReader md = pe.GetMetadataReader();
 
 Console.WriteLine($"File: {path}");
 Console.WriteLine($"Types in assembly: {md.TypeDefinitions.Count}");
+// A discovery mode: print every type whose full name contains the given substring. The type probe
+// below can only look for names it is told, and the game's own classes are in the global namespace
+// with names nobody can guess, so this is how they are found in the first place.
+if (args.Length > 1 && args[1] == "--list")
+{
+    string needle = args.Length > 2 ? args[2] : "";
+    foreach (TypeDefinitionHandle h in md.TypeDefinitions)
+    {
+        TypeDefinition t = md.GetTypeDefinition(h);
+        string nsName = md.GetString(t.Namespace);
+        string full = nsName.Length == 0 ? md.GetString(t.Name) : nsName + "." + md.GetString(t.Name);
+        if (full.Contains(needle, StringComparison.OrdinalIgnoreCase))
+            Console.WriteLine("  " + full);
+    }
+    return;
+}
 
 foreach (TypeDefinitionHandle tdh in md.TypeDefinitions)
 {
     TypeDefinition td = md.GetTypeDefinition(tdh);
     string ns = md.GetString(td.Namespace);
     string name = md.GetString(td.Name);
-    if (ns != "System.IO.Pipes") continue;
+    if (wantedTypes.Length == 0 && ns != "System.IO.Pipes") continue;
     if (wantedTypes.Length > 0 && !wantedTypes.Contains(name)) continue;
 
     Console.WriteLine();
     Console.WriteLine($"=== {ns}.{name} ===");
-    var provider = new TypeNameProvider();
+    foreach (FieldDefinitionHandle fh in td.GetFields())
+    {
+        FieldDefinition f = md.GetFieldDefinition(fh);
+        string ftype;
+        try { ftype = f.DecodeSignature(new TypeNameProvider(), null); }
+        catch { ftype = "?"; }
+        Console.WriteLine($"  field {ftype} {md.GetString(f.Name)}");
+    }    var provider = new TypeNameProvider();
     foreach (MethodDefinitionHandle mh in td.GetMethods())
     {
         MethodDefinition m = md.GetMethodDefinition(mh);
@@ -41,11 +64,22 @@ foreach (TypeDefinitionHandle tdh in md.TypeDefinitions)
         }
         catch (Exception e) { pars = "? (" + e.GetType().Name + ")"; }
 
-        Console.WriteLine($"  {mname}({pars})");
+        Console.WriteLine($"  {Vis(m)} {mname}({pars})");
         Console.WriteLine($"      -> {StubKind(pe, md, m)}");
     }
 }
 
+static string Vis(MethodDefinition m)
+{
+    var a = m.Attributes;
+    string access = (a & System.Reflection.MethodAttributes.Public) != 0 ? "public"
+        : (a & System.Reflection.MethodAttributes.Assembly) != 0 ? "internal"
+        : (a & System.Reflection.MethodAttributes.Family) != 0 ? "protected"
+        : (a & System.Reflection.MethodAttributes.Private) != 0 ? "private"
+        : "other";
+    bool isStatic = (a & System.Reflection.MethodAttributes.Static) != 0;
+    return access + (isStatic ? " static" : "");
+}
 static string StubKind(PEReader pe, MetadataReader md, MethodDefinition m)
 {
     if (m.RelativeVirtualAddress == 0) return "no body (extern/abstract)";

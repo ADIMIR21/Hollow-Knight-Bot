@@ -8,6 +8,7 @@ using System.Threading;
 using HKPipeInterop;
 using UnityEngine;
 using Modding;
+using InControl;
 
 namespace AiTrainHK
 {
@@ -399,8 +400,43 @@ namespace AiTrainHK
             TryPerformPendingTransition();
             TransitionWatchdogTick(unscaledDelta);
             FadeWatchdogTick();
+            ApplyHeldAction();
         }
 
+        // The bot's buttons used to come from an emulated gamepad built on the Python side, which
+        // left the game bound to a dead controller whenever the trainer was killed. The hero is
+        // driven through InControl's own actions instead: committing a state on a PlayerAction is
+        // the public path InControl uses for merging input (read out of the shipped assembly by
+        // the IL probe in tests/mono_il), and it has to be re-committed every frame, because the
+        // input manager re-reads its devices each update and a single commit is overwritten.
+        // The ids mirror the action table in hk_features.py; tests/test_action_wire.py compares
+        // this list against that table so the two cannot drift apart.
+        private int _heldAction;
+
+        private void ApplyHeldAction()
+        {
+            InputHandler handler = InputHandler.Instance;
+            if (handler == null || handler.inputActions == null) return;
+            HeroActions a = handler.inputActions;
+            ulong tick = InputManager.CurrentTick;
+            int id = _heldAction;
+
+            Commit(a.left,   id == 1 || id == 8 || id == 10 || id == 12, tick);
+            Commit(a.right,  id == 2 || id == 9 || id == 11 || id == 13, tick);
+            Commit(a.up,     id == 14 || id == 18, tick);
+            Commit(a.down,   id == 16, tick);
+            Commit(a.jump,   id == 3 || id == 6 || id == 10 || id == 11 || id == 15, tick);
+            Commit(a.attack, id == 4 || id == 6 || id == 7 || id == 8 || id == 9 || id == 14 || id == 16, tick);
+            Commit(a.dash,   id == 5 || id == 7 || id == 12 || id == 13 || id == 15, tick);
+            Commit(a.focus,  id == 17 || id == 18, tick);
+        }
+
+        private static void Commit(PlayerAction action, bool pressed, ulong tick)
+        {
+            if (action == null) return;
+            if (pressed) action.CommitWithState(true, tick, 1f);
+            else action.ClearInputState();
+        }
         private void DrainCommands()
         {
             while (_incomingCommands.TryDequeue(out string line))
@@ -465,6 +501,14 @@ namespace AiTrainHK
                     TryRestart();
                     break;
 
+                // "action <id>" - press the hero's buttons through the game's own input, so no
+                // controller is needed on the Python side. The id indexes the same table the
+                // Python action set uses, and the state is held until the next command.
+                case "action":
+                    if (parts.Length >= 2 &&
+                        int.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out int heldActionId))
+                        _heldAction = heldActionId;
+                    break;
                 default:
                     Log($"[AI] Unknown command: '{line}'");
                     PublishEvent(CommandErrorJson(line, "unknown command"));
