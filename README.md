@@ -47,7 +47,7 @@ Telemetry contains a `scene` field (the current scene) - so Python and the human
 
 | File | Purpose |
 |------|---------|
-| `ai_controller.py` | Xbox 360 gamepad emulation via `vgamepad` (19 discrete actions); sends restart/scene/gate commands into the mod's pipe |
+| `ai_controller.py` | The bot's hands: 19 discrete actions, sent to the mod's pipe as `action <id>` (`HK_INPUT=pipe`) or emulated on an Xbox 360 gamepad via `vgamepad` (`HK_INPUT=pad`, the default) |
 | `screen_capture.py` | Game screen capture via `mss` + auto-focus on the Hollow Knight window |
 | `ai_environment.py` | The environment: combines the video stream and telemetry; steps are synced by the pipe message counter (`seq`), so there is no file polling |
 | `hk_pipe.py` | **Named-pipe client** for the mod: background reader with auto-reconnect, `get_telemetry()`, `send_command()`, one-shot events (`wait_for_status`), one shared client per process |

@@ -1,3 +1,4 @@
+import os
 import vgamepad as vg
 import time
 
@@ -8,11 +9,13 @@ DEFAULT_ENTRY_GATE = "door_dreamEnter"
 
 class HollowKnightController:
     def __init__(self, pipe=None):
-        print("[CONTROLLER] Connecting the gamepad...")
-        self.gamepad = vg.VX360Gamepad()
+        self.use_pipe_input = os.environ.get("HK_INPUT", "pad").strip().lower() == "pipe"
+        if not self.use_pipe_input:
+            print("[CONTROLLER] Connecting the gamepad...")
+        self.gamepad = None if self.use_pipe_input else vg.VX360Gamepad()
         
         time.sleep(2.0)
-        print("[CONTROLLER] Xbox 360 gamepad connected!")
+        if not self.use_pipe_input: print("[CONTROLLER] Xbox 360 gamepad connected!")
         
         # Update 4: commands (restart/scene/gate) go into the mod pipe,
         # not into %TEMP% files. The pipe client is shared with ai_environment.
@@ -68,6 +71,10 @@ class HollowKnightController:
         return sent
 
     def set_action(self, action_id):
+        if self.use_pipe_input:
+            if self.pipe is not None:
+                self.pipe.send_command("action %d" % action_id)
+            return
             self.gamepad.left_joystick_float(x_value_float=0.0, y_value_float=0.0)
             for btn in self.buttons.values():
                 self.gamepad.release_button(button=btn)
@@ -119,6 +126,10 @@ class HollowKnightController:
             self.gamepad.update()
 
     def reset_all(self):
+        if self.use_pipe_input:
+            if self.pipe is not None:
+                self.pipe.send_command("action 0")
+            return
         self.gamepad.left_joystick_float(x_value_float=0.0, y_value_float=0.0)
         for btn in self.buttons.values():
             self.gamepad.release_button(button=btn)

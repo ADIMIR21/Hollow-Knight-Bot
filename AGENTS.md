@@ -171,7 +171,7 @@ python tests/run_pipe_harness.py     # builds the mock, runs --selftest-stuck, t
   "the mod did not respond within 20 s" (no pipe at all), so redeploy before debugging.
 * Training: `python train.py [--boss <query>] [--entry-gate <gate>]`. Environment knobs:
   `HK_BOSS_SCENE` (scene, alias or index), `HK_ENTRY_GATE`, `HK_VICTORY_FRAMES` (default 3),
-  `HK_FRAME_SKIP` (4), `HK_FRAME_STACK` (4), `HK_PIPE_NAME` (default `hk_ai_mod`).
+  `HK_FRAME_SKIP` (4), `HK_FRAME_STACK` (4), `HK_PIPE_NAME` (default `hk_ai_mod`), `HK_INPUT` (default `pad`; `pipe` drives the hero through the mod's own input instead of the emulated gamepad).
 * Quick checks without training: `python ai_receiver.py` (live telemetry, a second client),
   `python teleport.py --verify` (Python and mod registries compared over the pipe),
   `python plot_progress.py` (draw `logs/progress.txt` - reward, wins, fight length, entropy).

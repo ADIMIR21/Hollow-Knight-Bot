@@ -190,6 +190,10 @@ namespace hkpipesim
                 case "bosses":
                     PublishEvent(ReplaceTargetScene(_registryJson));
                     break;
+                // "action <id>" - the mod presses the hero's buttons through the game's own
+                // input and answers nothing, so the mock has to stay just as quiet.
+                case "action":
+                    break;
                 case "warp":
                     Console.WriteLine($"[mock] warp to gate {_targetGate}");
                     break;

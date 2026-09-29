@@ -101,6 +101,14 @@ before = client.get_status_seq("command_error")
 bosses.request_boss("No_Such_Boss_Query")
 ev = client.wait_for_status("command_error", timeout=5.0, after_seq=before)
 check("command_error received", ev is not None, ev)
+print("\n[7] action <id> is a known command and answers nothing")
+# The mod presses the hero's buttons through the game's own input on this command and sends no
+# event of its own, so the only thing the harness can check is that it is not rejected - which is
+# exactly what a mock missing the command would do.
+before = client.get_status_seq("command_error")
+client.send_command("action 4")
+ev = client.wait_for_status("command_error", timeout=2.0, after_seq=before)
+check("action is not rejected as unknown", ev is None, ev)
 check("event did not replace telemetry",
       (client.get_telemetry() or {}).get("event") is None
       and (client.get_telemetry() or {}).get("status") == "fight",
