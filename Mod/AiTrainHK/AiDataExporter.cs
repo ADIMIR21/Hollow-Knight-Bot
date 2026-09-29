@@ -452,10 +452,10 @@ namespace AiTrainHK
                                : 0f;
             }
 
-            Commit(a.left,   id == 1 || id == 8 || id == 10 || id == 12, tick);
-            Commit(a.right,  id == 2 || id == 9 || id == 11 || id == 13, tick);
-            Commit(a.up,     id == 14 || id == 18, tick);
-            Commit(a.down,   id == 16, tick);
+            CommitAxis(a.left,   id == 1 || id == 8 || id == 10 || id == 12, tick);
+            CommitAxis(a.right,  id == 2 || id == 9 || id == 11 || id == 13, tick);
+            CommitAxis(a.up,     id == 14 || id == 18, tick);
+            CommitAxis(a.down,   id == 16, tick);
             Commit(a.jump,   id == 3 || id == 6 || id == 10 || id == 11 || id == 15, tick);
             Commit(a.attack, id == 4 || id == 6 || id == 7 || id == 8 || id == 9 || id == 14 || id == 16, tick);
             Commit(a.dash,   id == 5 || id == 7 || id == 12 || id == 13 || id == 15, tick);
@@ -486,6 +486,15 @@ namespace AiTrainHK
             self.inputY = (id == 14 || id == 18) ? 1f
                         : (id == 16) ? -1f
                         : 0f;
+        }
+        // An axis has to be committed as a value, not as a state. The hero's buttons answer to the
+        // action's State - which is why jump, dash and attack all worked through a state commit -
+        // but its direction is read from the value, and a state-only commit leaves that at zero,
+        // so the hero neither moves nor turns. InControl treats a pressed button as the value 1,
+        // so each direction is committed at full force.
+        private static void CommitAxis(PlayerAction action, bool pressed, ulong tick)
+        {
+            if (pressed) action.CommitWithValue(1f, tick, Time.deltaTime);
         }
         private static void Commit(PlayerAction action, bool pressed, ulong tick)
         {
