@@ -34,7 +34,7 @@ WORDS = {
 
 # A line of the mod's ApplyHeldAction, e.g.
 #     Commit(a.jump,   id == 3 || id == 6 || id == 10, tick);
-COMMIT_LINE = re.compile(r"Commit\(a\.(\w+),\s*(.+?),\s*tick\);")
+COMMIT_LINE = re.compile(r"Commit(?:Axis)?\(a\.(\w+),\s*(.+?),\s*tick\);")
 ID_TERM = re.compile(r"id\s*==\s*(\d+)")
 
 
