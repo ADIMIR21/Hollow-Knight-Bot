@@ -299,6 +299,8 @@ class RewardEconomicsTest(unittest.TestCase):
     # Observed in live telemetry: Godhome's False Knight has 260 hit points and the knight
     # carries 9 masks (the probe recorded boss_hp 260 with hp/max_hp 9).
     BOSS_HP = 260
+    # Also from live telemetry: an uncharged nail hit takes 32 of those hit points.
+    NAIL_HIT_HP = 32
     KNIGHT_MASKS = 9
 
     def setUp(self):
@@ -312,6 +314,7 @@ class RewardEconomicsTest(unittest.TestCase):
             "VICTORY_REWARD",
             "DEATH_PENALTY",
             "STEP_PENALTY",
+            "OPEN_WINDOW_DAMAGE_MULTIPLIER",
             "EPISODE_STEP_LIMIT",
         ):
             value = module_number(self.gym, name)
@@ -352,34 +355,62 @@ class RewardEconomicsTest(unittest.TestCase):
         numbers = self.reward_numbers()
         one_mask = numbers["HEALTH_PENALTY_PER_MASK"]
         # Five per cent of the boss's bar, expressed in the units the damage reward pays in.
-        five_percent = 0.05 * self.BOSS_HP * numbers["DAMAGE_REWARD_PER_HP"]
+        one_hit = self.NAIL_HIT_HP * numbers["DAMAGE_REWARD_PER_HP"]
         self.assertGreaterEqual(
             one_mask,
-            five_percent,
-            "a mask costs %.1f, i.e. %.1f boss hit points, so standing inside an attack to land "
+            one_hit,
+            "a mask costs %.1f while one nail hit pays %.1f, so standing inside an attack to land "
             "one more hit is the better trade - that is the bot that tanks everything"
-            % (one_mask, one_mask / numbers["DAMAGE_REWARD_PER_HP"]),
+            % (one_mask, one_hit),
+        )
+
+    def test_a_mask_stays_cheaper_than_a_hit_inside_the_window(self):
+        """The other end of the same trade: the stunned window is where the fight is finished.
+
+        A price that outweighs what the window pays teaches the policy to leave rather than
+        commit, so the mask has to sit between an ordinary hit and an open-window one.
+        """
+        numbers = self.reward_numbers()
+        one_mask = numbers["HEALTH_PENALTY_PER_MASK"]
+        open_hit = (
+            self.NAIL_HIT_HP
+            * numbers["DAMAGE_REWARD_PER_HP"]
+            * numbers["OPEN_WINDOW_DAMAGE_MULTIPLIER"]
+        )
+        self.assertLess(
+            one_mask,
+            open_hit,
+            "a mask costs %.1f while the same hit inside the stunned window pays %.1f: the window "
+            "is the only place this fight can be finished, and pricing the mask above it teaches "
+            "the policy to hover outside" % (one_mask, open_hit),
         )
 
     def test_attacking_is_worth_more_than_not_attacking(self):
         numbers = self.reward_numbers()
         passive = -numbers["STEP_PENALTY"] * numbers["EPISODE_STEP_LIMIT"]
-        trade = (
+        # A win is the damage plus the bonus, and hk_features.victory_bonus pays twice
+        # VICTORY_REWARD for a bar carried out whole. Leaving it out is how this check came to
+        # compare half a reward: the win looked like damage alone.
+        win = (
             numbers["DAMAGE_REWARD_PER_HP"] * self.BOSS_HP
+            + 2.0 * numbers["VICTORY_REWARD"]
+        )
+        trade = (
+            win
             - numbers["DEATH_PENALTY"]
             - numbers["HEALTH_PENALTY_PER_MASK"] * self.KNIGHT_MASKS
         )
         self.assertGreater(
             trade,
             passive,
-            "trading a full kill for a death pays %.1f while refusing to engage pays %.1f: a "
+            "trading a full win for a death pays %.1f while refusing to engage pays %.1f: a "
             "reward that punishes dying harder than it pays for winning teaches the policy to "
             "run away instead" % (trade, passive),
         )
 
     def test_a_full_kill_out_pays_the_whole_health_bar(self):
         numbers = self.reward_numbers()
-        kill = numbers["DAMAGE_REWARD_PER_HP"] * self.BOSS_HP
+        kill = numbers["DAMAGE_REWARD_PER_HP"] * self.BOSS_HP + 2.0 * numbers["VICTORY_REWARD"]
         health = numbers["HEALTH_PENALTY_PER_MASK"] * self.KNIGHT_MASKS
         self.assertGreater(
             kill,

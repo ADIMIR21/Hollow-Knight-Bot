@@ -79,16 +79,18 @@ VICTORY_CONFIRM_FRAMES = max(1, int(os.environ.get("HK_VICTORY_FRAMES", "3")))
 #   * every mask the knight loses costs HEALTH_PENALTY_PER_MASK. This is the number that decides
 #     whether the policy dodges or tanks: at 10 the whole health bar was cheaper than 1% of the
 #     boss's, so standing inside an attack to land a hit was always the better trade. At 200 a
-#     mask costs as much as 13 boss hit points, i.e. a mistake costs more than the hit it buys;
+#     mask still cost less than the nail hit it buys: an uncharged hit takes 32 of the boss's
+#     260, so it pays 480, and tanking went on paying. At 1000 a mask outweighs any single hit
+#     landed outside the stunned window and stays below what the same hit pays inside it;
 #   * the outcomes outweigh the dense part on purpose: the boss dying pays VICTORY_REWARD, the
-#     knight dying costs DEATH_PENALTY (and, through the mask term, the whole health bar);
+#     knight dying costs DEATH_PENALTY (and, through the mask term, the whole health bar). The win has to outbid the mask term, or holding the bar beats killing the boss: with a mask at 800 the whole bar is 7200, so the kill is paid 3900 of damage plus 4000 of bonus;
 #   * every step costs STEP_PENALTY, so a fight that drags on is never free.
 #
 # GAMMA in train.py has to reach the end of such a fight (see test_reward_economics.py), and the
 # whole set is fingerprinted into the checkpoint folder (hk_run_config.py): changing one of them
 # makes an old model and its normalization statistics meaningless rather than resumable.
 DAMAGE_REWARD_PER_HP = 15.0
-HEALTH_PENALTY_PER_MASK = 200.0
+HEALTH_PENALTY_PER_MASK = 800.0
 # Damage that lands while the boss is open is worth this much more than the same damage outside
 # the window. The stunned window is the only place this fight can be finished, and paying the same
 # for a hit anywhere made the policy hover instead of committing (see hk_features.damage_weight).
@@ -97,7 +99,7 @@ OPEN_WINDOW_DAMAGE_MULTIPLIER = 3.0
 # base reward is paid at zero masks and twice that at full health (hk_features.victory_bonus). The
 # payout itself stays VICTORY_REWARD - this is the hero's capacity, not a reward knob.
 HERO_MAX_MASKS = 9.0
-VICTORY_REWARD = 1000.0
+VICTORY_REWARD = 4000.0
 DEATH_PENALTY = 500.0
 STEP_PENALTY = 0.05
 EPISODE_STEP_LIMIT = 3000
