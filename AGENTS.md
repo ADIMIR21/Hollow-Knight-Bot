@@ -145,8 +145,11 @@ python tests/run_pipe_harness.py     # builds the mock, runs --selftest-stuck, t
 * Windows. Python 3.11+ with the dependencies from `requirements.txt` (needed for training, not
   for the tests). .NET SDK for the harness and the mod (the projects use
   `RollForward=LatestMajor`, so .NET 6/8/10 all work).
-* The mod needs the game's managed `Assembly-CSharp.dll`: it is resolved from the game install,
-  with `Mod/AiTrainHK/libs/` as an untracked fallback. A clean checkout therefore builds only on
+* The mod needs the game's managed `Assembly-CSharp.dll`, and `MMHOOK_Assembly-CSharp.dll` for
+  the MonoMod hooks the game ships (the movement axis is written inside `InputHandler.Update`,
+  the only point where the game does not overwrite it). Both assemblies are resolved from the
+  game install, with `Mod/AiTrainHK/libs/` as an untracked fallback. A clean checkout therefore
+  builds only on
   a machine that has the game — the build fails with an explicit error otherwise.
 * **Always verify that the mod builds — every change, however harmless it looks.** CI never builds
   the mod (it needs the game's DLL), so a C# error is otherwise discovered in the game. This works
