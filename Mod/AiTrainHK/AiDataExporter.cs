@@ -349,6 +349,7 @@ namespace AiTrainHK
 
             ModHooks.HeroUpdateHook += OnHeroUpdate;
             On.InputHandler.Update += OnInputHandlerUpdate;
+            On.HeroController.Update += OnHeroControllerUpdate;
             Application.quitting += OnGameQuitting;
 
             var pipeThread = new Thread(PipeListenerLoop) { IsBackground = true, Name = "HK_AI_PipeServer" };
@@ -495,6 +496,34 @@ namespace AiTrainHK
         private static void CommitAxis(PlayerAction action, bool pressed, ulong tick)
         {
             if (pressed) action.CommitWithValue(1f, tick, Time.deltaTime);
+        }
+        // InputHandler and HeroController are separate MonoBehaviours, so the order Unity calls
+        // their updates in is not something this mod may assume - and assuming it is what made every
+        // earlier attempt at the axis do nothing. This writes the same value immediately before the
+        // hero's own update, so that whichever of the two the engine calls first, the axis is in
+        // place at the moment the hero reads it. InputHandler.Update keeps its own write at the
+        // other end of that gap.
+        private void OnHeroControllerUpdate(On.HeroController.orig_Update orig, HeroController self)
+        {
+            ApplyHeldAxis();
+            orig(self);
+        }
+
+        private void ApplyHeldAxis()
+        {
+            InputHandler handler = InputHandler.Instance;
+            if (handler == null || handler.inputActions == null) return;
+
+            int id = _heldAction;
+            if (id == 0) return;
+            if ((DateTime.UtcNow - _heldActionAt).TotalSeconds > HeldActionTimeoutSeconds) return;
+
+            handler.inputX = (id == 1 || id == 8 || id == 10 || id == 12) ? -1f
+                           : (id == 2 || id == 9 || id == 11 || id == 13) ? 1f
+                           : 0f;
+            handler.inputY = (id == 14 || id == 18) ? 1f
+                           : (id == 16) ? -1f
+                           : 0f;
         }
         private static void Commit(PlayerAction action, bool pressed, ulong tick)
         {
