@@ -429,6 +429,20 @@ namespace AiTrainHK
             ulong tick = InputManager.CurrentTick;
             int id = _heldAction;
 
+            // The hero's buttons do come from InControl's actions - jump, dash and attack were all
+            // measured working in the game. The direction does not: pressing left or right on the
+            // same actions moves nothing and does not even turn the hero, while a dash at that very
+            // spot carries it to the right, so the spot is walkable and the axis simply never
+            // arrives. InputHandler keeps the movement vector in fields of its own, so it is
+            // written here too, after the game has already computed its own value for this frame -
+            // which is why this runs from the hero update hook rather than an earlier point.
+            handler.inputX = (id == 1 || id == 8 || id == 10 || id == 12) ? -1f
+                           : (id == 2 || id == 9 || id == 11 || id == 13) ? 1f
+                           : 0f;
+            handler.inputY = (id == 14 || id == 18) ? 1f
+                           : (id == 16) ? -1f
+                           : 0f;
+
             Commit(a.left,   id == 1 || id == 8 || id == 10 || id == 12, tick);
             Commit(a.right,  id == 2 || id == 9 || id == 11 || id == 13, tick);
             Commit(a.up,     id == 14 || id == 18, tick);
