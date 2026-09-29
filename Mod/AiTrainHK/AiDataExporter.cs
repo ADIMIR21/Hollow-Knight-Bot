@@ -428,6 +428,7 @@ namespace AiTrainHK
             HeroActions a = handler.inputActions;
             ulong tick = InputManager.CurrentTick;
             int id = _heldAction;
+            if (id == 0) return;
 
             // The hero's buttons do come from InControl's actions - jump, dash and attack were all
             // measured working in the game. The direction does not: pressing left or right on the
@@ -464,7 +465,7 @@ namespace AiTrainHK
         {
             if (action == null) return;
             if (pressed) action.CommitWithState(true, tick, 1f);
-            else action.ClearInputState();
+
         }
         private void DrainCommands()
         {
