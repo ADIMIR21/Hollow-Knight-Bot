@@ -351,6 +351,7 @@ namespace AiTrainHK
             On.InputHandler.Update += OnInputHandlerUpdate;
             On.HeroController.Update += OnHeroControllerUpdate;
             On.HeroController.FixedUpdate += OnHeroControllerFixedUpdate;
+            On.HeroController.DoAttack += OnHeroControllerDoAttack;
             Application.quitting += OnGameQuitting;
 
             var pipeThread = new Thread(PipeListenerLoop) { IsBackground = true, Name = "HK_AI_PipeServer" };
@@ -542,9 +543,30 @@ namespace AiTrainHK
             self.move_input = (id == 1 || id == 8 || id == 10 || id == 12) ? -1f
                             : (id == 2 || id == 9 || id == 11 || id == 13) ? 1f
                             : 0f;
+        }
+        // HeroController.DoAttack is what reads vertical_input - the field trace says so, and it is
+        // the only reader outside the input plumbing itself. Writing it from the FixedUpdate prefix,
+        // as the first version did, is therefore useless: LookForInput writes the field too, long
+        // before DoAttack looks at it, so the up and down swings came out as plain swings. The
+        // horizontal survives that trip only because FixedUpdate is its reader; the vertical has to
+        // be written at its own reader.
+        private void ApplyHeldVertical(HeroController self)
+        {
+            if (self == null) return;
+
+            int id = _heldAction;
+            if (id == 0) return;
+            if ((DateTime.UtcNow - _heldActionAt).TotalSeconds > HeldActionTimeoutSeconds) return;
+
             self.vertical_input = (id == 14 || id == 18) ? 1f
                                 : (id == 16) ? -1f
                                 : 0f;
+        }
+
+        private void OnHeroControllerDoAttack(On.HeroController.orig_DoAttack orig, HeroController self)
+        {
+            ApplyHeldVertical(self);
+            orig(self);
         }
         private void ApplyHeldAxis()
         {
