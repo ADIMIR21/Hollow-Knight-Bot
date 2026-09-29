@@ -411,10 +411,18 @@ namespace AiTrainHK
         // input manager re-reads its devices each update and a single commit is overwritten.
         // The ids mirror the action table in hk_features.py; tests/test_action_wire.py compares
         // this list against that table so the two cannot drift apart.
+        private const double HeldActionTimeoutSeconds = 2.0;
         private int _heldAction;
+        private DateTime _heldActionAt = DateTime.MinValue;
 
         private void ApplyHeldAction()
         {
+// A trainer that dies or stalls must not leave the hero holding a button forever -
+            // that is the same disease as the dead gamepad, just from the other side. The policy
+            // sends an action per step, which is far below this window, so the only thing the
+            // timeout can drop is a command source that is gone.
+            if ((DateTime.UtcNow - _heldActionAt).TotalSeconds > HeldActionTimeoutSeconds) _heldAction = 0;
+
             InputHandler handler = InputHandler.Instance;
             if (handler == null || handler.inputActions == null) return;
             HeroActions a = handler.inputActions;
@@ -508,6 +516,7 @@ namespace AiTrainHK
                     if (parts.Length >= 2 &&
                         int.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out int heldActionId))
                         _heldAction = heldActionId;
+                        _heldActionAt = DateTime.UtcNow;
                     break;
                 default:
                     Log($"[AI] Unknown command: '{line}'");
