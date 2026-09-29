@@ -350,6 +350,7 @@ namespace AiTrainHK
             ModHooks.HeroUpdateHook += OnHeroUpdate;
             On.InputHandler.Update += OnInputHandlerUpdate;
             On.HeroController.Update += OnHeroControllerUpdate;
+            On.HeroController.FixedUpdate += OnHeroControllerFixedUpdate;
             Application.quitting += OnGameQuitting;
 
             var pipeThread = new Thread(PipeListenerLoop) { IsBackground = true, Name = "HK_AI_PipeServer" };
@@ -510,7 +511,7 @@ namespace AiTrainHK
         private void OnHeroControllerUpdate(On.HeroController.orig_Update orig, HeroController self)
         {
             ApplyHeldAxis();
-            ApplyHeldMove(self);
+
             orig(self);
         }
 
@@ -519,6 +520,17 @@ namespace AiTrainHK
         // dash and attack all worked. HeroController keeps the movement input in fields of its own
         // and hands it to Move(float), so that is what has to be written. Same rule as everywhere
         // else here: nothing is touched unless a command is held.
+        // The field trace says how the hero's direction actually flows: LookForInput writes
+        // move_input from whatever input it can see, FilterInput adjusts it, and FixedUpdate reads it
+        // six times to move the hero. A write from the Update prefix is therefore overwritten by
+        // LookForInput before the movement ever reads it, which is exactly what the earlier attempts
+        // ran into. FixedUpdate runs on the physics clock, after the input has been gathered, so the
+        // value is written there instead - at the last moment before the movement uses it.
+        private void OnHeroControllerFixedUpdate(On.HeroController.orig_FixedUpdate orig, HeroController self)
+        {
+            ApplyHeldMove(self);
+            orig(self);
+        }
         private void ApplyHeldMove(HeroController self)
         {
             if (self == null) return;
