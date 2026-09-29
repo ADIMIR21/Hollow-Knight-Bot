@@ -59,7 +59,14 @@
       <HintPath>$(HollowKnightManagedDir)Assembly-CSharp.dll</HintPath>
       <Private>false</Private>
     </Reference>
-    <Reference Include="Assembly-CSharp" Condition="'$(HollowKnightManagedDir)' == '' Or !Exists('$(HollowKnightManagedDir)Assembly-CSharp.dll')">
+    <Reference Include="MMHOOK_Assembly-CSharp" Condition="'$(HollowKnightManagedDir)' != '' And Exists('$(HollowKnightManagedDir)MMHOOK_Assembly-CSharp.dll')">
+    <HintPath>$(HollowKnightManagedDir)MMHOOK_Assembly-CSharp.dll</HintPath>
+    <Private>false</Private>
+  </Reference>
+  <Reference Include="MMHOOK_Assembly-CSharp" Condition="'$(HollowKnightManagedDir)' == '' Or !Exists('$(HollowKnightManagedDir)MMHOOK_Assembly-CSharp.dll')">
+    <HintPath>libs\MMHOOK_Assembly-CSharp.dll</HintPath>
+    <Private>false</Private>
+  </Reference>  <Reference Include="Assembly-CSharp" Condition="'$(HollowKnightManagedDir)' == '' Or !Exists('$(HollowKnightManagedDir)Assembly-CSharp.dll')">
       <HintPath>libs\Assembly-CSharp.dll</HintPath>
       <Private>false</Private>
     </Reference>

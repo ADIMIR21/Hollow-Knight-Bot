@@ -348,6 +348,7 @@ namespace AiTrainHK
             ticker.OnTick += OnTick;
 
             ModHooks.HeroUpdateHook += OnHeroUpdate;
+            On.InputHandler.Update += OnInputHandlerUpdate;
             Application.quitting += OnGameQuitting;
 
             var pipeThread = new Thread(PipeListenerLoop) { IsBackground = true, Name = "HK_AI_PipeServer" };
@@ -461,6 +462,31 @@ namespace AiTrainHK
             Commit(a.focus,  id == 17 || id == 18, tick);
         }
 
+        // The hero's movement cannot be driven by committing InControl actions the way its buttons
+        // can: measured in the game with the hero standing on the floor, "action 1" and "action 2"
+        // left vel_x at zero, x unchanged and the hero still facing the same way, while jump,
+        // attack and dash all worked through the very same commit. The axis lives in InputHandler's
+        // own fields, and it must be written at the end of InputHandler.Update: the game computes
+        // its own value there, and the hero reads the field later in the same frame. Writing it
+        // from the hero update hook instead lands after that frame's movement and is then
+        // overwritten by the next InputHandler.Update before anybody reads it, which is exactly
+        // why the first attempt at this changed nothing at all.
+        private void OnInputHandlerUpdate(On.InputHandler.orig_Update orig, InputHandler self)
+        {
+            orig(self);
+            if (self == null) return;
+
+            int id = _heldAction;
+            if (id == 0) return;
+            if ((DateTime.UtcNow - _heldActionAt).TotalSeconds > HeldActionTimeoutSeconds) return;
+
+            self.inputX = (id == 1 || id == 8 || id == 10 || id == 12) ? -1f
+                        : (id == 2 || id == 9 || id == 11 || id == 13) ? 1f
+                        : 0f;
+            self.inputY = (id == 14 || id == 18) ? 1f
+                        : (id == 16) ? -1f
+                        : 0f;
+        }
         private static void Commit(PlayerAction action, bool pressed, ulong tick)
         {
             if (action == null) return;
