@@ -416,6 +416,8 @@ namespace AiTrainHK
         private const double HeldActionTimeoutSeconds = 2.0;
         private int _heldAction;
         private DateTime _heldActionAt = DateTime.MinValue;
+        private float _probeGameX = float.NaN;
+        private int _probeHeroFrames;
 
         private void ApplyHeldAction()
         {
@@ -445,7 +447,9 @@ namespace AiTrainHK
             // game computed it.
             if (id != 0)
             {
-                handler.inputX = (id == 1 || id == 8 || id == 10 || id == 12) ? -1f
+                _probeGameX = handler.inputX;
+            _probeHeroFrames++;
+            handler.inputX = (id == 1 || id == 8 || id == 10 || id == 12) ? -1f
                                : (id == 2 || id == 9 || id == 11 || id == 13) ? 1f
                                : 0f;
                 handler.inputY = (id == 14 || id == 18) ? 1f
@@ -506,9 +510,30 @@ namespace AiTrainHK
         private void OnHeroControllerUpdate(On.HeroController.orig_Update orig, HeroController self)
         {
             ApplyHeldAxis();
+            ApplyHeldMove(self);
             orig(self);
         }
 
+        // The hero does not take its direction from InputHandler.inputX. The axis probe put the
+        // value there, in place at the moment the hero runs, and the hero ignored it - while jump,
+        // dash and attack all worked. HeroController keeps the movement input in fields of its own
+        // and hands it to Move(float), so that is what has to be written. Same rule as everywhere
+        // else here: nothing is touched unless a command is held.
+        private void ApplyHeldMove(HeroController self)
+        {
+            if (self == null) return;
+
+            int id = _heldAction;
+            if (id == 0) return;
+            if ((DateTime.UtcNow - _heldActionAt).TotalSeconds > HeldActionTimeoutSeconds) return;
+
+            self.move_input = (id == 1 || id == 8 || id == 10 || id == 12) ? -1f
+                            : (id == 2 || id == 9 || id == 11 || id == 13) ? 1f
+                            : 0f;
+            self.vertical_input = (id == 14 || id == 18) ? 1f
+                                : (id == 16) ? -1f
+                                : 0f;
+        }
         private void ApplyHeldAxis()
         {
             InputHandler handler = InputHandler.Instance;
@@ -518,6 +543,8 @@ namespace AiTrainHK
             if (id == 0) return;
             if ((DateTime.UtcNow - _heldActionAt).TotalSeconds > HeldActionTimeoutSeconds) return;
 
+            _probeGameX = handler.inputX;
+            _probeHeroFrames++;
             handler.inputX = (id == 1 || id == 8 || id == 10 || id == 12) ? -1f
                            : (id == 2 || id == 9 || id == 11 || id == 13) ? 1f
                            : 0f;
@@ -598,6 +625,10 @@ namespace AiTrainHK
                 // "action <id>" - press the hero's buttons through the game's own input, so no
                 // controller is needed on the Python side. The id indexes the same table the
                 // Python action set uses, and the state is held until the next command.
+case "probe":
+                    Publish(StatusJson("probe game=" + _probeGameX.ToString("0.###", CultureInfo.InvariantCulture)
+                                       + " id=" + _heldAction + " heroFrames=" + _probeHeroFrames));
+                    break;
                 case "action":
                     if (parts.Length >= 2 &&
                         int.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out int heldActionId))
