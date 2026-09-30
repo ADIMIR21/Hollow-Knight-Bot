@@ -41,6 +41,37 @@ ACTION_DOWN_ATTACK = 16
 ACTION_CAST = 17
 ACTION_UP_CAST = 18
 
+# The dash button is parked. Every action that presses it keeps its other buttons and drops the
+# dash, so the action space stays 19 wide and the policy only has to learn that dashing is
+# wasted - which is the world the older checkpoints were trained in, because the emulated pad
+# never pressed the dash at all. That is what lets those checkpoints be resumed instead of
+# retrained; taking the actions out of the table instead would shrink the space and change the
+# fingerprint. See AGENTS.md.
+DASH_DISABLED = True
+
+DASH_ACTIONS = (ACTION_DASH, ACTION_DASH_ATTACK, ACTION_LEFT_DASH, ACTION_RIGHT_DASH,
+                ACTION_JUMP_DASH)
+
+_WITHOUT_DASH = {
+    ACTION_DASH: ACTION_NONE,
+    ACTION_DASH_ATTACK: ACTION_ATTACK,
+    ACTION_LEFT_DASH: ACTION_LEFT,
+    ACTION_RIGHT_DASH: ACTION_RIGHT,
+    ACTION_JUMP_DASH: ACTION_JUMP,
+}
+
+
+def press_dash(action, dash_disabled=DASH_DISABLED):
+    """The same action with its dash button dropped, while the dash is parked.
+
+    Dropping it rather than rewriting the whole action keeps a combo useful: "dash attack"
+    becomes the plain attack, "jump dash" becomes the jump. With the dash parked those are the
+    only things the combination could still do, and it keeps one action from being wasted.
+    """
+    if not dash_disabled:
+        return action
+    return _WITHOUT_DASH.get(action, action)
+
 ACTION_NAMES = {
     ACTION_NONE: "none",
     ACTION_LEFT: "left",

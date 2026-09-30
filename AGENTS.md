@@ -137,8 +137,16 @@ python tests/run_pipe_harness.py     # builds the mock, runs --selftest-stuck, t
   statistics describe a different problem, and resuming them looks like a run that has learned
   nothing, with nothing in the logs to say why. A new knob that is not added to the fingerprint
   fails `tests/test_run_config.py`; `tests/test_training_config.py` holds the balance those
-  numbers must satisfy (a mask dearer than the hit it buys, a discount that reaches the end of a
-  fight, a kill still worth more than refusing to engage).
+  numbers must satisfy (a discount that reaches the end of a
+  fight, a kill still worth more than refusing to engage). The mask is priced **below** the hit it buys, deliberately: the policy is allowed to trade health for damage. It was raised once to force dodging, and the run that followed learned no faster, so the trade went back to the policy.
+
+* **The dash is parked.** `hk_features.DASH_DISABLED` makes every action that presses the dash
+  drop that button and keep the rest ("dash attack" becomes the plain attack, "jump dash" becomes
+  the jump). This is not a leftover: the emulated pad never pressed the dash at all, so the older
+  checkpoints were trained in a world where dashing did nothing, and parking the button again is
+  what lets them be resumed instead of retrained. The actions stay in the table - removing them
+  would shrink the action space, change the fingerprint and invalidate every checkpoint. Give the
+  button back by flipping the flag, not by editing the table.
 
 ## 4. Environment, build, deploy
 

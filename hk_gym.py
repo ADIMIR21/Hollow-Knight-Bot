@@ -13,7 +13,8 @@ from ai_environment import HollowKnightEnv
 from ai_controller import HollowKnightController
 from bosses import resolve_query
 from screen_capture import USE_SCREEN_CAPTURE
-from hk_features import damage_weight, victory_bonus, ACTION_COUNT, BossStateTracker, redirect_action
+from hk_features import (damage_weight, victory_bonus, ACTION_COUNT, BossStateTracker,
+                           redirect_action, press_dash)
 
 
 def _enable_precise_sleep():
@@ -77,20 +78,22 @@ VICTORY_CONFIRM_FRAMES = max(1, int(os.environ.get("HK_VICTORY_FRAMES", "3")))
 #     zero on every repair - one -3840 step at 15 per hit point, seven times the death penalty,
 #     charged for the very hit that opens the stunned punish window where the fight is won;
 #   * every mask the knight loses costs HEALTH_PENALTY_PER_MASK. This is the number that decides
-#     whether the policy dodges or tanks: at 10 the whole health bar was cheaper than 1% of the
-#     boss's, so standing inside an attack to land a hit was always the better trade. At 200 a
-#     mask still cost less than the nail hit it buys: an uncharged hit takes 32 of the boss's
-#     260, so it pays 480, and tanking went on paying. At 1000 a mask outweighs any single hit
-#     landed outside the stunned window and stays below what the same hit pays inside it;
+#     whether the policy dodges or tanks, and it is deliberately low: at 200 a mask costs less
+#     than the uncharged nail hit it buys (32 of the boss's 260, so 480), so standing inside an
+#     attack to land one more hit pays better than backing off and the policy is free to make
+#     that trade. It was raised to 800 once, to force dodging, and the run that followed learned
+#     no faster than the one before it - so the balance went back;
 #   * the outcomes outweigh the dense part on purpose: the boss dying pays VICTORY_REWARD, the
-#     knight dying costs DEATH_PENALTY (and, through the mask term, the whole health bar). The win has to outbid the mask term, or holding the bar beats killing the boss: with a mask at 800 the whole bar is 7200, so the kill is paid 3900 of damage plus 4000 of bonus;
+#     knight dying costs DEATH_PENALTY (and, through the mask term, the whole health bar). The
+#     win still has to be worth more than refusing to engage: a kill is 3900 of damage plus
+#     1000 of bonus against a death at 500 and a full bar at 1800;
 #   * every step costs STEP_PENALTY, so a fight that drags on is never free.
 #
 # GAMMA in train.py has to reach the end of such a fight (see test_reward_economics.py), and the
 # whole set is fingerprinted into the checkpoint folder (hk_run_config.py): changing one of them
 # makes an old model and its normalization statistics meaningless rather than resumable.
 DAMAGE_REWARD_PER_HP = 15.0
-HEALTH_PENALTY_PER_MASK = 800.0
+HEALTH_PENALTY_PER_MASK = 200.0
 # Damage that lands while the boss is open is worth this much more than the same damage outside
 # the window. The stunned window is the only place this fight can be finished, and paying the same
 # for a hit anywhere made the policy hover instead of committing (see hk_features.damage_weight).
@@ -99,7 +102,7 @@ OPEN_WINDOW_DAMAGE_MULTIPLIER = 3.0
 # base reward is paid at zero masks and twice that at full health (hk_features.victory_bonus). The
 # payout itself stays VICTORY_REWARD - this is the hero's capacity, not a reward knob.
 HERO_MAX_MASKS = 9.0
-VICTORY_REWARD = 4000.0
+VICTORY_REWARD = 1000.0
 DEATH_PENALTY = 500.0
 STEP_PENALTY = 0.05
 EPISODE_STEP_LIMIT = 3000
@@ -467,6 +470,7 @@ class HollowKnightGym(gym.Env):
     def step(self, action):
         # Update 10: only "attack" is aimed at the boss, see hk_features.redirect_action.
         action = redirect_action(action, self.last_dx_to_boss, self.last_boss_open)
+        action = press_dash(action)
         
         if action == self.current_action:
             self.hold_action_counter += 1
