@@ -98,9 +98,10 @@ two names for one outcome.
 
 ## Observation space
 
-- A vector of **30 numeric values**: HP, soul, boss HP, player and boss positions, distance and direction to the boss, velocities, state flags (grounded, facing right for the player and the boss, attack, dash, jump, fall, recoil, `boss_is_attacking`, `near_hazard`, `was_hit`), plus what the boss is doing right now
+- A vector of **31 numeric values**: HP, soul, boss HP, `scene_hp`, player and boss positions, distance and direction to the boss, velocities, state flags (grounded, facing right for the player and the boss, attack, dash, jump, fall, recoil, `boss_is_attacking`, `near_hazard`, `was_hit`), plus what the boss is doing right now
 - **Boss state**: `boss_attack_antic` (the attack is winding up), `boss_open` (stunned or recovering - the punish window), `boss_dead`, `boss_state_age` (how long the current state has been running, scaled over 60 frames) and `boss_state_changed`. The mod already sent the state name (`boss_state`, the animation clip or the attacking FSM state) in every single frame; `hk_features.BossStateTracker` turns it into these five numbers. The name as text is useless to the policy, and the frame stack only reaches back ~50 ms at 75 fps, so "the hit lands in a few frames" has to be a feature rather than something to infer
-- **Frame stack**: a stack of the last 4 vectors -> `120` features at the policy's input (set by `HK_FRAME_STACK`)
+- **`scene_hp`**: the summed health of every `HealthManager` in the scene, next to the mod's monotone damage counter. `boss_hp` alone describes a pool the game repairs during the fight, so on its own it cannot show how far the fight actually got
+- **Frame stack**: a stack of the last 4 vectors -> `124` features at the policy's input (set by `HK_FRAME_STACK`)
 - **Frame skip**: `HK_FRAME_SKIP` is no longer used - each step waits for a FRESH telemetry frame via `wait_for_fresh_telemetry` in `ai_environment.py` (the pipe message counter `seq` must change), so the step rate follows the game itself (roughly up to ~60 steps/s); if no fresh frame arrives (menu/pause), the step continues after a short wait
 - Observations and rewards are normalized via `VecNormalize` (reward normalization is enabled - the reward is clipped within static bounds, victory/death signals are not lost)
 - Only the plain attack is aimed toward the boss (`hk_features.redirect_action`)
@@ -223,7 +224,7 @@ models/ppo_hk/
 
 - The model automatically loads the latest save from **its own** boss's folder (`models/ppo_hk/<scene>/hk_model_final.zip`) if it exists - training continues from where it left off
 - If a saved `vecnormalize.pkl` belongs to a different observation space - it is discarded and normalization starts from scratch
-- A model saved under an older observation space is not loaded either: the boss-state values were added to the vector (25 -> 30 numbers per frame), and a checkpoint whose space does not match is refused - that folder starts from scratch and says so on the console
+- A model saved under an older observation space is not loaded either: the vector grew from 25 to 31 numbers per frame (the five boss-state values and `scene_hp`), and a checkpoint whose space does not match is refused - that folder starts from scratch and says so on the console
 - Old files from the root of `models/ppo_hk/` (training from before the per-boss layout, the False Knight arena) are automatically moved to `models/ppo_hk/GG_False_Knight/` on the first run
 - First episode: training waits for the fight and teleports the bot to the arena itself (the scene is taken from `--boss` / `HK_BOSS_SCENE`)
 - From then on the loop is fully autonomous: fight -> victory/death -> fast restart via the mod
