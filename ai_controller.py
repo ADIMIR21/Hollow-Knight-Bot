@@ -9,7 +9,9 @@ DEFAULT_ENTRY_GATE = "door_dreamEnter"
 
 class HollowKnightController:
     def __init__(self, pipe=None):
-        self.use_pipe_input = os.environ.get("HK_INPUT", "pad").strip().lower() == "pipe"
+        # Input goes through the mod's pipe by default; HK_INPUT=pad switches back to the
+        # legacy emulated gamepad.
+        self.use_pipe_input = os.environ.get("HK_INPUT", "pipe").strip().lower() != "pad"
         if not self.use_pipe_input:
             print("[CONTROLLER] Connecting the gamepad...")
         self.gamepad = None if self.use_pipe_input else vg.VX360Gamepad()
@@ -75,55 +77,55 @@ class HollowKnightController:
             if self.pipe is not None:
                 self.pipe.send_command("action %d" % action_id)
             return
-            self.gamepad.left_joystick_float(x_value_float=0.0, y_value_float=0.0)
-            for btn in self.buttons.values():
-                self.gamepad.release_button(button=btn)
+        self.gamepad.left_joystick_float(x_value_float=0.0, y_value_float=0.0)
+        for btn in self.buttons.values():
+            self.gamepad.release_button(button=btn)
 
-            if action_id == 1:   self.gamepad.left_joystick_float(x_value_float=-1.0, y_value_float=0.0)
-            elif action_id == 2: self.gamepad.left_joystick_float(x_value_float=1.0, y_value_float=0.0)
-            elif action_id == 3: self.gamepad.press_button(button=self.buttons["jump"])
-            elif action_id == 4: self.gamepad.press_button(button=self.buttons["attack"])
-            elif action_id == 5: self.gamepad.press_button(button=self.buttons["dash"])
-            elif action_id == 6:
-                self.gamepad.press_button(button=self.buttons["jump"])
-                self.gamepad.press_button(button=self.buttons["attack"])
-            elif action_id == 7:
-                self.gamepad.press_button(button=self.buttons["dash"])
-                self.gamepad.press_button(button=self.buttons["attack"])
-            elif action_id == 8:
-                self.gamepad.left_joystick_float(x_value_float=-1.0, y_value_float=0.0)
-                self.gamepad.press_button(button=self.buttons["attack"])
-            elif action_id == 9:
-                self.gamepad.left_joystick_float(x_value_float=1.0, y_value_float=0.0)
-                self.gamepad.press_button(button=self.buttons["attack"])
-            elif action_id == 10:
-                self.gamepad.left_joystick_float(x_value_float=-1.0, y_value_float=0.0)
-                self.gamepad.press_button(button=self.buttons["jump"])
-            elif action_id == 11:
-                self.gamepad.left_joystick_float(x_value_float=1.0, y_value_float=0.0)
-                self.gamepad.press_button(button=self.buttons["jump"])
-            elif action_id == 12:
-                self.gamepad.left_joystick_float(x_value_float=-1.0, y_value_float=0.0)
-                self.gamepad.press_button(button=self.buttons["dash"])
-            elif action_id == 13:
-                self.gamepad.left_joystick_float(x_value_float=1.0, y_value_float=0.0)
-                self.gamepad.press_button(button=self.buttons["dash"])
-            elif action_id == 14:
-                self.gamepad.left_joystick_float(x_value_float=0.0, y_value_float=1.0)
-                self.gamepad.press_button(button=self.buttons["attack"])
-            elif action_id == 15:
-                self.gamepad.press_button(button=self.buttons["jump"])
-                self.gamepad.press_button(button=self.buttons["dash"])
-            elif action_id == 16:
-                self.gamepad.left_joystick_float(x_value_float=0.0, y_value_float=-1.0)
-                self.gamepad.press_button(button=self.buttons["attack"])
-            elif action_id == 17:
-                self.gamepad.press_button(button=self.buttons["focus"])
-            elif action_id == 18:
-                self.gamepad.left_joystick_float(x_value_float=0.0, y_value_float=1.0)
-                self.gamepad.press_button(button=self.buttons["focus"])
+        if action_id == 1:   self.gamepad.left_joystick_float(x_value_float=-1.0, y_value_float=0.0)
+        elif action_id == 2: self.gamepad.left_joystick_float(x_value_float=1.0, y_value_float=0.0)
+        elif action_id == 3: self.gamepad.press_button(button=self.buttons["jump"])
+        elif action_id == 4: self.gamepad.press_button(button=self.buttons["attack"])
+        elif action_id == 5: self.gamepad.press_button(button=self.buttons["dash"])
+        elif action_id == 6:
+            self.gamepad.press_button(button=self.buttons["jump"])
+            self.gamepad.press_button(button=self.buttons["attack"])
+        elif action_id == 7:
+            self.gamepad.press_button(button=self.buttons["dash"])
+            self.gamepad.press_button(button=self.buttons["attack"])
+        elif action_id == 8:
+            self.gamepad.left_joystick_float(x_value_float=-1.0, y_value_float=0.0)
+            self.gamepad.press_button(button=self.buttons["attack"])
+        elif action_id == 9:
+            self.gamepad.left_joystick_float(x_value_float=1.0, y_value_float=0.0)
+            self.gamepad.press_button(button=self.buttons["attack"])
+        elif action_id == 10:
+            self.gamepad.left_joystick_float(x_value_float=-1.0, y_value_float=0.0)
+            self.gamepad.press_button(button=self.buttons["jump"])
+        elif action_id == 11:
+            self.gamepad.left_joystick_float(x_value_float=1.0, y_value_float=0.0)
+            self.gamepad.press_button(button=self.buttons["jump"])
+        elif action_id == 12:
+            self.gamepad.left_joystick_float(x_value_float=-1.0, y_value_float=0.0)
+            self.gamepad.press_button(button=self.buttons["dash"])
+        elif action_id == 13:
+            self.gamepad.left_joystick_float(x_value_float=1.0, y_value_float=0.0)
+            self.gamepad.press_button(button=self.buttons["dash"])
+        elif action_id == 14:
+            self.gamepad.left_joystick_float(x_value_float=0.0, y_value_float=1.0)
+            self.gamepad.press_button(button=self.buttons["attack"])
+        elif action_id == 15:
+            self.gamepad.press_button(button=self.buttons["jump"])
+            self.gamepad.press_button(button=self.buttons["dash"])
+        elif action_id == 16:
+            self.gamepad.left_joystick_float(x_value_float=0.0, y_value_float=-1.0)
+            self.gamepad.press_button(button=self.buttons["attack"])
+        elif action_id == 17:
+            self.gamepad.press_button(button=self.buttons["focus"])
+        elif action_id == 18:
+            self.gamepad.left_joystick_float(x_value_float=0.0, y_value_float=1.0)
+            self.gamepad.press_button(button=self.buttons["focus"])
 
-            self.gamepad.update()
+        self.gamepad.update()
 
     def reset_all(self):
         if self.use_pipe_input:

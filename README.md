@@ -47,7 +47,7 @@ Telemetry contains a `scene` field (the current scene) - so Python and the human
 
 | File | Purpose |
 |------|---------|
-| `ai_controller.py` | The bot's hands: 19 discrete actions, sent to the mod's pipe as `action <id>` (`HK_INPUT=pipe`) or emulated on an Xbox 360 gamepad via `vgamepad` (`HK_INPUT=pad`, the default) |
+| `ai_controller.py` | The bot's hands: 19 discrete actions, sent to the mod's pipe as `action <id>` - the default input path. `HK_INPUT=pad` switches to the emulated Xbox 360 gamepad (`vgamepad` + ViGEmBus) instead |
 | `screen_capture.py` | Game screen capture via `mss` + auto-focus on the Hollow Knight window |
 | `ai_environment.py` | The environment: combines the video stream and telemetry; steps are synced by the pipe message counter (`seq`), so there is no file polling |
 | `hk_pipe.py` | **Named-pipe client** for the mod: background reader with auto-reconnect, `get_telemetry()`, `send_command()`, one-shot events (`wait_for_status`), one shared client per process |
@@ -59,6 +59,8 @@ Telemetry contains a `scene` field (the current scene) - so Python and the human
 | `teleport.py` | **Teleport to Pantheon bosses**: interactive boss selection, restart, warp to the arena, `--verify` - compare the Python and mod registries over the pipe, `--train` - teleport and train right away |
 
 The mod must be loaded into the game for the framework to work!   
+
+**Input goes through the pipe by default.** The controller writes `action <id>` into the pipe, and the mod presses the hero's buttons through the game's own input (`InputHandler`), so no emulated controller is involved and a trainer that dies cannot leave the game bound to a dead pad. `HK_INPUT=pad` switches back to the emulated Xbox 360 gamepad (`vgamepad` + ViGEmBus); that path is still supported, but nothing in the repository uses it, so the pipe stays the default.
 
 ## Action space (19 actions)
 
@@ -209,6 +211,8 @@ python train.py                 # default boss (GG_False_Knight)
 python train.py --boss hornet   # train against a specific boss
 python train.py --boss nkg      # aliases work as in teleport.py
 ```
+
+No environment variable is needed: the controller sends `action <id>` into the pipe by default, and the mod presses the hero's buttons (see the note under "Python RL framework").
 
 Training files are laid out per boss **automatically** - nothing has to be created by hand:
 

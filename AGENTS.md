@@ -83,7 +83,7 @@ python tests/run_pipe_harness.py     # builds the mock, runs --selftest-stuck, t
 | `bosses.py` | Python mirror of the mod's registry + command helpers |
 | `hk_features.py` | Pure environment features (action table, aiming rule, boss-state tracker) - imports nothing, so tier 1 tests it directly |
 | `hk_run_config.py` | Fingerprint of what a checkpoint was trained under (reward scale, gamma, sizes) - imports nothing; `train.py` refuses to resume a mismatch |
-| `hk_gym.py`, `ai_environment.py`, `ai_controller.py` | Gym env, observation/reward pipeline, virtual gamepad |
+| `hk_gym.py`, `ai_environment.py`, `ai_controller.py` | Gym env, observation/reward pipeline, hero input over the pipe (with the emulated gamepad as an alternative path) |
 | `train.py` | PPO training, checkpoint layout, `logs/progress.txt` journal |
 | `progress_log.py`, `plot_progress.py` | Journal parsing (imports nothing, so tier 1 tests it) and the run's figures |
 | `teleport.py`, `ai_receiver.py` | Boss selection/teleport tooling, live telemetry debugger |
@@ -183,7 +183,11 @@ python tests/run_pipe_harness.py     # builds the mock, runs --selftest-stuck, t
   "the mod did not respond within 20 s" (no pipe at all), so redeploy before debugging.
 * Training: `python train.py [--boss <query>] [--entry-gate <gate>]`. Environment knobs:
   `HK_BOSS_SCENE` (scene, alias or index), `HK_ENTRY_GATE`, `HK_VICTORY_FRAMES` (default 3),
-  `HK_FRAME_SKIP` (4), `HK_FRAME_STACK` (4), `HK_PIPE_NAME` (default `hk_ai_mod`), `HK_INPUT` (default `pad`; `pipe` drives the hero through the mod's own input instead of the emulated gamepad).
+  `HK_FRAME_SKIP` (legacy, no longer read - each step waits for a fresh frame), `HK_FRAME_STACK` (4),
+  `HK_PIPE_NAME` (default `hk_ai_mod`), `HK_INPUT` (default `pipe`: the controller writes
+  `action <id>` and the mod presses the hero's buttons through the game's own input; `pad` sends
+  the same ids to the emulated Xbox 360 gamepad instead - both paths are live, the pipe is the
+  default and the one every run uses).
 * Quick checks without training: `python ai_receiver.py` (live telemetry, a second client),
   `python teleport.py --verify` (Python and mod registries compared over the pipe),
   `python plot_progress.py` (draw `logs/progress.txt` - reward, wins, fight length, entropy).
