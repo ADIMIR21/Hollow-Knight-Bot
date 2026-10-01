@@ -22,7 +22,6 @@ from hk_features import (  # noqa: E402
     ACTION_JUMP_ATTACK,
     ACTION_LEFT_ATTACK,
     ACTION_NAMES,
-    ACTION_NONE,
     ACTION_RIGHT_ATTACK,
     AIM_THRESHOLD,
     BOSS_STATE_ATTACK,
@@ -67,18 +66,6 @@ def source_of(name):
         return handle.read()
 
 
-def action_branches(source):
-    """{action id: the code its branch runs} from `HollowKnightController.set_action`."""
-    start = source.index("def set_action(")
-    body = source[start : source.index("def reset_all", start)]
-    branches = {}
-    for match in re.finditer(
-        r"(?:if|elif) action_id == (\d+):(.*?)(?=\n\s*(?:if|elif|else)\b|\Z)", body, re.S
-    ):
-        branches[int(match.group(1))] = match.group(2)
-    return branches
-
-
 class ActionTable(unittest.TestCase):
     def test_the_table_covers_the_whole_action_space(self):
         self.assertEqual(ACTION_COUNT, 19)
@@ -92,25 +79,6 @@ class ActionTable(unittest.TestCase):
         # The table above is documentation; ai_controller.py is what presses buttons.
         ids = {int(value) for value in re.findall(r"action_id == (\d+)", source_of("ai_controller.py"))}
         self.assertTrue(ids <= set(ACTION_NAMES), ids - set(ACTION_NAMES))
-
-    def test_every_action_reaches_a_button(self):
-        branches = action_branches(source_of("ai_controller.py"))
-        self.assertGreaterEqual(len(branches), 18, "parsed only %r" % sorted(branches))
-        for action_id, name in sorted(ACTION_NAMES.items()):
-            if action_id == ACTION_NONE:
-                continue
-            code = branches.get(action_id)
-            self.assertIsNotNone(
-                code, "action %d (%s) has no branch in ai_controller.set_action" % (action_id, name)
-            )
-            # A branch that exists is not enough: 14 used to be one that did `pass`, i.e. a
-            # second name for 0, so the policy could spend probability on an action the game
-            # never sees. Every other id has to press a button or move the stick.
-            self.assertRegex(
-                code,
-                r"press_button|left_joystick_float",
-                "action %d (%s) does nothing: %r" % (action_id, name, code.strip()),
-            )
 
 
 class AimingRule(unittest.TestCase):

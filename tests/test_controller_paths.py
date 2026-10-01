@@ -151,9 +151,11 @@ class InputPath(unittest.TestCase):
         self.assertEqual(pipe.sent, [])
 
     def test_every_action_moves_the_pad(self):
-        # The check the text-level test in test_features.py cannot make: a branch that exists
+        # The check the text-level test in test_features.py could not make: a branch that exists
         # in the source but never runs passes it. Action 0 is the idle one - it releases and
-        # flushes, and that is all it is supposed to do.
+        # flushes, and that is all it is supposed to do. Id 14 once was a `pass`, i.e. a second
+        # name for 0, so the policy could spend probability on an action the game never sees;
+        # this loop is what rules that out now.
         controller, pad = self.build("pad")
         checked = 0
         for action_id in sorted(ACTION_NAMES):
