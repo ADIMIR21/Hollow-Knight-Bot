@@ -140,13 +140,12 @@ python tests/run_pipe_harness.py     # builds the mock, runs --selftest-stuck, t
   numbers must satisfy (a discount that reaches the end of a
   fight, a kill still worth more than refusing to engage). The mask is priced **below** the hit it buys, deliberately: the policy is allowed to trade health for damage. It was raised once to force dodging, and the run that followed learned no faster, so the trade went back to the policy.
 
-* **The dash is parked.** `hk_features.DASH_DISABLED` makes every action that presses the dash
-  drop that button and keep the rest ("dash attack" becomes the plain attack, "jump dash" becomes
-  the jump). This is not a leftover: the emulated pad never pressed the dash at all, so the older
-  checkpoints were trained in a world where dashing did nothing, and parking the button again is
-  what lets them be resumed instead of retrained. The actions stay in the table - removing them
-  would shrink the action space, change the fingerprint and invalidate every checkpoint. Give the
-  button back by flipping the flag, not by editing the table.
+* **The dash is unparked.** `hk_features.DASH_DISABLED` is `False`, so every action that presses
+  the dash keeps the dash button. The emulated pad never pressed the dash at all, so the older
+  checkpoints were trained in a world where dashing did nothing and cannot be resumed without
+  retraining. The actions stay in the table - removing them would shrink the action space,
+  change the fingerprint and invalidate every checkpoint. Parking the button again is done by
+  flipping the flag to `True`, not by editing the table.
 
 * **Game time scale (Update 11).** `Time.timeScale` in the mod drives training speed: `1.0` is
   normal speed, `2.0` runs the fight at double speed and the telemetry stream (and therefore PPO

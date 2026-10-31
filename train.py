@@ -135,14 +135,19 @@ def run_config_values():
     from hk_gym import (
         DAMAGE_REWARD_PER_HP,
         DEATH_PENALTY,
+        DODGE_BONUS,
         EPISODE_STEP_LIMIT,
         FRAME_STACK,
         HEALTH_PENALTY_PER_MASK,
+        HIT_PENALTY,
+        OPEN_WINDOW_BONUS,
         OPEN_WINDOW_DAMAGE_MULTIPLIER,
         HERO_MAX_MASKS,
         STATS_SIZE,
         STEP_PENALTY,
         VICTORY_REWARD,
+        DISTANCE_BONUS_SCALE,
+        DISTANCE_OPTIMAL,
     )
     from hk_features import ACTION_COUNT
 
@@ -156,6 +161,11 @@ def run_config_values():
         "death_penalty": DEATH_PENALTY,
         "step_penalty": STEP_PENALTY,
         "episode_step_limit": EPISODE_STEP_LIMIT,
+        "hit_penalty": HIT_PENALTY,
+        "distance_bonus_scale": DISTANCE_BONUS_SCALE,
+        "dodge_bonus": DODGE_BONUS,
+        "open_window_bonus": OPEN_WINDOW_BONUS,
+        "distance_optimal": DISTANCE_OPTIMAL,
         "observation_size": STATS_SIZE * FRAME_STACK,
         "action_count": ACTION_COUNT,
         "time_scale": GLOBAL_TIMESCALE,

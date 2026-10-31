@@ -41,13 +41,11 @@ ACTION_DOWN_ATTACK = 16
 ACTION_CAST = 17
 ACTION_UP_CAST = 18
 
-# The dash button is parked. Every action that presses it keeps its other buttons and drops the
-# dash, so the action space stays 19 wide and the policy only has to learn that dashing is
-# wasted - which is the world the older checkpoints were trained in, because the emulated pad
-# never pressed the dash at all. That is what lets those checkpoints be resumed instead of
-# retrained; taking the actions out of the table instead would shrink the space and change the
-# fingerprint. See AGENTS.md.
-DASH_DISABLED = True
+# The dash button is unparked: actions that press it keep the dash. The emulated pad never
+# pressed the dash, so older checkpoints were trained in a world where dashing did nothing and
+# cannot be resumed without retraining - but the action space stays 19 wide either way, so
+# flipping this flag gives the button back without reshaping the space. See AGENTS.md.
+DASH_DISABLED = False
 
 DASH_ACTIONS = (ACTION_DASH, ACTION_DASH_ATTACK, ACTION_LEFT_DASH, ACTION_RIGHT_DASH,
                 ACTION_JUMP_DASH)

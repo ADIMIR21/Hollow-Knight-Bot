@@ -73,6 +73,15 @@ namespace AiTrainHK
         private long _hitCounter = 0;
         private long _bossDamageTotal = 0;
         private int _lastBossHpKnown = 0;
+        // Damage dealt to the boss in the current frame (reset every HeroUpdate, diff of bossHp).
+        private int _damageThisFrame = 0;
+        // Invulnerability frames remaining for the hero after taking a hit (Hollow Knight grants
+        // a short invulnerability window; we track it locally since cState does not expose it).
+        private int _heroInvulnFrames = 0;
+        // Time (seconds) since the boss last started an attack — used for attack cooldown.
+        private float _bossAttackCooldown = 0f;
+        // Whether the boss can take damage right now (derived from boss_state string).
+        private bool _bossCanTakeDamage = true;
         // Damage counted over every HealthManager in the scene, not just the one we latched onto.
         // The pool the arena lists is repaired by the game a limited number of times, and the
         // health that actually ends the fight is a different one that never shows up in the arena
@@ -1940,7 +1949,11 @@ case "probe":
                     
                     bool was_hit = hp < _lastPlayerHp;
                     if (was_hit) _hitCounter++;
+                    if (was_hit) _heroInvulnFrames = 30; // ~0.5 s at 60 fps
                     _lastPlayerHp = hp;
+
+                    // Invulnerability ticks down every frame while the hero is recovering.
+                    if (_heroInvulnFrames > 0) _heroInvulnFrames--;
                     
                     if (_currentBoss == null && !_bossDead)
                     {
@@ -2122,7 +2135,14 @@ case "probe":
                     catch (Exception) {}
 
                     if (_lastBossHpKnown > bossHp)
+                    {
                         _bossDamageTotal += _lastBossHpKnown - bossHp;
+                        _damageThisFrame = _lastBossHpKnown - bossHp;
+                    }
+                    else
+                    {
+                        _damageThisFrame = 0;
+                    }
                     _lastBossHpKnown = bossHp;
                     float bossX = _currentBoss != null ? _currentBoss.transform.position.x : 0f;
                     float bossY = _currentBoss != null ? _currentBoss.transform.position.y : 0f;
@@ -2219,12 +2239,24 @@ case "probe":
                     if (boss_is_attacking)
                     {
                         _attackStickyFrames = ATTACK_STICKY_MIN_FRAMES;
+                        _bossAttackCooldown = 0f;
                     }
                     else if (_attackStickyFrames > 0)
                     {
                         _attackStickyFrames--;
                         boss_is_attacking = true;
                     }
+
+                    // Boss attack cooldown grows while the boss is not attacking.
+                    _bossAttackCooldown += Time.unscaledDeltaTime;
+
+                    // Boss can take damage when it is not winding up, not dead, and not in an intro.
+                    string lowerState = boss_state.ToLower();
+                    _bossCanTakeDamage = !lowerState.Contains("antic")
+                        && !lowerState.Contains("death")
+                        && !lowerState.Contains("intro")
+                        && !lowerState.Contains("wake")
+                        && !lowerState.Contains("struggle");
 
                     string data = $"{{\"status\": \"fight\", \"restart_pending\": {(_restartPending ? 1 : 0)}, \"scene\": \"{CurrentSceneName()}\", \"hp\": {hp}, \"max_hp\": {max_hp}, \"mana\": {mana}, \"boss_hp\": {bossHp}, \"boss_dead\": {(_bossDead ? 1 : 0)}, " +
                         $"\"arena_bosses\": {arenaBossCount}, \"arena_alive\": {arenaAliveCount}, \"arena_hp\": {arenaHpSum}, \"arena_detail\": \"{arenaDetail}\", " +
@@ -2251,6 +2283,10 @@ case "probe":
                         $"\"boss_damage_total\": {_bossDamageTotal}, " +
                         $"\"boss_is_attacking\": {(boss_is_attacking ? 1 : 0)}, " +
                         $"\"near_hazard\": {(near_hazard ? 1 : 0)}, " +
+                        $"\"damage_this_frame\": {_damageThisFrame}, " +
+                        $"\"hero_invuln_frames\": {_heroInvulnFrames}, " +
+                        $"\"boss_attack_cooldown\": {_bossAttackCooldown.ToString("F2", CultureInfo.InvariantCulture)}, " +
+                        $"\"boss_can_take_damage\": {(_bossCanTakeDamage ? 1 : 0)}, " +
                         $"\"boss_state\": \"{boss_state}\", " +
                         $"\"time_scale\": {Time.timeScale.ToString("F2", CultureInfo.InvariantCulture)}, " +
                         $"\"paused\": {(_aiPaused ? 1 : 0)}" +
