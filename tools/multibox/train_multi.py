@@ -437,6 +437,11 @@ def run_per_window(plan, boss, timescale):
 # ----------------------------------------------------------------------- cli
 
 def cmd_start(args):
+    # No plan given: the maintainer's standard setup - four windows on the
+    # second monitor (tools/multibox/plan_4windows.json).
+    if not args.plan:
+        args.plan = str(_REPO_ROOT / "tools" / "multibox" / "plan_4windows.json")
+        print(f"[MULTI] No plan given, using the default 4-window plan: {args.plan}")
     plan = parse_plan(args.plan)
     import bosses
     resolved = bosses.resolve_query(args.boss)
@@ -510,7 +515,9 @@ def main():
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser("start", help="start the plan: windows + the trainer")
-    p.add_argument("plan", help="path to the run plan (JSON)")
+    p.add_argument("plan", nargs="?", default=None,
+                   help="path to the run plan (JSON); defaults to the 4-window "
+                        "plan tools/multibox/plan_4windows.json")
     p.add_argument("--boss", default=os.environ.get("HK_BOSS_SCENE", "GG_False_Knight"),
                    help="the boss ALL windows train on (default GG_False_Knight)")
     p.add_argument("--entry-gate", default=os.environ.get("HK_ENTRY_GATE", "door_dreamEnter"))

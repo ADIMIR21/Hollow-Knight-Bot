@@ -3,7 +3,7 @@ import time
 import cv2
 import numpy as np
 from screen_capture import ScreenCaptureAgent, USE_SCREEN_CAPTURE
-from hk_pipe import get_shared_client
+from hk_pipe import get_shared_client, PIPE_PATH
 
 AI_VISION_SIZE = (256, 256)
 
@@ -24,7 +24,7 @@ class HollowKnightEnv:
         # no races over a file in %TEMP% and no open retries. The client is shared per
         # process, so commands from bosses.py go over the same connection.
         self.pipe = get_shared_client()
-        print("[ENV] Waiting for the mod pipe (\\\\.\\pipe\\hk_ai_mod)...")
+        print(f"[ENV] Waiting for the mod pipe ({PIPE_PATH})...")
         if self.pipe.wait_connected(timeout=20.0):
             print("[ENV] The mod is connected!")
         else:

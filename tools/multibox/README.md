@@ -51,6 +51,10 @@ python tools/multibox/train_multi.py stop
 python tools/multibox/train_multi.py status
 ```
 
+With no plan argument it uses the default 4-window plan
+(`tools/multibox/plan_4windows.json`), so `python tools/multibox/train_multi.py
+start` is a complete one-command start.
+
 The plan is a list of windows (`[{"window": 1}, {"window": 2}]`); the pipe and
 the save slot are derived by default (pipes follow the launcher naming, save
 slots cycle 2-3-4-1). Two variants:
@@ -62,8 +66,22 @@ slots cycle 2-3-4-1). Two variants:
 - `--variant a` (interim): one independent `train.py` per window, namespaced
   by a tag; the orchestrator watches the pairs and restarts a dead pair.
 
+**Same-hero rule:** every window must boot from the same hero, otherwise
+episodes from different heroes are incommensurable. Windows use different
+slots but identical content - sync once before a session, with automatic
+backups of the overwritten slots:
+
+```
+python tools/multibox/sync_saves.py --list
+python tools/multibox/sync_saves.py --from 2 --to 1,3,4
+```
+
+`sync_saves.py` refuses to run while the game is open.
+
 The windows must run the CURRENT mod: it sets `Application.runInBackground`,
-so a window keeps simulating while another one has the focus.
+so a window keeps simulating while another one has the focus, and its
+`reset()` waits for the fight scene after a restart (the mod defers restarts
+while the game is busy after a load).
 
 ## Notes
 

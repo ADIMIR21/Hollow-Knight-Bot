@@ -78,11 +78,33 @@ sample throughput scales with the number of windows. The per-window `--tag`
 variant (`--variant a`, N independent `train.py` processes) stays for
 splitting the *arena list* across windows.
 
-Proven live (two windows, False Knight, `--smoke-steps 2000`): both windows
-loaded their own save slots (2 and 3) and fought in the same PPO rollout
-while unfocused - the mod sets `Application.runInBackground = true`, so a
-window does not need the foreground to keep simulating. A smoke run is
-isolated in `<scene>__smoke` and cannot touch real checkpoints.
+**Same-hero rule.** Every window must boot from the same hero content:
+episodes from a maxed-up hero and from a fresh one are incommensurable, so all
+slots must hold identical saves. Windows still use *different slots* (each
+reads its own `userN.dat` at boot), but with the same content. Before a
+session, sync once (the tool backs up every overwritten slot):
+
+    python tools/multibox/sync_saves.py --list
+    python tools/multibox/sync_saves.py --from 2 --to 1,3,4
+
+`tools/multibox/sync_saves.py` refuses to run while the game is open and has
+unit tests (`tests/test_save_sync.py`).
+
+Proven live (four windows, False Knight, `--smoke-steps 2000`): all four
+windows loaded the synced hero and fought in the same PPO rollout while
+unfocused - the mod sets `Application.runInBackground = true`, so a window
+does not need the foreground to keep simulating. One command starts it:
+
+    python tools/multibox/train_multi.py start          # default 4-window plan
+
+A smoke run is isolated in `<scene>__smoke` and cannot touch real
+checkpoints; `stop`/`status` control the running orchestrator.
+
+Fix in this phase: `hk_gym.reset()` now waits for the fight scene after a
+restart (up to ~75 s, covering the mod's deferred restart) instead of
+returning an observation mid-transition - previously some windows started
+off-boss (the hero was still loading or dead) and the bot acted in the wrong
+place.
 
 Still open: a window that dies takes the whole variant B rollout down (a
 SubprocVecEnv worker cannot be replaced); the orchestrator restarts pairs
@@ -90,31 +112,52 @@ only in variant A. If screen capture is ever enabled, windows must also be
 tiled and captured per instance - the telemetry-only observation does not
 need it today.
 
-The orchestrator reads a small run-plan file (JSON), e.g.:
+## Known issue (not fixed yet)
+
+**One death serializes all windows.** `hk_gym.reset()` waits for the fight
+scene to come up after a death/rebirth, and `reset()` runs inside
+`SubprocVecEnv.step()`, so while one window is reborn the other three stop
+stepping. **After rebirth one window may not teleport** to the boss - the
+observation is returned while the hero is still in the death/dream-return
+scenario, so the bot acts in the wrong place.
+
+**Planned fix:** make `reset()` non-blocking - fire the restart command and
+return immediately; each worker keeps stepping with `action 0` (buttons
+released) until its own fight scene is really up, so one window's death no
+longer stops the others, and no window acts before it is in the arena.
+
+
+The orchestrator reads a small run-plan file (JSON), e.g.
+`tools/multibox/plan_4windows.json`:
 
 ```json
-[{"window": 1, "pipe": "hk_ai_mod",   "save_slot": 2},
- {"window": 2, "pipe": "hk_ai_mod_2", "save_slot": 3},
- {"window": 3, "pipe": "hk_ai_mod_3", "save_slot": 4}]
+[{"window": 1},
+ {"window": 2},
+ {"window": 3},
+ {"window": 4}]
 ```
 
-It then: launches the windows (`hk_multibox`), waits for each pipe, and -
-variant B (the goal) - feeds all pipes into one trainer; variant A (interim)
-starts one `train.py` per window with the right `--pipe`/`--tag`/`--save-slot`.
-Variant A watches the processes and restarts a window+trainer pair that died
-(a trainer alone is pointless without its window). Subcommands:
-`start <plan>`, `stop`, `status`.
+Pipes and save slots derive from the window number by default
+(`hk_ai_mod`, `hk_ai_mod_2`, ...; slots cycle 2-3-4-1). It then: launches the
+windows (`hk_multibox`), waits for each pipe, and - variant B (the goal) -
+feeds all pipes into one trainer; variant A (interim) starts one `train.py`
+per window with the right `--pipe`/`--tag`/`--save-slot`. Variant A watches
+the processes and restarts a window+trainer pair that died (a trainer alone
+is pointless without its window). Subcommands: `start <plan>`, `stop`,
+`status`.
 
 ### Phase 4 - the save-file question (partially verified)
 
 The slot numbering of `load <slot>` is settled: the game formats the slot
 index straight into the file name (`Platform.GetSaveSlotFileName` ->
 `user{0}.dat`, IL probe), and live `load 2` opened the game into the world of
-the user2.dat save. Still open: what the training flow actually writes into
-the save folder mid-fight (the window-close test wrote nothing, so the game
-saves on its own events, not on exit). Until verified: assign each window its
-own `--save-slot`, back up the save folder before each long parallel session,
-and never hand-play in parallel with training.
+the user2.dat save.
+
+**Mid-run writes are real:** a live smoke rewrote `user2.dat` while training
+was running, so the game writes the save folder on its own events, not only
+on exit. Until the write points are fully mapped: assign each window its own
+slot (via `sync_saves.py` copies of one hero), back up the save folder before
+each long parallel session, and never hand-play in parallel with training.
 
 ### Phase 5 - scale-out
 

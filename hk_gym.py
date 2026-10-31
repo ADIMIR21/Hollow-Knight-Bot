@@ -498,15 +498,22 @@ class HollowKnightGym(gym.Env):
                 print("[RESET] Step limit reached: continuing the same fight without a restart.")
             elif self._first_reset:
                 self._first_reset = False
-                if not self._wait_for_fight_scene(10.0):
+                if not self._wait_for_fight_scene(15.0):
+                    # The mod defers a restart while the game is busy after the
+                    # load (hero's death scenario, a fade, the arena's own exit)
+                    # and forces it only after RESTART_FORCE_TIMEOUT - so the
+                    # fight can easily need 10+ s, plus the scene transition.
+                    # Never return an observation before the fight is really up:
+                    # otherwise the bot steps in the wrong place (or on a dead
+                    # hero) and the episode is garbage.
                     print("[RESET] Auto-teleporting to the arena...")
                     self._try_fast_restart()
-                    self._wait_for_fight_scene(60.0)
+                    self._wait_for_fight_scene(75.0)
             else:
                 want_restart = self.auto_restart or self._last_episode_was_victory
 
                 if want_restart and self._try_fast_restart():
-                    self._wait_for_fight_scene(10.0)
+                    self._wait_for_fight_scene(15.0)
                 else:
                     print("[RESET] Fast restart failed, waiting for the fight to appear...")
                     self._wait_for_fight_scene(20.0)
