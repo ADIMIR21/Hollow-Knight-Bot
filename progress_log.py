@@ -19,6 +19,23 @@ _EPISODE = re.compile(
     r"^\[([\d\- :]+)\]\s+EPISODE #(\d+)\s+step=(\d+)\s+outcome=(\w+)\s+reward=(-?[\d.]+)\s+len=(\d+)")
 _WINDOW = re.compile(r"^\[([\d\- :]+)\]\s+WINDOW step=(\d+)\s+reward=(-?[\d.]+)\s+len=(\d+)")
 
+# Parallel training (multi-window): a run tag namespaces the per-boss folder and
+# the journal so two processes never write into the same files. No tag = the
+# historical layout, byte for byte.
+_JOURNAL_FMT = "logs/progress__{tag}.txt"
+
+
+def boss_dir_name(scene, tag=None):
+    """The training folder for a scene: `models/ppo_hk/<scene>` or `<scene>__<tag>`."""
+    scene = str(scene).strip()
+    tag = (str(tag).strip() if tag is not None else "") if tag is not None else ""
+    return f"{scene}__{tag}" if tag else scene
+
+
+def journal_path(tag=None):
+    """The journal file for a run: `logs/progress.txt` or `logs/progress__<tag>.txt`."""
+    return _JOURNAL_FMT.format(tag=tag) if tag else "logs/progress.txt"
+
 
 def parse_journal(text):
     """Splits the journal into (blocks, episodes).

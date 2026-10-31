@@ -136,6 +136,11 @@ namespace AiTrainHK
         // hero not transitioning) while the fade is still in it, there is nothing to wait for.
         private const float FADE_STUCK_FADINGOUT_TIMEOUT = 1.0f;
         private bool _inMenuScene = true;
+        // A pending "load <slot>": set on the command, cleared when the game
+        // actually leaves (or fails to leave) the main menu. load_result is
+        // derived from the scene, because LoadGameFromUI has no callback.
+        private int _loadPendingSlot;
+        private float _loadRequestedAt;
         private bool _bossDead = false;
         // True when the death came from a signal about THIS fight (the arena reports every boss
         // of the fight dead, the tracked boss itself is dead, its death animation started)
@@ -336,6 +341,16 @@ namespace AiTrainHK
                     _currentBoss = null;
                     _restartPending = false;
                     _lastBossHpKnown = 0;
+                    // The load succeeded in the only sense that matters: the
+                    // game actually left the menu. LoadGameFromUI has no
+                    // callback, so this is where the outcome is reported.
+                    if (_loadPendingSlot != 0)
+                    {
+                        Log($"[AI] load: save slot {_loadPendingSlot} is in the game (scene {newScene.name})");
+                        PublishEvent("{\"status\": \"load_result\", \"slot\": " + _loadPendingSlot
+                                     + ", \"success\": 1}");
+                        _loadPendingSlot = 0;
+                    }
                     // Per-object "last hp" cannot survive a scene change: the objects are gone and
                     // their instance ids can be reused. The damage counter itself is cumulative.
                     _sceneHealthLast.Clear();
@@ -374,7 +389,7 @@ namespace AiTrainHK
 
             Publish(StatusJson("initialized"));
             Log($"[AI] Exporter {MOD_VERSION} is running! Pipe: \\\\.\\pipe\\{PIPE_NAME}");
-            Log("[AI] Commands: restart | teleport | set_boss <scene> | set_gate <gate> | boss <query> | bosses | warp | pause | resume");
+            Log("[AI] Commands: restart | teleport | set_boss <scene> | set_gate <gate> | boss <query> | bosses | load <slot> | warp | pause | resume");
         }
 
         private void SubscribeBossDeath()
@@ -406,6 +421,18 @@ namespace AiTrainHK
         {
             // DrainCommands() runs even while paused: "resume" arrives through it.
             DrainCommands();
+
+            // A load that never left the menu: the slot may be empty or the game
+            // may have refused the UI flow. Report it once instead of leaving
+            // the trainer waiting for a scene that never comes.
+            if (_loadPendingSlot != 0 && _inMenuScene
+                && Time.unscaledTime - _loadRequestedAt > 30f)
+            {
+                Log($"[AI] load: the game is still in the menu after 30 s — slot {_loadPendingSlot} did not load");
+                PublishEvent("{\"status\": \"load_result\", \"slot\": " + _loadPendingSlot
+                             + ", \"success\": 0}");
+                _loadPendingSlot = 0;
+            }
 
             if (_aiPaused)
             {
@@ -725,11 +752,66 @@ case "probe":
                     PublishEvent("{\"status\": \"timescale_changed\", \"time_scale\": 1.00}");
                     break;
 
+                // "load <slot>" — load a save slot (user1..user4.dat) from the main
+                // menu. The multi-window boot path: every window starts in the
+                // menu, and the teleport flow has nothing to drive until a save
+                // is loaded. Refused outside the menu.
+                case "load":
+                    HandleLoadSlot(parts.Length >= 2 ? parts[1] : "");
+                    break;
+
                 default:
                     Log($"[AI] Unknown command: '{line}'");
                     PublishEvent(CommandErrorJson(line, "unknown command"));
                     break;
             }
+        }
+
+        // ---------------- Save loading (multi-window boot) ----------------
+
+        // Every training window boots into the main menu; nothing else in the
+        // pipe protocol can drive the menu, so "load <slot>" is the one door
+        // into the game. The slot number goes into the game's own
+        // GameManager.LoadGameFromUI(Int32): the IL probe shows the game's
+        // save menu drives exactly this call, and that a bare LoadGame(Int32,
+        // Action<Boolean>) only deserializes the save — the callback fires
+        // (verified live: "slot 2 loaded" in the ModLog) but the game stays in
+        // Menu_Title, because the scene transition lives in the UI routine.
+        // LoadGameFromUI performs the full flow: UIManager.ContinueGame(),
+        // LoadGame, then ContinueGame() on success or UIGoToMainMenu() on
+        // failure. The slot index is formatted straight into the file name
+        // (Platform.GetSaveSlotFileName -> "user{0}.dat"), so slot 2 is
+        // user2.dat; DesktopPlatform.IsSaveSlotIndexValid accepts anything.
+        // The outcome is reported as a load_result event derived from the
+        // scene: success when a non-menu scene loads, failure after 30 s
+        // still in the menu (LoadGameFromUI itself has no callback).
+        private void HandleLoadSlot(string slotText)
+        {
+            if (!int.TryParse(slotText, NumberStyles.Integer, CultureInfo.InvariantCulture,
+                    out int slot) || slot < 1 || slot > 4)
+            {
+                PublishEvent(CommandErrorJson("load " + (slotText ?? ""), "slot must be 1..4"));
+                return;
+            }
+            if (!_inMenuScene)
+            {
+                PublishEvent(CommandErrorJson("load " + slot.ToString(CultureInfo.InvariantCulture),
+                    "the game is not in the menu"));
+                return;
+            }
+            GameManager gm = GameManager.instance;
+            if (gm == null)
+            {
+                PublishEvent(CommandErrorJson("load " + slot.ToString(CultureInfo.InvariantCulture),
+                    "GameManager is not ready yet"));
+                return;
+            }
+            string slotText2 = slot.ToString(CultureInfo.InvariantCulture);
+            Log($"[AI] load: opening save slot {slotText2} (user{slotText2}.dat) from the main menu...");
+            PublishEvent("{\"status\": \"load_requested\", \"slot\": " + slotText2 + "}");
+            _loadPendingSlot = slot;
+            _loadRequestedAt = Time.unscaledTime;
+            gm.LoadGameFromUI(slot);
         }
 
         // ---------------- Pause (Update 9) ----------------

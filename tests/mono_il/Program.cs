@@ -60,6 +60,43 @@ if (args.Length > 1 && args[1] == "--field")
     }
     return;
 }
+if (args.Length > 1 && args[1] == "--calls")
+{
+    // Dump every call and string constant inside the named method(s) of the
+    // named type: what the game actually does there, without running it.
+    string wantType = args.Length > 2 ? args[2] : "GameManager";
+    string wantMethod = args.Length > 3 ? args[3] : "";
+    foreach (TypeDefinitionHandle tdh in md.TypeDefinitions)
+    {
+        TypeDefinition td = md.GetTypeDefinition(tdh);
+        if (!md.GetString(td.Name).Equals(wantType, StringComparison.Ordinal)) continue;
+        foreach (MethodDefinitionHandle mh in td.GetMethods())
+        {
+            MethodDefinition m = md.GetMethodDefinition(mh);
+            string mname = md.GetString(m.Name);
+            if (wantMethod.Length > 0 && !mname.Equals(wantMethod, StringComparison.Ordinal)) continue;
+            if (m.RelativeVirtualAddress == 0) continue;
+            MethodBodyBlock body;
+            try { body = pe.GetMethodBody(m.RelativeVirtualAddress); }
+            catch { continue; }
+            byte[] il = body.GetILBytes();
+            Console.WriteLine($"=== {wantType}.{mname} ({il.Length} bytes IL) ===");
+            for (int i = 0; i < il.Length; i++)
+            {
+                byte op = il[i];
+                string kind = op == 0x28 ? "call" : op == 0x6F ? "callvirt" : op == 0x72 ? "ldstr" : null;
+                if (kind == null || i + 4 >= il.Length) continue;
+                int token = BitConverter.ToInt32(il, i + 1);
+                string tn = kind == "ldstr"
+                    ? "\"" + md.GetUserString(MetadataTokens.UserStringHandle(token)).Replace("\n", "\\n") + "\""
+                    : ResolveToken(md, token);
+                Console.WriteLine($"  IL_{i:X4} {kind} {tn}");
+                i += 4;
+            }
+        }
+    }
+    return;
+}
 if (args.Length > 1 && args[1] == "--list")
 {
     string needle = args.Length > 2 ? args[2] : "";

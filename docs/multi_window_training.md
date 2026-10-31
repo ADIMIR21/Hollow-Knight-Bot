@@ -29,10 +29,14 @@ instance N (window)  --pipe hk_ai_mod_N <-- python train.py (HK_PIPE_NAME=hk_ai_
 2. **The progress journal**: one shared `logs/progress.txt`; parallel
    `train.py` processes would interleave lines and break `progress_log.py`
    parsing assumptions (one active run per file).
-3. **The save file**: all windows share `user1.dat` (and the settings
-   registry key). The training flow restarts and teleports rather than
-   playing through menus, but simultaneous writes from several windows are
-   still an unverified hazard.
+3. **The save folder**: all windows share the one
+   `%USERPROFILE%\AppData\LocalLow\Team Cherry\Hollow Knight` (saves live in
+   the user profile, not in the install), so they must not boot from the same
+   slot. `train.py` auto-loads a slot from the main menu (`load <slot>`,
+   `--save-slot` / `HK_SAVE_SLOT`, default 2); an orchestrator has to give
+   every window its own slot. The training flow restarts and teleports rather
+   than playing through menus, but simultaneous writes from several windows
+   are still an unverified hazard.
 4. **Bootstrap races**: `setup`/`deploy_mod.ps1` refuse to run while the game
    runs - an orchestrator must respect that ordering.
 
@@ -44,7 +48,7 @@ instance N (window)  --pipe hk_ai_mod_N <-- python train.py (HK_PIPE_NAME=hk_ai_
 and this plan. Windows can already be launched and stopped by hand, and a
 single `train.py` can already pick a window with `HK_PIPE_NAME`.
 
-### Phase 2 - per-run namespacing in `train.py`
+### Phase 2 - per-run namespacing in `train.py` (done)
 
 - `--pipe <name>` flag (default `HK_PIPE_NAME` as today) so the training
   process and the launcher agree on the window without env var gymnastics.
@@ -54,31 +58,51 @@ single `train.py` can already pick a window with `HK_PIPE_NAME`.
   each other's checkpoints. No tag = today's behaviour, byte for byte.
 - `progress_log.py`/`plot_progress.py` learn to accept the per-tag journal
   path (flag, not a default change).
+- Menu bootstrap: the client now polls the pipe instead of leaving a ReadFile
+  pending (a pending read on a synchronous pipe handle blocks every later
+  command write, and the main menu publishes nothing - the write would hang
+  forever), and `train.py` auto-loads the save slot from the menu
+  (`bosses.ensure_save_loaded`, `--save-slot` / `HK_SAVE_SLOT`, default 2).
 - `hk_run_config.py` fingerprint is untouched - the tag namespacing must not
   change any training value.
 
 ### Phase 3 - the orchestrator
 
-`tools/multibox/train_multi.py`: a small run-plan file (JSON) mapping
-instance -> boss/scene, entry gate and timescale, e.g.:
+**Decision: every window trains the same boss.** The maintainer wants all
+windows on one boss, so the target topology is *one trainer over N windows*:
+`tools/multibox/train_multi.py` opens one pipe per window and exposes them to
+a single PPO run as N parallel sub-environments (a VecEnv over N pipes). All
+N windows share the boss, the timescale and the run's checkpoints/journal;
+sample throughput scales with the number of windows. The per-window `--tag`
+variant (N independent `train.py` processes, one boss per process, namespaced
+folders) stays as the interim way to split the *arena list* across windows
+until the shared-trainer orchestrator lands.
+
+The orchestrator reads a small run-plan file (JSON), e.g.:
 
 ```json
-[{"window": 1, "boss": "False Knight", "timescale": "fast"},
- {"window": 2, "boss": "hornet",       "timescale": "fast"},
- {"window": 3, "boss": "gruz_mother",  "timescale": "fast"}]
+[{"window": 1, "pipe": "hk_ai_mod",   "save_slot": 2},
+ {"window": 2, "pipe": "hk_ai_mod_2", "save_slot": 3},
+ {"window": 3, "pipe": "hk_ai_mod_3", "save_slot": 4}]
 ```
 
-It then: launches the windows (`hk_multibox`), starts one `train.py` per
-window with the right `HK_PIPE_NAME`/`--tag`, watches both processes, and
-restarts a window+trainer pair that died (a trainer alone is pointless
-without its window). Subcommands: `start <plan>`, `stop`, `status`.
+It then: launches the windows (`hk_multibox`), waits for each pipe, and -
+variant B (the goal) - feeds all pipes into one trainer; variant A (interim)
+starts one `train.py` per window with the right `--pipe`/`--tag`/`--save-slot`.
+It watches the processes and restarts a window+trainer pair that died (a
+trainer alone is pointless without its window). Subcommands: `start <plan>`,
+`stop`, `status`.
 
-### Phase 4 - the save-file question (verify before long parallel runs)
+### Phase 4 - the save-file question (partially verified)
 
-Determine what the training flow actually writes to `user1.dat` (the
-teleport/restart path may never save mid-fight). Until verified: back up the
-save folder before each long parallel session, and never hand-play in
-parallel with training.
+The slot numbering of `load <slot>` is settled: the game formats the slot
+index straight into the file name (`Platform.GetSaveSlotFileName` ->
+`user{0}.dat`, IL probe), and live `load 2` opened the game into the world of
+the user2.dat save. Still open: what the training flow actually writes into
+the save folder mid-fight (the window-close test wrote nothing, so the game
+saves on its own events, not on exit). Until verified: assign each window its
+own `--save-slot`, back up the save folder before each long parallel session,
+and never hand-play in parallel with training.
 
 ### Phase 5 - scale-out
 

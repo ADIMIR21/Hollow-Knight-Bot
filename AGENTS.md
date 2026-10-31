@@ -206,10 +206,15 @@ python tests/run_pipe_harness.py     # builds the mock, runs --selftest-stuck, t
 
 * Python and the mod are deployed in pairs. A stale DLL is not a transport bug: the symptom is
   "the mod did not respond within 20 s" (no pipe at all), so redeploy before debugging.
-* Training: `python train.py [--boss <query>] [--entry-gate <gate>]`. Environment knobs:
+* Training: `python train.py [--boss <query>] [--entry-gate <gate>] [--timescale <preset>]`.
+  If the game is still in the main menu, `train.py` loads the save slot itself
+  before anything else (`bosses.ensure_save_loaded`, the `load <slot>` mod
+  command; refused with a `command_error` outside the menu). Environment knobs:
   `HK_BOSS_SCENE` (scene, alias or index), `HK_ENTRY_GATE`, `HK_VICTORY_FRAMES` (default 3),
   `HK_FRAME_SKIP` (legacy, no longer read - each step waits for a fresh frame), `HK_FRAME_STACK` (4),
-  `HK_PIPE_NAME` (default `hk_ai_mod`), `HK_INPUT` (default `pipe`: the controller writes
+  `HK_PIPE_NAME` (default `hk_ai_mod`), `HK_RUN_TAG` (checkpoint/journal namespacing for
+  parallel windows, see `--tag`), `HK_SAVE_SLOT` (save slot to auto-load from the menu, default 2),
+  `HK_INPUT` (default `pipe`: the controller writes
   `action <id>` and the mod presses the hero's buttons through the game's own input; `pad` sends
   the same ids to the emulated Xbox 360 gamepad instead - both paths are live, the pipe is the
   default and the one every run uses).

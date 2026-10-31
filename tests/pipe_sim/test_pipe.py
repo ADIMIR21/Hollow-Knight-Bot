@@ -50,6 +50,37 @@ if (hello or {}).get("server") != "hkpipesim":
     print("       Check HK_PIPE_NAME: the mock listens on hk_ai_mod_sim.")
     sys.exit(2)
 
+print("\n[1b] load <slot>: the menu door (multi-window boot)")
+# The mock boots in the main menu like the real game; the training bootstrap
+# walks out of it through "load <slot>" - the same path is exercised here.
+before = client.get_status_seq("command_error")
+client.send_command("load 9")
+ev = client.wait_for_status("command_error", timeout=5.0, after_seq=before)
+check("bad slot rejected with slot must be 1..4",
+      ev is not None and (ev or {}).get("reason") == "slot must be 1..4", ev)
+print("\n[1c] scene commands are ignored in the menu (the mod's rule)")
+before = client.get_status_seq("command_error")
+bosses.request_boss("GG_Hornet_1")
+ev = client.wait_for_status("command_error", timeout=2.0, after_seq=before)
+check("boss in the menu is not an error", ev is None, ev)
+check("boss in the menu did not leave the menu",
+      (client.get_telemetry() or {}).get("status") == "main_menu")
+print("\n[1d] load <slot> accepted -> the menu is left")
+before = client.get_status_seq("load_requested")
+check("load 2 sent", bosses.load_slot(2))
+ev = client.wait_for_status("load_requested", timeout=5.0, after_seq=before)
+check("load_requested received", ev is not None and (ev or {}).get("slot") == 2, ev)
+deadline = time.time() + 5.0
+while time.time() < deadline and (client.get_telemetry() or {}).get("status") == "main_menu":
+    time.sleep(0.05)
+check("telemetry is fight after the load",
+      (client.get_telemetry() or {}).get("status") == "fight")
+before = client.get_status_seq("command_error")
+client.send_command("load 2")
+ev = client.wait_for_status("command_error", timeout=5.0, after_seq=before)
+check("load outside the menu is refused", ev is not None
+      and (ev or {}).get("reason") == "the game is not in the menu", ev)
+
 print("\n[2] Telemetry stream")
 deadline = time.time() + 5.0
 while time.time() < deadline and not (client.get_telemetry() or {}).get("scene"):

@@ -36,6 +36,7 @@ The mod keeps a duplex server on `\\.\pipe\hk_ai_mod` (up to 4 clients, so train
 | `set_gate <gate>` | Set the arena entry gate (an empty value restores the default `door_dreamEnter`) |
 | `boss <query>` | **Select a boss and teleport to it.** Query: index in the registry, scene name (`gg_hornet_1`, case-insensitive), short alias (`hornet`, `nkg`, `sisters`, `oro`) or part of the name. The selected scene becomes the mod's target, so restarts and training keep working with that arena. The mod answers with a `boss_selected` event |
 | `bosses` | Send the full registry as a `boss_list` event (works even in the main menu) |
+| `load <slot>` | **Load a save slot while the game is in the main menu** (`1`-`4`, the `user1.dat`..`user4.dat` files). Refused with a `command_error` outside the menu. Answered with `load_requested`, then `load_result` (with `success: 0|1`) events |
 | `warp` | Return the hero to the arena gate without reloading the scene (if thrown out of the fight / stuck) |
 | `pause` | **Freeze the fight** (`Time.timeScale = 0`): the boss FSM, the hero's input and every animation stop while the game keeps publishing telemetry. Answered with a `paused` event |
 | `resume` | Unfreeze the fight and restore the time scale it had before. Answered with a `resumed` event. Both commands are idempotent, and the mod lifts the pause by itself after 120 s without a `resume` - a trainer that died mid-update must not leave the game frozen |
@@ -216,6 +217,8 @@ python train.py --boss nkg      # aliases work as in teleport.py
 
 No environment variable is needed: the controller sends `action <id>` into the pipe by default, and the mod presses the hero's buttons (see the note under "Python RL framework").
 
+If the game is still sitting in the main menu at startup, `train.py` loads the save itself: it sends `load <slot>` and waits until the fight scene is up (`--save-slot` / `HK_SAVE_SLOT`, default slot `2`).
+
 ## Training speed presets (time scale)
 
 The game time scale controls how fast the fight runs, and therefore how fast telemetry and PPO steps arrive. `--timescale` / `HK_TIMESCALE` accepts either a preset name or a raw float:
@@ -273,8 +276,11 @@ models/ppo_hk/
 Several windows of the game can run side by side from the one Steam install
 (`tools/multibox/`), each window serving its own named pipe
 (`hk_ai_mod`, `hk_ai_mod_2`, ...). A `train.py` process picks its window with
-`HK_PIPE_NAME`. The full parallel-training plan (per-run checkpoint folders,
-the orchestrator, the shared-save caveat) lives in
+`--pipe` / `HK_PIPE_NAME` and namespaces its checkpoint folder and journal with
+`--tag` / `HK_RUN_TAG` (`models/ppo_hk/<scene>__<tag>/`,
+`logs/progress__<tag>.txt`); `--save-slot` / `HK_SAVE_SLOT` picks which save
+slot that window boots from. The full parallel-training plan (the orchestrator,
+the shared-save caveat) lives in
 `docs/multi_window_training.md`.
 
 Environment variables:

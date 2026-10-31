@@ -41,17 +41,55 @@ import time
 
 # Pipe name. HK_PIPE_NAME overrides it for the test rig (tests/pipe_sim):
 # the mock listens on hk_ai_mod_sim so it does not occupy the pipe of a running game.
-PIPE_PATH = "\\\\.\\pipe\\" + os.environ.get("HK_PIPE_NAME", "hk_ai_mod")
+# The constant is baked at import; the shared client (get_shared_client) resolves
+# HK_PIPE_NAME lazily instead, so train.py can set it from --pipe inside main().
+_DEFAULT_PIPE_NAME = "hk_ai_mod"
+PIPE_PATH = "\\\\.\\pipe\\" + os.environ.get("HK_PIPE_NAME", _DEFAULT_PIPE_NAME)
 
 # Minimum protocol version that has the pantheon commands.
 REQUIRED_PROTOCOL = 3
 
 _RETRY_OPEN_DELAY = 0.5
 _READ_CHUNK = 65536
+# Reader poll interval: the reader never leaves a ReadFile pending on the
+# handle (see _read_loop), so it wakes up to check the queue at this rate.
+_READ_POLL_INTERVAL = 0.005
 # Guard against a flood of garbage with no newlines.
 _MAX_LINE_BUFFER = 1 << 20
 
 _O_BINARY = getattr(os, "O_BINARY", 0)
+
+try:
+    import ctypes as _ctypes
+    import msvcrt as _msvcrt
+
+    _PeekNamedPipe = _ctypes.windll.kernel32.PeekNamedPipe
+    _PeekNamedPipe.argtypes = [_ctypes.c_void_p, _ctypes.c_void_p, _ctypes.c_uint,
+                               _ctypes.POINTER(_ctypes.c_uint),
+                               _ctypes.POINTER(_ctypes.c_uint),
+                               _ctypes.POINTER(_ctypes.c_uint)]
+    _PeekNamedPipe.restype = _ctypes.c_int
+except (ImportError, AttributeError):   # non-Windows: tier-1 unit imports on CI
+    _PeekNamedPipe = None
+
+
+def _pipe_available(fd):
+    """Bytes waiting in the pipe's inbound queue.
+
+    None means the pipe is gone (the server closed its end) or the platform
+    has no PeekNamedPipe (plain POSIX import on CI). The fd itself stays
+    untouched, so no operation is ever left pending on the handle.
+    """
+    if _PeekNamedPipe is None:
+        return None
+    try:
+        handle = _msvcrt.get_osfhandle(fd)
+    except OSError:
+        return None
+    avail = _ctypes.c_uint(0)
+    if not _PeekNamedPipe(handle, None, 0, None, _ctypes.byref(avail), None):
+        return None
+    return avail.value
 
 
 class HKPipeClient:
@@ -281,9 +319,29 @@ class HKPipeClient:
     def _read_loop(self, fd):
         buffer = b""
         while True:
-            # os.read on a pipe returns the available bytes and blocks only
-            # while there is no data at all; EOF is an empty result.
-            chunk = os.read(fd, _READ_CHUNK)
+            # A ReadFile left pending on a synchronous pipe handle serializes
+            # the handle: a command written by another thread then waits for
+            # the read to complete. In a fight that delay is one telemetry
+            # frame (~50 ms), but the main menu publishes nothing until a save
+            # is loaded, so the write would hang forever. The mod's server
+            # side avoids the same trap by never leaving an operation pending
+            # on the handle (see Win32Pipe.cs) - the client now does too:
+            # Peek first, and only Read when data is actually waiting.
+            avail = _pipe_available(fd)
+            if avail is None:
+                if _PeekNamedPipe is None:
+                    # POSIX import path (tier-1 units on CI): plain blocking
+                    # read, the pending-read serialization is a Windows trap.
+                    chunk = os.read(fd, _READ_CHUNK)
+                else:
+                    raise OSError("pipe is gone")
+            elif avail == 0:
+                if self._stop:
+                    return
+                time.sleep(_READ_POLL_INTERVAL)
+                continue
+            else:
+                chunk = os.read(fd, min(avail, _READ_CHUNK))
             if not chunk:
                 raise OSError("pipe eof")
 
@@ -342,11 +400,18 @@ _shared_lock = threading.Lock()
 
 
 def get_shared_client(verbose=True):
-    """Per-process singleton of the pipe client."""
+    """Per-process singleton of the pipe client.
+
+    The pipe name is resolved from HK_PIPE_NAME at first use, not at import:
+    train.py sets the variable from --pipe inside main(), long after the
+    module-level imports have run.
+    """
     global _shared_client
     with _shared_lock:
         if _shared_client is None:
-            _shared_client = HKPipeClient(verbose=verbose)
+            pipe_name = os.environ.get("HK_PIPE_NAME", _DEFAULT_PIPE_NAME)
+            _shared_client = HKPipeClient(pipe_path="\\\\.\\pipe\\" + pipe_name,
+                                          verbose=verbose)
         return _shared_client
 
 

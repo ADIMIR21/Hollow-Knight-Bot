@@ -10,7 +10,8 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from progress_log import parse_journal, run_start, run_starts, series  # noqa: E402
+from progress_log import (parse_journal, run_start, run_starts, series,  # noqa: E402
+                          boss_dir_name, journal_path)
 
 TABLE = """[2026-09-27 17:41:10] EPISODE #64 step=347195 outcome=death reward=7223.80 len=2324 | wins=3/64 win_rate(100)=0.047 death=0.953 timeout=0.000
 -----------------------------------------
@@ -88,6 +89,23 @@ class RunBoundaryTest(unittest.TestCase):
         starts = run_starts(episodes)
         self.assertEqual(starts[-1], 3)
         self.assertEqual(starts[max(0, len(starts) - 3)], 0)
+
+
+class RunTagLayoutTest(unittest.TestCase):
+    """Parallel runs of one boss must never share files: the tag namespaces
+    both the checkpoint folder and the journal."""
+
+    def test_no_tag_keeps_the_historical_layout(self):
+        self.assertEqual(boss_dir_name("GG_Hornet_1"), "GG_Hornet_1")
+        self.assertEqual(journal_path(), "logs/progress.txt")
+
+    def test_a_tag_namespaces_the_layout(self):
+        self.assertEqual(boss_dir_name("GG_Hornet_1", "w2"), "GG_Hornet_1__w2")
+        self.assertEqual(journal_path("w2"), "logs/progress__w2.txt")
+
+    def test_a_bare_tag_is_treated_as_no_tag(self):
+        self.assertEqual(boss_dir_name("GG_Hornet_1", "  "), "GG_Hornet_1")
+        self.assertEqual(journal_path(""), "logs/progress.txt")
 
 
 if __name__ == "__main__":

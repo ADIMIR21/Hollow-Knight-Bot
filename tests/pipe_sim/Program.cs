@@ -25,7 +25,7 @@ namespace hkpipesim
         private const int POLL_MS = 25;
 
         private static readonly object Sync = new object();
-        private static string _latestJson = "{\"status\": \"booting\", \"restart_pending\": 0}";
+        private static string _latestJson = "{\"status\": \"main_menu\", \"restart_pending\": 0}";
         private static long _seq = 0;
         private static readonly List<KeyValuePair<long, string>> Outbox = new List<KeyValuePair<long, string>>();
         private static long _outboxSeq = 0;
@@ -42,6 +42,10 @@ namespace hkpipesim
         // Game time scale for faster/slower training. 1f = normal speed; mirrored from
         // the mod's "timescale <value>" command.
         private static float _timeScale = 1f;
+        // The mock mirrors the game's boot: like the real game, it starts in the
+        // main menu, and only "load <slot>" (or nothing else — restart/teleport
+        // are ignored there, exactly as in the mod) brings it into the fight.
+        private static bool _inMenu = true;
 
         public static void Main(string[] args)
         {
@@ -131,6 +135,16 @@ namespace hkpipesim
                         _restartPending = false;
                     }
 
+                    if (_inMenu)
+                    {
+                        // The real mod is silent in the menu: the main_menu status was
+                        // published once on the scene load, telemetry holds it until
+                        // the next scene change. A client connecting now still receives
+                        // _latestJson as its first frame.
+                        Thread.Sleep(250);
+                        continue;
+                    }
+
                     string json = "{\"status\": \"fight\", \"restart_pending\": " + (_restartPending ? 1 : 0)
                         + ", \"scene\": \"" + _curScene + "\""
                         + ", \"hp\": 9, \"max_hp\": 9, \"mana\": 33"
@@ -183,12 +197,14 @@ namespace hkpipesim
             switch (cmd)
             {
                 case "set_boss":
+                    if (_inMenu) { IgnoreInMenu(line); break; }
                     if (parts.Length >= 2) { _targetScene = parts[1]; Console.WriteLine($"[mock] target: {_targetScene}"); }
                     break;
                 case "set_gate":
                     if (parts.Length >= 2) { _targetGate = parts[1]; Console.WriteLine($"[mock] gate: {_targetGate}"); }
                     break;
                 case "boss":
+                    if (_inMenu) { IgnoreInMenu(line); break; }
                     SelectBoss(rest);
                     break;
                 case "bosses":
@@ -245,16 +261,59 @@ namespace hkpipesim
                     break;
                 case "restart":
                 case "teleport":
+                    if (_inMenu) { IgnoreInMenu(line); break; }
                     if (parts.Length >= 2) _targetScene = parts[1];
                     if (parts.Length >= 3) _targetGate = parts[2];
                     _curScene = _targetScene;
                     _restartFrames = 4;
                     Console.WriteLine($"[mock] restart: {_targetScene} via {_targetGate}");
                     break;
+
+                // "load <slot>" - load a save slot from the main menu. Mirrors the mod:
+                // a bad slot and a load outside the menu are command_errors; an accepted
+                // load answers load_requested + load_result and leaves the menu.
+                case "load":
+                    HandleLoadSlot(parts.Length >= 2 ? parts[1] : "");
+                    break;
                 default:
                     PublishEvent("{\"status\": \"command_error\", \"command\": \"" + cmd + "\", \"reason\": \"unknown command\"}");
                     break;
             }
+        }
+
+        private static void IgnoreInMenu(string line)
+        {
+            // The mod logs "Restart ignored: we are in the menu" and answers nothing.
+            Console.WriteLine($"[mock] '{line}' ignored: we are in the menu");
+        }
+
+        private static void HandleLoadSlot(string slotText)
+        {
+            int slot;
+            if (!int.TryParse(slotText, NumberStyles.Integer, CultureInfo.InvariantCulture, out slot)
+                || slot < 1 || slot > 4)
+            {
+                PublishEvent("{\"status\": \"command_error\", \"command\": \"load " + (slotText ?? "")
+                    + "\", \"reason\": \"slot must be 1..4\"}");
+                return;
+            }
+            if (!_inMenu)
+            {
+                PublishEvent("{\"status\": \"command_error\", \"command\": \"load " + slot
+                    + "\", \"reason\": \"the game is not in the menu\"}");
+                return;
+            }
+            Console.WriteLine($"[mock] load: opening save slot {slot}...");
+            PublishEvent("{\"status\": \"load_requested\", \"slot\": " + slot + "}");
+            // The real mod drives LoadGameFromUI and reports load_result from
+            // the scene change (success) or after 30 s still in the menu
+            // (failure) - LoadGameFromUI itself has no callback. The mock
+            // simulates the success path: the menu is left and the loaded
+            // scene (the registry's target) starts streaming.
+            _inMenu = false;
+            _curScene = _targetScene;
+            _restartFrames = 4;
+            PublishEvent("{\"status\": \"load_result\", \"slot\": " + slot + ", \"success\": 1}");
         }
 
         private static void SelectBoss(string query)

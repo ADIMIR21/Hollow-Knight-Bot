@@ -2,8 +2,11 @@
 
 `hkpipesim` is a small C# server that replicates the mod's transport
 (`Mod/AiTrainHK/AiDataExporter.cs`): hello, telemetry stream, one-shot
-events (`boss_list` / `boss_selected` / `command_error`) and command intake
-(`restart`, `teleport`, `set_boss`, `set_gate`, `boss`, `bosses`, `warp`).
+events (`boss_list` / `boss_selected` / `load_requested` / `load_result` /
+`command_error`) and command intake (`restart`, `teleport`, `set_boss`,
+`set_gate`, `boss`, `bosses`, `load <slot>`, `warp`). It boots into the main
+menu state, like every fresh game window: silent (telemetry holds
+`main_menu`), and only `bosses` and `load <slot>` mean anything there.
 
 It lets you run `hk_pipe.py`, `bosses.py` and `teleport.py` end to end over a
 real Windows named pipe — without Hollow Knight.
@@ -11,10 +14,11 @@ real Windows named pipe — without Hollow Knight.
 The project **includes `Mod/AiTrainHK/Win32Pipe.cs` as the very same file**, not a
 copy: the harness exercises exactly the code that runs in the game.
 
-## Three bugs found along the way
+## Four bugs found along the way
 
-The first two were found by this harness, the third by a running game with the new
-mod. All three looked the same: "the mod is silent, commands never arrive".
+The first three were found by this harness or by a running game with the new mod, the
+fourth by the menu-state mock. All of them looked the same: "the mod is silent,
+commands never arrive".
 
 1. **`PipeOptions.None` (synchronous handle).** While a blocking `ReadAsync` is
    pending, the next `WriteLine` hangs forever. In .NET this is cured by
@@ -33,6 +37,15 @@ mod. All three looked the same: "the mod is silent, commands never arrive".
    The fix is to bring the server up directly through `kernel32` (`Win32Pipe.cs`).
    The diagnosis came from IL analysis, without launching the game:
    `System.Reflection.Metadata` over `System.Core.dll` shows which methods are stubs.
+4. **The client side of bug 1.** The Python client kept one `os.read` blocked on
+   its handle almost all the time, and a blocked read on a synchronous pipe
+   handle serializes the handle: every later command write waits for the read
+   to complete. In a fight that delay was one telemetry frame (~50 ms) and
+   nobody noticed; the main menu publishes nothing until a save is loaded, so
+   the very first boot command hung forever. Cured the same way the server
+   side is cured — no operation is ever left pending: the reader polls
+   `PeekNamedPipe` and only issues `os.read` when bytes are actually waiting
+   (`hk_pipe._read_loop`).
 
 Because of the third item `PipeOptions` is no longer used, but the first bug is
 still the reason why `Win32Pipe` works **without** overlapped I/O and without
@@ -121,8 +134,11 @@ python tests/pipe_sim/test_pipe.py
 Success is `ALL CHECKS PASSED` and exit code 0.
 
 The test covers: hello and the protocol version, the telemetry stream and the
-monotonicity of `seq`, `wait_for_fresh`, the `bosses` command and registry
-comparison (`teleport.py --verify`), `boss <scene>` with waiting for the fight to
+monotonicity of `seq`, `wait_for_fresh`, the menu boot state (`main_menu`
+telemetry, commands that must be ignored there), the `bosses` command and registry
+comparison (`teleport.py --verify`), `load <slot>` (a bad slot and a refused
+`load` outside the menu, then a successful load that leaves the menu into the
+fight), `boss <scene>` with waiting for the fight to
 start, `command_error` for an unrecognised boss (and separately — passing `gg_*`
 through as a scene), restart, `set_boss`/`set_gate`, `teleport_to` by alias and
 `warp`.

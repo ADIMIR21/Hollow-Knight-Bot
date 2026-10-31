@@ -11,9 +11,10 @@ from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 from ai_controller import HollowKnightController
-from bosses import (resolve_query, set_boss_scene, set_gate, DEFAULT_SCENE,
-                    preset_timescale, TIMESCALE_MIN, TIMESCALE_MAX)
+from bosses import (resolve_query, set_boss_scene, set_gate, ensure_save_loaded,
+                    DEFAULT_SCENE, preset_timescale, TIMESCALE_MIN, TIMESCALE_MAX)
 import hk_run_config as run_config
+from progress_log import boss_dir_name, journal_path
 
 # hk_gym is imported in main() AFTER the boss scene is fixed:
 # the scene is read from HK_BOSS_SCENE at module import time.
@@ -51,6 +52,27 @@ def parse_args():
              "or a raw value (1.0 = normal speed, 2.0 = double speed, max 6.0; "
              "above ~3x risks breaking frame-tied physics). Defaults to HK_TIMESCALE "
              "or normal.",
+    )
+    parser.add_argument(
+        "--pipe", metavar="NAME",
+        default=os.environ.get("HK_PIPE_NAME"),
+        help="named pipe of the target game window. The multibox launcher names "
+             "windows hk_ai_mod, hk_ai_mod_2, ...; pass the matching one here. "
+             "Defaults to HK_PIPE_NAME or hk_ai_mod.",
+    )
+    parser.add_argument(
+        "--tag", metavar="NAME",
+        default=os.environ.get("HK_RUN_TAG"),
+        help="run tag for parallel training: namespaces the training files into "
+             "models/ppo_hk/<scene>__<tag> and logs/progress__<tag>.txt so two "
+             "processes never write into the same files. Defaults to HK_RUN_TAG "
+             "or no tag (the historical single-run layout).",
+    )
+    parser.add_argument(
+        "--save-slot", metavar="N", type=int,
+        default=int(os.environ.get("HK_SAVE_SLOT", "2")),
+        help="save slot to load when the game is sitting in the main menu "
+             "(1..4, default 2 / HK_SAVE_SLOT). Ignored when a scene is already up.",
     )
     return parser.parse_args()
 
@@ -530,6 +552,10 @@ def fresh_vecnorm(vec_env):
 
 def main():
     args = parse_args()
+    # The pipe name is read by hk_pipe lazily (at the first shared-client call),
+    # but set it first thing so nothing before the boss setup talks anywhere.
+    if args.pipe:
+        os.environ["HK_PIPE_NAME"] = args.pipe
     scene, label = resolve_boss(args)
     print(f"[SYSTEM] Training boss: {label} ({scene})")
 
@@ -541,12 +567,21 @@ def main():
     set_boss_scene(scene)
     set_gate(args.entry_gate)
 
+    # A fresh window boots into the main menu; walk it into the game by
+    # loading the configured save slot (no-op when a scene is already up).
+    if not ensure_save_loaded(args.save_slot):
+        print(f"[SYSTEM] ERROR: the game never left the main menu "
+              f"(save slot {args.save_slot}); check the window and ModLog.")
+        return 1
+
     from hk_gym import HollowKnightGym  # noqa: E402  (import after the scene is fixed)
 
     # Training files are laid out automatically per boss:
     # models/ppo_hk/<scene>/  — checkpoints, final model, vecnormalize.
+    # A --tag run namespaces the folder (<scene>__<tag>) so parallel runs of
+    # the same boss never touch each other's checkpoints.
     # Nothing needs to be created manually.
-    boss_dir = os.path.join(MODELS_ROOT, scene)
+    boss_dir = os.path.join(MODELS_ROOT, boss_dir_name(scene, args.tag))
     os.makedirs(boss_dir, exist_ok=True)
     migrate_legacy_model(scene, boss_dir)
     vecnorm_path = os.path.join(boss_dir, "vecnormalize.pkl")
@@ -675,7 +710,8 @@ def main():
     win_rate_callback = WinRateLoggingCallback(window=100)
     # Last in the list: by its _on_rollout_end the logger already contains the metrics
     # of the other callbacks (custom/*, reward_breakdown/*), which it writes to the file.
-    progress_callback = ProgressFileCallback(PROGRESS_PATH, window=PROGRESS_WINDOW)
+    progress_path = journal_path(args.tag)
+    progress_callback = ProgressFileCallback(progress_path, window=PROGRESS_WINDOW)
 
     # First in the list: the game is frozen before the bookkeeping runs and stays
     # frozen through train().
@@ -691,7 +727,7 @@ def main():
     ])
 
     print("\n[SYSTEM] AI is ready for training.")
-    print(f"[SYSTEM] Progress log: {PROGRESS_PATH} (history is appended)")
+    print(f"[SYSTEM] Progress log: {progress_path} (history is appended)")
     print("Starting in 10 seconds")
     time.sleep(10)
     print("LET'S GO!\n")

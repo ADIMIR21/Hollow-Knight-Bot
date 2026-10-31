@@ -5,12 +5,14 @@ GG_Mantis_Lords_V = Sisters of Battle, GG_Nosk_Hornet = Winged Nosk.
 
 Protocol — named pipe ``\\\\.\\pipe\\hk_ai_mod`` (see hk_pipe.py):
   Python -> Mod: restart | teleport | set_boss <scene> | set_gate <gate>
-                 | boss <query> | bosses | warp
+                 | boss <query> | bosses | warp | load <slot>
   Mod -> Python: fight telemetry (contains the "scene" field) plus one-shot
-                 events boss_list / boss_selected / command_error.
+                 events boss_list / boss_selected / command_error
+                 / load_requested / load_result.
 The %TEMP% files (hk_ai_cmd.txt, hk_ai_data.json and others) are no longer used.
 """
 
+import os
 import time
 
 from hk_pipe import REQUIRED_PROTOCOL, get_shared_client
@@ -288,6 +290,64 @@ def set_timescale(value):
 def set_normal_time():
     """Restore the normal (1x) game speed through the mod ("normaltime")."""
     return send_command("normaltime")
+
+
+# Save loading: every window boots into the main menu, and the mod's teleport
+# flow has nothing to drive until a save is loaded. The mod's "load <slot>"
+# opens the game's own LoadGameFromUI flow, whose slot index is formatted
+# straight into the file name (user{slot}.dat, verified in the IL probe):
+# slot 2 -> user2.dat. The load_result event is derived from the scene -
+# success when a non-menu scene loads, failure when the menu still holds the
+# game after 30 s.
+DEFAULT_SAVE_SLOT = 2
+_MENU_STATUSES = {"booting", "main_menu"}
+
+
+def load_slot(slot):
+    """Ask the mod to open a save slot from the main menu ("load <slot>")."""
+    slot = int(slot)
+    if not 1 <= slot <= 4:
+        raise ValueError(f"save slot {slot} out of range 1..4")
+    return send_command(f"load {slot}")
+
+
+def ensure_save_loaded(slot=None, timeout=120.0, verbose=True):
+    """Make sure the game has left the main menu by loading a save slot.
+
+    No-op when a scene is already up. While the menu holds the window, the
+    load is retried every 5 s - the menu is not ready to accept it on the
+    very first frames after boot. A fresh ``load_result`` event with
+    ``success: 0`` (the game refused the slot and stayed in the menu) fails
+    immediately. False when the game never left the menu.
+    """
+    if slot is None:
+        slot = int(os.environ.get("HK_SAVE_SLOT", DEFAULT_SAVE_SLOT))
+    client = get_shared_client()
+    client.wait_connected(timeout=15.0)
+    deadline = time.monotonic() + timeout
+    last_attempt = -5.0
+    seen_seq = client.get_seq()
+    while time.monotonic() < deadline:
+        status = (client.get_telemetry() or {}).get("status")
+        if status is not None and status not in _MENU_STATUSES:
+            # A scene is streaming - the save is in (or was never in the menu).
+            if verbose:
+                print(f"[bosses] the game left the menu (status: {status})")
+            return True
+        result = client.wait_for_status("load_result", timeout=0.0, after_seq=seen_seq)
+        if result is not None and not int(result.get("success", 0)):
+            if verbose:
+                print(f"[bosses] load refused by the game (slot {slot}): the save "
+                      f"slot did not open - is user{slot}.dat an empty slot?")
+            return False
+        if status == "main_menu" and time.monotonic() - last_attempt >= 5.0:
+            seen_seq = client.get_seq()
+            load_slot(slot)
+            last_attempt = time.monotonic()
+            if verbose:
+                print(f"[bosses] main menu: loading save slot {slot}...")
+        time.sleep(0.5)
+    return False
 
 
 def read_boss_list_from_mod(timeout=3.0):
