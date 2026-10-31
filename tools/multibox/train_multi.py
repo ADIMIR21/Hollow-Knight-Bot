@@ -353,7 +353,7 @@ def run_shared_trainer(plan, boss_scene, boss_label, entry_gate, timescale, smok
         train.ProgressFileCallback(journal_path(tag), window=train.PROGRESS_WINDOW),
     ])
 
-    total = smoke_steps if smoke_steps else 2000000
+    total = smoke_steps if smoke_steps else 5000000
     if smoke_steps:
         print(f"[MULTI] SMOKE RUN: {smoke_steps} steps in {boss_dir}.")
     print("[MULTI] Ctrl+C saves and exits (the per-window console keys are not available here).")

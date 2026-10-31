@@ -733,7 +733,7 @@ def main():
     print("LET'S GO!\n")
 
     try:
-        model.learn(total_timesteps=2000000, reset_num_timesteps=False, callback=callback_list)
+        model.learn(total_timesteps=5000000, reset_num_timesteps=False, callback=callback_list)
 
     except KeyboardInterrupt:
         print("\n[SYSTEM] Training interrupted. Saving what we have...")
