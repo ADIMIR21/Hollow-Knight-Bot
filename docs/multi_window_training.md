@@ -112,19 +112,18 @@ only in variant A. If screen capture is ever enabled, windows must also be
 tiled and captured per instance - the telemetry-only observation does not
 need it today.
 
-## Known issue (not fixed yet)
+## Known issue (fixed in this session)
 
-**One death serializes all windows.** `hk_gym.reset()` waits for the fight
+**One death used to serialize all windows.** `hk_gym.reset()` waited for the fight
 scene to come up after a death/rebirth, and `reset()` runs inside
-`SubprocVecEnv.step()`, so while one window is reborn the other three stop
-stepping. **After rebirth one window may not teleport** to the boss - the
-observation is returned while the hero is still in the death/dream-return
-scenario, so the bot acts in the wrong place.
+`SubprocVecEnv.step()`, so while one window was reborn the other three stopped
+stepping. And a window could act before it was teleported back to the boss.
 
-**Planned fix:** make `reset()` non-blocking - fire the restart command and
-return immediately; each worker keeps stepping with `action 0` (buttons
-released) until its own fight scene is really up, so one window's death no
-longer stops the others, and no window acts before it is in the arena.
+**Fix:** `reset()` is now non-blocking — it fires the restart command and
+returns immediately. Each worker then keeps stepping with `action 0` (buttons
+released) until *its own* fight scene is really up, so one window's death no
+longer stops the others, and no window acts before it is in the arena. If a
+window is still waiting after 90 s, the restart is re-sent automatically.
 
 
 The orchestrator reads a small run-plan file (JSON), e.g.

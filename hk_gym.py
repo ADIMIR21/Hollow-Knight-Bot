@@ -187,7 +187,14 @@ class HollowKnightGym(gym.Env):
         self._episode_reason = "start"
         self._reset_stats = {}
         self._running = True
-        self._first_reset = True
+        # Non-blocking reset: after a death (or the initial load) the worker
+        # fires the restart and returns immediately, then keeps stepping with
+        # action 0 until its own fight scene is really up. One window's
+        # rebirth never serializes the others, and no window acts before it
+        # is in the arena.
+        self._awaiting_fight = True
+        self._awaiting_started_at = 0.0
+        self._episode_active = False
         self._telemetry_mtime = self.game_env.get_telemetry_mtime()
         # Counter of skipped telemetry frames (Python couldn't keep up with the game speed).
         # At x4, telemetry arrives ~240/sec; if Python step() takes longer than ~4 ms,
@@ -388,52 +395,6 @@ class HollowKnightGym(gym.Env):
         
         return stats
 
-    def _try_fast_restart(self):
-        # The restart command goes into the mod pipe; confirmation is
-        # restart_pending=1 in the telemetry (the mod has picked the command up).
-        sent = self.controller.request_fast_restart()
-        if not sent:
-            print("[RESET] Pipe is not connected, restart through the mod is unavailable.")
-            return False
-        
-        deadline = time.time() + 5.0
-        accepted = False
-        while time.time() < deadline:
-            time.sleep(0.2)
-            telemetry = self.game_env.get_telemetry()
-            if telemetry is not None and telemetry.get("restart_pending", 0) == 1:
-                accepted = True
-                break
-        
-        if not accepted:
-            print("[RESET] The mod did not confirm the restart command. Falling back to the macro.")
-            return False
-        
-        print("[RESET] Fast restart accepted, waiting for the fight scene to load...")
-        # The mod performs the transition not instantly, but when the game becomes free:
-        # after a death the arena first returns to the Hall of Gods as usual (white dream
-        # return), and only then does the mod move the knight back into the fight. Hence the slack.
-        deadline = time.time() + 40.0
-        saw_loading = False
-        while time.time() < deadline:
-            time.sleep(0.3)
-            telemetry = self.game_env.get_telemetry()
-            if (telemetry is not None and telemetry.get("status") == "loading_scene"):
-                saw_loading = True
-                continue
-            if (saw_loading
-                    and telemetry is not None
-                    and telemetry.get("status") == "fight"
-                    and telemetry.get("restart_pending", 0) == 0
-                    and float(telemetry.get("hp", 0)) > 0
-                    and float(telemetry.get("boss_hp", 0)) > 0):
-                time.sleep(0.5)
-                print("[RESET] Fight restarted.")
-                return True
-        
-        print("[RESET] The fight scene did not come up within the allotted time. Falling back to the macro.")
-        return False
-
     def _fight_in_progress(self):
         """
         Is a live fight already running right now? Then there is nothing to reload: both the
@@ -446,21 +407,6 @@ class HollowKnightGym(gym.Env):
                 and int(telemetry.get("restart_pending", 0)) == 0
                 and float(telemetry.get("hp", 0)) > 0
                 and float(telemetry.get("boss_hp", 0)) > 0)
-
-    def _wait_for_fight_scene(self, timeout):
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            telemetry = self.game_env.get_telemetry()
-            if (telemetry is not None
-                    and telemetry.get("status") == "fight"
-                    and float(telemetry.get("hp", 0)) > 0
-                    and float(telemetry.get("boss_hp", 0)) > 0
-                    and int(telemetry.get("restart_pending", 0)) == 0):
-                print("[RESET] Fight scene is ready.")
-                return True
-            time.sleep(0.3)
-        print("[RESET] The fight did not start. Enter the arena manually.")
-        return False
 
     def _log_reset_timing(self, reason, seconds):
         """What a reset actually costs: shows whether the scene transition optimizations pay off."""
@@ -480,77 +426,72 @@ class HollowKnightGym(gym.Env):
         print(f"[TIMING] total {total_n} resets = {total_t:.0f}s ({total_t / total_n:.2f}s on average) | {parts}")
 
     def reset(self, seed=None, options=None):
-            super().reset(seed=seed)
+        super().reset(seed=seed)
 
-            reset_reason = self._episode_reason
-            reset_started = time.time()
+        reset_reason = self._episode_reason
+        reset_started = time.time()
 
-            self.controller.reset_all()
-            # The state of the previous fight says nothing about this one, and the
-            # tracker is read by _get_obs() below.
-            self._boss_state.reset()
+        self.controller.reset_all()
+        # The state of the previous fight says nothing about this one, and the
+        # tracker is read by _get_obs() below.
+        self._boss_state.reset()
 
-            if reset_reason == "step limit" and self._fight_in_progress():
-                # The step cap is only a bookkeeping boundary of the episode, not a fight
-                # outcome: nobody won and nobody died. Reloading the arena here used to cut a
-                # live fight in half, so a truncated episode simply continues in place - the
-                # same boss, the same HP, a fresh episode counter.
-                print("[RESET] Step limit reached: continuing the same fight without a restart.")
-            elif self._first_reset:
-                self._first_reset = False
-                if not self._wait_for_fight_scene(15.0):
-                    # The mod defers a restart while the game is busy after the
-                    # load (hero's death scenario, a fade, the arena's own exit)
-                    # and forces it only after RESTART_FORCE_TIMEOUT - so the
-                    # fight can easily need 10+ s, plus the scene transition.
-                    # Never return an observation before the fight is really up:
-                    # otherwise the bot steps in the wrong place (or on a dead
-                    # hero) and the episode is garbage.
-                    print("[RESET] Auto-teleporting to the arena...")
-                    self._try_fast_restart()
-                    self._wait_for_fight_scene(75.0)
-            else:
-                want_restart = self.auto_restart or self._last_episode_was_victory
+        # Step limit: nobody won and nobody died - keep the same fight going,
+        # reloading the arena here used to cut a live fight in half.
+        if reset_reason == "step limit" and self._fight_in_progress():
+            print("[RESET] Step limit reached: continuing the same fight without a restart.")
+            self._episode_active = True
+            self._awaiting_fight = False
+        else:
+            # Fire the restart and return IMMEDIATELY. The mod performs the
+            # transition on its own schedule - deferred while the death
+            # scenario or arena exit plays, forced after RESTART_FORCE_TIMEOUT.
+            # Waiting here would serialize every other parallel window behind
+            # a single death, so each window instead keeps stepping with
+            # action 0 until its own fight scene is really up.
+            want_restart = (
+                self.auto_restart
+                or self._last_episode_was_victory
+                or reset_reason == "start"
+            )
+            if want_restart:
+                self.controller.request_fast_restart()
+            self._awaiting_fight = True
+            self._awaiting_started_at = time.time()
+            self._episode_active = False
 
-                if want_restart and self._try_fast_restart():
-                    self._wait_for_fight_scene(15.0)
-                else:
-                    print("[RESET] Fast restart failed, waiting for the fight to appear...")
-                    self._wait_for_fight_scene(20.0)
+        self._telemetry_mtime = self.game_env.get_telemetry_mtime()
+        obs = self._get_obs()
+        self._obs_deque.clear()
+        for _ in range(FRAME_STACK):
+            self._obs_deque.append(obs.copy())
+        self.last_hp = obs[IDX["hp"]]
+        self.last_boss_hp = obs[IDX["boss_hp"]]
+        self.last_x = obs[IDX["x"]]
+        self.last_y = obs[IDX["y"]]
+        self.last_boss_x = obs[IDX["boss_x"]]
+        self.last_boss_y = obs[IDX["boss_y"]]
+        self.last_dist = obs[IDX["dist_to_boss"]]
 
-            time.sleep(0.5)
-            self._telemetry_mtime = self.game_env.get_telemetry_mtime()
-            obs = self._get_obs()
-            self._obs_deque.clear()
-            for _ in range(FRAME_STACK):
-                self._obs_deque.append(obs.copy())
-            self.last_hp = obs[IDX["hp"]]
-            self.last_boss_hp = obs[IDX["boss_hp"]]
-            self.last_x = obs[IDX["x"]]
-            self.last_y = obs[IDX["y"]]
-            self.last_boss_x = obs[IDX["boss_x"]]
-            self.last_boss_y = obs[IDX["boss_y"]]
-            self.last_dist = obs[IDX["dist_to_boss"]]
-            
-            self.episode_step = 0
-            self.last_time = time.time()
-            
-            self.current_action = 0
-            self.hold_action_counter = 0
-            self._boss_death_frames = 0
-            self._last_episode_was_victory = False
-            self._last_scene_damage = self._scene_damage
-            self._weighted_damage_start = self._weighted_damage
+        self.episode_step = 0
+        self.last_time = time.time()
+
+        self.current_action = 0
+        self.hold_action_counter = 0
+        self._boss_death_frames = 0
+        self._last_episode_was_victory = False
+        self._last_scene_damage = self._scene_damage
+        self._weighted_damage_start = self._weighted_damage
+        if self._episode_active:
             self._last_phi = self._potential(float(obs[IDX["hp"]]), self._weighted_damage)
-            self._last_was_hit = 0.0
-            self._last_damage_this_frame = 0.0
-            self._last_action_was_dash = False
-            self._time_since_last_hit = 0
-            
-            stacked_obs = np.concatenate(list(self._obs_deque)).astype(np.float32)
-            self._log_reset_timing(reset_reason, time.time() - reset_started)
-            self._episode_reason = "unknown"
-            return stacked_obs, {}
+        self._last_was_hit = 0.0
+        self._last_damage_this_frame = 0.0
+        self._last_action_was_dash = False
+
+        stacked_obs = np.concatenate(list(self._obs_deque)).astype(np.float32)
+        self._log_reset_timing(reset_reason, time.time() - reset_started)
+        self._episode_reason = "unknown"
+        return stacked_obs, {}
 
     def _potential(self, hp, weighted_damage):
         # Damage comes from the mod's monotone counter over every HealthManager in the scene, not
@@ -564,6 +505,49 @@ class HollowKnightGym(gym.Env):
         return DAMAGE_REWARD_PER_HP * damage_done - HEALTH_PENALTY_PER_MASK * hp_lost
 
     def step(self, action):
+        # --- Waiting for the fight scene after a restart: release buttons and
+        # --- poll telemetry until this window's arena is really up. Never
+        # --- blocks the other parallel windows behind one death.
+        if self._awaiting_fight:
+            self.controller.reset_all()
+            new_mtime = self.game_env.wait_for_fresh_telemetry(self._telemetry_mtime, timeout=0.15)
+            if new_mtime != self._telemetry_mtime:
+                self._telemetry_mtime = new_mtime
+                telemetry = self.game_env.get_telemetry()
+                if telemetry is not None:
+                    self.last_time_scale = float(telemetry.get("time_scale", 1.0))
+                    if self._fight_in_progress():
+                        self._awaiting_fight = False
+                        self._episode_active = True
+                        print(f"[RESET] Fight scene is ready "
+                              f"({time.time() - self._awaiting_started_at:.1f}s after restart).")
+            elif time.time() - self._awaiting_started_at > 90.0:
+                print("[RESET] Fight still not up after 90s, re-sending restart.")
+                self.controller.request_fast_restart()
+                self._awaiting_started_at = time.time()
+
+            obs = self._get_obs()
+            self._obs_deque.append(obs.copy())
+            stacked_obs = np.concatenate(list(self._obs_deque)).astype(np.float32)
+            self.last_hp = obs[IDX["hp"]]
+            self.last_boss_hp = obs[IDX["boss_hp"]]
+            self.last_x = obs[IDX["x"]]
+            self.last_y = obs[IDX["y"]]
+            self.last_boss_x = obs[IDX["boss_x"]]
+            self.last_boss_y = obs[IDX["boss_y"]]
+            self.last_dist = obs[IDX["dist_to_boss"]]
+            self.last_time = time.time()
+            reward = -STEP_PENALTY / self.last_time_scale
+            info = {
+                "reward_parts": {"step_penalty": reward},
+                "step_limit": False,
+                "time_scale": self.last_time_scale,
+                "skipped_frames": self._skipped_frames,
+                "awaiting_fight": True,
+            }
+            return stacked_obs, reward, False, False, info
+
+        # --- Normal step: the fight is in progress ---
         # Update 10: only "attack" is aimed at the boss, see hk_features.redirect_action.
         action = redirect_action(action, self.last_dx_to_boss, self.last_boss_open)
         action = press_dash(action)
@@ -716,6 +700,8 @@ class HollowKnightGym(gym.Env):
             self.controller.reset_all()
             self._last_episode_was_victory = True
             self._episode_reason = "victory"
+            self._awaiting_fight = True
+            self._awaiting_started_at = time.time()
 
         if current_hp <= 0 and self.last_hp > 0:
             # The mask term has already charged the health that was spent (see the reward block
@@ -727,6 +713,8 @@ class HollowKnightGym(gym.Env):
             terminated = True
             self.controller.reset_all()
             self._episode_reason = "death"
+            self._awaiting_fight = True
+            self._awaiting_started_at = time.time()
 
         self.last_hp = current_hp
         self.last_boss_hp = current_boss_hp
