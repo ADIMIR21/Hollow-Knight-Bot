@@ -285,8 +285,42 @@ with one trainer over their pipes (`--variant b`, the same boss in every
 window), or runs one independent `train.py` per window (`--variant a`). The
 mod sets `Application.runInBackground`, so a window keeps simulating while
 another one is focused. The full parallel-training plan (the orchestrator,
-the shared-save caveat) lives in
-`docs/multi_window_training.md`.
+the shared-save caveat) lives in `docs/multi_window_training.md`.
+
+**One-command start.** `train_multi.py` without a plan argument uses the
+default 4-window plan (`tools/multibox/plan_4windows.json`). For a 6-window
+night run on the second monitor at low resolution:
+
+```
+python tools/multibox/train_multi.py start tools/multibox/plan_6windows.json \
+    --boss "False Knight" --timescale fast --width 300 --height 150
+```
+
+`--width`/`--height` are passed to the game as Unity's `-screen-width` /
+`-screen-height`. The observation is telemetry-only (`USE_SCREEN_CAPTURE` is
+`False`), so shrinking the window does not change what the bot sees - it only
+cuts GPU load per window. `HKMB_WIDTH` / `HKMB_HEIGHT` environment variables
+work too.
+
+**Save slots (read before a long parallel run).** All windows share one save
+folder (`%USERPROFILE%\AppData\LocalLow\Team Cherry\Hollow Knight`), and each
+window boots from its own slot file (`user1.dat` … `user4.dat`). Episodes from
+a maxed-up hero and from a fresh hero are incommensurable, so every window
+must boot from the *same hero content* - the slots hold identical saves, but
+each window reads its own file. Slots derive from the window number by
+default (cycle 2-3-4-1; for 6 windows: 2-3-4-1-2-3), and the tool
+`tools/multibox/sync_saves.py` copies one slot's file into the others with
+timestamped backups. It refuses to run while the game is open:
+
+```
+python tools/multibox/sync_saves.py --list
+python tools/multibox/sync_saves.py --from 2 --to 1,3,4
+```
+
+The mod writes the save folder on its own events mid-run, so before a long
+parallel session: close the game, sync the slots once, back up the whole save
+folder, and never hand-play in parallel with training.
+
 
 Environment variables:
 
