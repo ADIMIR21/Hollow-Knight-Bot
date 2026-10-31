@@ -231,8 +231,8 @@ commit.
 
 **Push only when the maintainer asks for it.** A local commit is cheap and reversible; a push is
 neither, and the maintainer reviews before anything leaves the machine. Leave the finished commit
-on its branch and report that it is ready to push. Never rewrite published history or force-push
-without an explicit request.
+on its branch and report that it is ready to push. Never rewrite published history without an
+explicit request. Force-push only when the user explicitly asks for it — never on your own.
 
 ## 6. Definition of done
 
