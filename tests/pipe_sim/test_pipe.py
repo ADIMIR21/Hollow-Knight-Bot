@@ -188,6 +188,39 @@ check("an idle resume still reports paused=0", (ev or {}).get("paused") == 0, ev
 check("telemetry still reports paused=0",
       int((client.get_telemetry() or {}).get("paused", 1)) == 0)
 
+print("\n[13] timescale / normaltime")
+before = client.get_status_seq("timescale_changed")
+check("timescale 2.0 sent", bosses.set_timescale(2.0))
+ev = client.wait_for_status("timescale_changed", timeout=5.0, after_seq=before)
+check("timescale_changed event received", ev is not None, ev)
+check("timescale_changed reports 2.0", (ev or {}).get("time_scale") == 2.0, ev)
+time.sleep(0.3)
+check("telemetry reports time_scale 2.0",
+      float((client.get_telemetry() or {}).get("time_scale", 0)) == 2.0,
+      (client.get_telemetry() or {}).get("time_scale"))
+
+before = client.get_status_seq("timescale_changed")
+check("normaltime sent", bosses.set_normal_time())
+ev = client.wait_for_status("timescale_changed", timeout=5.0, after_seq=before)
+check("timescale_changed event received after normaltime", ev is not None, ev)
+check("timescale_changed reports 1.0", (ev or {}).get("time_scale") == 1.0, ev)
+time.sleep(0.3)
+check("telemetry reports time_scale 1.0",
+      float((client.get_telemetry() or {}).get("time_scale", 1)) == 1.0,
+      (client.get_telemetry() or {}).get("time_scale"))
+
+# Out-of-range value is rejected by bosses.set_timescale before reaching the pipe,
+# so the mock must not see a command_error for it.
+try:
+    bosses.set_timescale(99.0)
+    check("out-of-range timescale raised ValueError", False)
+except ValueError:
+    check("out-of-range timescale raises ValueError", True)
+    time.sleep(0.3)
+    ev = client.get_status("command_error")
+    check("no command_error for rejected timescale",
+          ev is None or ev.get("command") != "timescale 99", ev)
+
 print()
 if FAILS:
     print(f"CHECKS FAILED: {len(FAILS)}")

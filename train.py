@@ -11,7 +11,8 @@ from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 from ai_controller import HollowKnightController
-from bosses import resolve_query, set_boss_scene, set_gate, DEFAULT_SCENE
+from bosses import (resolve_query, set_boss_scene, set_gate, DEFAULT_SCENE,
+                    preset_timescale, TIMESCALE_MIN, TIMESCALE_MAX)
 import hk_run_config as run_config
 
 # hk_gym is imported in main() AFTER the boss scene is fixed:
@@ -42,6 +43,14 @@ def parse_args():
         default=os.environ.get("HK_ENTRY_GATE", "door_dreamEnter"),
         help="arena entry gate (default door_dreamEnter — the only "
              "TransitionPoint in Godhome scenes; the mod can pick it automatically)",
+    )
+    parser.add_argument(
+        "--timescale", metavar="SCALE",
+        default=os.environ.get("HK_TIMESCALE", "normal"),
+        help="game time scale for training: a preset name (normal, fast, x4, x6) "
+             "or a raw value (1.0 = normal speed, 2.0 = double speed, max 6.0; "
+             "above ~3x risks breaking frame-tied physics). Defaults to HK_TIMESCALE "
+             "or normal.",
     )
     return parser.parse_args()
 
@@ -106,6 +115,11 @@ BATCH_SIZE = 256
 GAMMA = 0.9995
 LEARNING_RATE = 3e-4
 
+# Resolved game time scale for this run: preset name ("normal", "fast", "x4", "x6")
+# or a raw float. Parsed from --timescale / HK_TIMESCALE in main() after args are
+# known; stored as a module global so run_config_values() can fingerprint it.
+GLOBAL_TIMESCALE = 1.0
+
 
 def constant_lr(progress_remaining: float) -> float:
     """Flat learning rate - see the note above on why a schedule is not used."""
@@ -144,6 +158,7 @@ def run_config_values():
         "episode_step_limit": EPISODE_STEP_LIMIT,
         "observation_size": STATS_SIZE * FRAME_STACK,
         "action_count": ACTION_COUNT,
+        "time_scale": GLOBAL_TIMESCALE,
     }
 
 
@@ -526,6 +541,41 @@ def main():
     raw_env = HollowKnightGym()
     monitored_env = Monitor(raw_env)
     base_vec_env = DummyVecEnv([lambda: monitored_env])
+
+    # Apply the requested game time scale (1.0 = normal speed). Accepts a preset
+    # name (normal, fast, x4, x6) or a raw float. The command goes through the
+    # mod's pipe, so a stale or missing DLL means the game keeps running at
+    # normal speed.
+    global GLOBAL_TIMESCALE
+    try:
+        timescale = preset_timescale(args.timescale)
+    except ValueError:
+        try:
+            timescale = float(args.timescale)
+        except (TypeError, ValueError):
+            print(f"[SYSTEM] Invalid --timescale {args.timescale!r}, "
+                  f"keeping normal speed (1.0)")
+            timescale = 1.0
+    if not TIMESCALE_MIN <= timescale <= TIMESCALE_MAX:
+        print(f"[SYSTEM] --timescale {timescale} out of range "
+              f"[{TIMESCALE_MIN}, {TIMESCALE_MAX}], keeping normal speed (1.0)")
+        timescale = 1.0
+    base_vec_env.env_method("set_timescale", timescale)
+
+    # Read the ACTUAL time scale from the mod's telemetry. This is the source of
+    # truth: whatever the mod applied is what the bot learns under. Log it loudly
+    # so there is no confusion about what speed the run is at.
+    actual_time_scale = raw_env.get_time_scale()
+    if actual_time_scale != timescale:
+        print(f"[SYSTEM] Requested {timescale:g}, mod reports actual time scale: "
+              f"{actual_time_scale:g}")
+    else:
+        print(f"[SYSTEM] Game time scale set to {actual_time_scale:g} "
+              f"(1.0 = normal speed)")
+    GLOBAL_TIMESCALE = actual_time_scale
+    risky = actual_time_scale > 3.0
+    if risky:
+        print(f"[SYSTEM]  WARNING: above 3x risks breaking frame-tied physics")
 
     model_path = os.path.join(boss_dir, "hk_model_final.zip")
     config_file = run_config.config_path(boss_dir)

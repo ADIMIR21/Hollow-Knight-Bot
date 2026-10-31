@@ -140,6 +140,11 @@ class HollowKnightGym(gym.Env):
         self.last_angle_to_boss = 0.0
         self.episode_step = 0
         self.last_time = time.time()
+        # The game time scale the bot is actually training at. Read from the mod's telemetry
+        # every step - 1.0 is normal speed, 2.0 is double speed, etc. The bot adapts to
+        # whatever speed the mod is running, so --timescale / HK_TIMESCALE is only a request;
+        # the truth comes from the pipe.
+        self.last_time_scale = 1.0
         
         self._last_phi = 0.0
         self._scene_damage = 0.0
@@ -219,6 +224,27 @@ class HollowKnightGym(gym.Env):
 
     def resume_game(self, timeout=2.0):
         return self.set_paused(False, timeout=timeout)
+
+    def set_timescale(self, value):
+        """Set the game time scale through the mod ("timescale <value>").
+
+        1.0 is normal speed; 2.0 runs the fight at double speed and the PPO steps
+        arrive twice as fast. Returns True if the command reached the mod.
+        """
+        return self.controller.set_timescale(value)
+
+    def set_normal_time(self):
+        """Restore the normal (1x) game speed through the mod ("normaltime")."""
+        return self.controller.set_normal_time()
+
+    def get_time_scale(self):
+        """The game time scale the bot is training at right now.
+
+        Read from the mod's telemetry: 1.0 = normal speed, 2.0 = double speed, etc.
+        This is the source of truth - --timescale / HK_TIMESCALE is only a request;
+        whatever the mod actually applies is what the bot learns under.
+        """
+        return self.last_time_scale
         
     def _get_obs(self):
         frame, telemetry = self.game_env.get_observation()
@@ -493,6 +519,9 @@ class HollowKnightGym(gym.Env):
         new_mtime = self.game_env.wait_for_fresh_telemetry(self._telemetry_mtime, timeout=0.15)
         if new_mtime != self._telemetry_mtime:
             self._telemetry_mtime = new_mtime
+            telemetry = self.game_env.get_telemetry()
+            if telemetry is not None:
+                self.last_time_scale = float(telemetry.get("time_scale", 1.0))
         else:
             time.sleep(0.016)
 
@@ -538,8 +567,8 @@ class HollowKnightGym(gym.Env):
             self.controller.reset_all()
             self._episode_reason = "step limit"
 
-        reward -= STEP_PENALTY
-        reward_parts["step_penalty"] -= STEP_PENALTY
+        reward -= STEP_PENALTY / self.last_time_scale
+        reward_parts["step_penalty"] -= STEP_PENALTY / self.last_time_scale
 
         # The counter only ever grows, so the damage of this step is its increment, and what that
         # damage is worth depends on whether the boss was open when it landed.
@@ -626,4 +655,5 @@ class HollowKnightGym(gym.Env):
         return stacked_obs, reward, terminated, truncated, {
             "reward_parts": reward_parts,
             "step_limit": step_limit,
+            "time_scale": self.last_time_scale,
         }

@@ -72,6 +72,23 @@ class HollowKnightController:
             print("[CONTROLLER] " + ("Pause" if paused else "Resume") + " command sent")
         return sent
 
+    def set_timescale(self, value):
+        """Set the game time scale through the mod ("timescale <value>").
+
+        1.0 is normal speed; 2.0 runs the fight at double speed. True - the
+        command was sent.
+        """
+        if self.pipe is None or not self.pipe.is_connected:
+            return False
+        sent = self.pipe.send_command(f"timescale {float(value):g}")
+        if sent:
+            print(f"[CONTROLLER] timescale: {float(value):g}")
+        return sent
+
+    def set_normal_time(self):
+        """Restore the normal (1x) game speed through the mod ("normaltime")."""
+        return self.set_timescale(1.0)
+
     def set_action(self, action_id):
         if self.use_pipe_input:
             if self.pipe is not None:

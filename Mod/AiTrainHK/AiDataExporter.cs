@@ -103,7 +103,13 @@ namespace AiTrainHK
         private bool _aiPaused = false;
         private float _savedTimeScale = 1f;
         private float _aiPausedAt = 0f;
+        // Game time scale for faster/slower training. 1f is normal speed, anything above speeds
+        // the fight up (and the telemetry stream with it). Parked at 1f by default; the
+        // "timescale <value>" pipe command changes it, "normaltime" restores 1f.
+        private float _timeScale = 1f;
         private const float PAUSE_TIMEOUT_SECONDS = 120f;
+        private const float TIMESCALE_MIN = 0.01f;
+        private const float TIMESCALE_MAX = 6.0f;
         private string _restartTargetScene = "";
         private string _restartGate = "";
         // If the scene already changed after the request, the game's own end-of-fight
@@ -401,6 +407,11 @@ namespace AiTrainHK
                 return;
             }
 
+            // Keep the game running at the requested time scale (1f = normal speed).
+            // This is re-applied every tick so that a pause/resume cycle cannot leave
+            // the clock stuck at 0 or at an old value.
+            Time.timeScale = _timeScale;
+
             TryPerformPendingTransition();
             TransitionWatchdogTick(unscaledDelta);
             FadeWatchdogTick();
@@ -669,6 +680,42 @@ case "probe":
                         _heldAction = heldActionId;
                         _heldActionAt = DateTime.UtcNow;
                     break;
+
+                // "timescale <value>" — set the game time scale for faster/slower training.
+                // 1f is normal speed; 2f runs the fight at double speed (telemetry and PPO
+                // steps arrive twice as fast). Out-of-range values are rejected.
+                case "timescale":
+                    if (parts.Length >= 2 &&
+                        float.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out float newScale))
+                    {
+                        if (newScale < TIMESCALE_MIN || newScale > TIMESCALE_MAX)
+                        {
+                            Log($"[AI] timescale {newScale:F2} out of range [{TIMESCALE_MIN}, {TIMESCALE_MAX}]");
+                            PublishEvent(CommandErrorJson("timescale " + parts[1], "out of range"));
+                        }
+                        else
+                        {
+                            _timeScale = newScale;
+                            if (!_aiPaused) Time.timeScale = _timeScale;
+                            Log($"[AI] timescale: {_timeScale:F2}");
+                            PublishEvent("{\"status\": \"timescale_changed\", \"time_scale\": "
+                                + _timeScale.ToString("F2", CultureInfo.InvariantCulture) + "}");
+                        }
+                    }
+                    else
+                    {
+                        PublishEvent(CommandErrorJson("timescale", "missing or invalid value"));
+                    }
+                    break;
+
+                // "normaltime" — restore the normal (1x) game speed.
+                case "normaltime":
+                    _timeScale = 1f;
+                    if (!_aiPaused) Time.timeScale = 1f;
+                    Log("[AI] timescale: 1.00 (normal)");
+                    PublishEvent("{\"status\": \"timescale_changed\", \"time_scale\": 1.00}");
+                    break;
+
                 default:
                     Log($"[AI] Unknown command: '{line}'");
                     PublishEvent(CommandErrorJson(line, "unknown command"));
@@ -2205,6 +2252,7 @@ case "probe":
                         $"\"boss_is_attacking\": {(boss_is_attacking ? 1 : 0)}, " +
                         $"\"near_hazard\": {(near_hazard ? 1 : 0)}, " +
                         $"\"boss_state\": \"{boss_state}\", " +
+                        $"\"time_scale\": {Time.timeScale.ToString("F2", CultureInfo.InvariantCulture)}, " +
                         $"\"paused\": {(_aiPaused ? 1 : 0)}" +
                         $"}}";
 

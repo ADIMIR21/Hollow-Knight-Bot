@@ -20,6 +20,42 @@ DEFAULT_SCENE = "GG_False_Knight"
 # door_dreamEnter (the mod picks an existing gate on its own anyway).
 DEFAULT_GATE = "door_dreamEnter"
 
+# Game time scale limits for the "timescale" pipe command. 1.0 is normal speed;
+# anything above speeds the fight (and telemetry) up proportionally. Values above
+# ~3x risk breaking Hollow Knight's frame-tied physics (missed collisions, tunneling).
+TIMESCALE_MIN = 0.01
+TIMESCALE_MAX = 6.0
+
+# Preset training speeds for quick selection. Values above ~3x are allowed but
+# flagged as risky: Hollow Knight's physics is frame-tied, so at 6x collisions
+# and hitboxes can tunnel and the reward shaping (calibrated per frame) drifts.
+TIMESCALE_PRESETS = {
+    "normal": 1.0,   # normal speed — for final training and debugging
+    "fast":   2.0,   # 2x — recommended training speed
+    "x4":     4.0,   # 4x — fast training, physics still holds
+    "x6":     6.0,   # 6x — fast, but higher risk of collision tunneling (see AGENTS.md)
+}
+
+
+def preset_timescale(name):
+    """Resolve a preset name ("normal", "fast", "x4", "x6") to a time scale value.
+
+    Raises ValueError for unknown names and for out-of-range preset values.
+    """
+    name = str(name).strip().lower()
+    if name not in TIMESCALE_PRESETS:
+        raise ValueError(
+            f"unknown timescale preset {name!r}; choose one of "
+            f"{', '.join(sorted(TIMESCALE_PRESETS))}"
+        )
+    value = TIMESCALE_PRESETS[name]
+    if not TIMESCALE_MIN <= value <= TIMESCALE_MAX:
+        raise ValueError(
+            f"preset {name!r} ({value}) out of range [{TIMESCALE_MIN}, {TIMESCALE_MAX}]"
+        )
+    return value
+
+
 # (scene, label) — the order and labels match the mod's registry.
 BOSS_LIST = [
     # Pantheon of the Master (early bosses)
@@ -233,6 +269,27 @@ def request_boss_list():
     return send_command("bosses")
 
 
+def set_timescale(value):
+    """Set the game time scale through the mod ("timescale <value>").
+
+    1.0 is normal speed; 2.0 runs the fight at double speed and the telemetry
+    stream (and therefore PPO steps) arrive twice as fast. The value is clamped
+    to [TIMESCALE_MIN, TIMESCALE_MAX] on the mod's side; out-of-range values are
+    rejected with a command_error event.
+    """
+    value = float(value)
+    if not TIMESCALE_MIN <= value <= TIMESCALE_MAX:
+        raise ValueError(
+            f"time scale {value} out of range [{TIMESCALE_MIN}, {TIMESCALE_MAX}]"
+        )
+    return send_command(f"timescale {value:g}")
+
+
+def set_normal_time():
+    """Restore the normal (1x) game speed through the mod ("normaltime")."""
+    return send_command("normaltime")
+
+
 def read_boss_list_from_mod(timeout=3.0):
     """Waits for the registry dump from the mod (the boss_list event).
 
@@ -257,6 +314,19 @@ def fetch_boss_list(timeout=3.0):
 def read_telemetry():
     """Latest mod telemetry (None if there is no connection)."""
     return get_shared_client().get_telemetry()
+
+
+def get_timescale():
+    """Read the game time scale the mod is currently running at.
+
+    1.0 = normal speed, 2.0 = double speed, etc. Read straight from the
+    mod's telemetry - this is the source of truth for what speed the bot
+    is training under.
+    """
+    data = read_telemetry()
+    if data is None:
+        return None
+    return float(data.get("time_scale", 1.0))
 
 
 def is_connected(timeout=5.0):

@@ -39,6 +39,9 @@ namespace hkpipesim
         private static string _curScene = "GG_False_Knight";
         private static bool _restartPending = false;
         private static int _restartFrames = 0;
+        // Game time scale for faster/slower training. 1f = normal speed; mirrored from
+        // the mod's "timescale <value>" command.
+        private static float _timeScale = 1f;
 
         public static void Main(string[] args)
         {
@@ -143,7 +146,8 @@ namespace hkpipesim
                         + ", \"is_recoiling\": 0, \"is_dead\": 0, \"was_hit\": 0"
                         + ", \"hit_counter\": 0, \"boss_damage_total\": 0"
                         + ", \"boss_is_attacking\": 0, \"near_hazard\": 0"
-                        + ", \"boss_state\": \"idle\", \"paused\": " + (_paused ? 1 : 0) + "}";
+                        + ", \"boss_state\": \"idle\", \"paused\": " + (_paused ? 1 : 0)
+                        + ", \"time_scale\": " + _timeScale.ToString("F2", CultureInfo.InvariantCulture) + "}";
                     Publish(json);
                     published++;
                     if (published % 100 == 0)
@@ -194,6 +198,38 @@ namespace hkpipesim
                 // input and answers nothing, so the mock has to stay just as quiet.
                 case "action":
                     break;
+
+                // "timescale <value>" - set the game time scale for faster/slower training.
+                case "timescale":
+                    if (parts.Length >= 2 &&
+                        float.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out float newScale))
+                    {
+                        if (newScale < 0.01f || newScale > 6.0f)
+                        {
+                            PublishEvent("{\"status\": \"command_error\", \"command\": \"timescale " + parts[1]
+                                + "\", \"reason\": \"out of range\"}");
+                        }
+                        else
+                        {
+                            _timeScale = newScale;
+                            Console.WriteLine($"[mock] timescale: {_timeScale:F2}");
+                            PublishEvent("{\"status\": \"timescale_changed\", \"time_scale\": "
+                                + _timeScale.ToString("F2", CultureInfo.InvariantCulture) + "}");
+                        }
+                    }
+                    else
+                    {
+                        PublishEvent("{\"status\": \"command_error\", \"command\": \"timescale\", \"reason\": \"missing or invalid value\"}");
+                    }
+                    break;
+
+                // "normaltime" - restore normal (1x) game speed.
+                case "normaltime":
+                    _timeScale = 1f;
+                    Console.WriteLine("[mock] timescale: 1.00 (normal)");
+                    PublishEvent("{\"status\": \"timescale_changed\", \"time_scale\": 1.00}");
+                    break;
+
                 case "warp":
                     Console.WriteLine($"[mock] warp to gate {_targetGate}");
                     break;
