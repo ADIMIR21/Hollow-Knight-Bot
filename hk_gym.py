@@ -651,16 +651,17 @@ class HollowKnightGym(gym.Env):
             reward_parts["dodge"] += DODGE_BONUS / self.last_time_scale
         self._last_action_was_dash = action_is_dash
 
+        # The counter only ever grows, so the damage of this step is its increment,
+        # and what that damage is worth depends on whether the boss was open when it landed.
+        damage_now = max(0.0, self._scene_damage - self._last_scene_damage)
+        self._last_scene_damage = self._scene_damage
+
         # Open window bonus: flat bonus on top of the ×3 multiplier for damage while the
         # boss is stunned / recovering — the only window where the fight can be finished.
         if damage_now > 0 and boss_is_open:
             reward += OPEN_WINDOW_BONUS / self.last_time_scale
             reward_parts["open_window"] += OPEN_WINDOW_BONUS / self.last_time_scale
 
-        # The counter only ever grows, so the damage of this step is its increment, and what that
-        # damage is worth depends on whether the boss was open when it landed.
-        damage_now = max(0.0, self._scene_damage - self._last_scene_damage)
-        self._last_scene_damage = self._scene_damage
         self._weighted_damage += damage_weight(
             damage_now, boss_is_open, OPEN_WINDOW_DAMAGE_MULTIPLIER)
 
