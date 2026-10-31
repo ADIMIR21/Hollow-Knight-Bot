@@ -199,15 +199,18 @@ def _window_running(window):
     return f"hollow_knight_{window}" in {name for _, name in hk_multibox.game_processes()}
 
 
-def _launch_windows(plan):
+def _launch_windows(plan, width=None, height=None):
     """Starts every window of the plan that is not already running."""
     import hk_multibox
+    if width or height:
+        print(f"[MULTI] Launching windows at {width or 'default'}x{height or 'default'}")
     for cfg in plan:
         if _window_running(cfg["window"]):
             print(f"[MULTI] window {cfg['window']} is already up (skipping launch).")
             continue
         print(f"[MULTI] launching window {cfg['window']}...", flush=True)
-        proc, state = hk_multibox.launch_one(cfg["window"], _LAUNCH_WAIT)
+        proc, state = hk_multibox.launch_one(cfg["window"], _LAUNCH_WAIT,
+                                             width=width, height=height)
         print(f"[MULTI]   window {cfg['window']}: {state}")
     if not _wait_pipes(plan):
         print("[MULTI] Some windows never came up. Use --no-launch if they are "
@@ -451,7 +454,7 @@ def cmd_start(args):
               "full train.py flow).")
         return 1
 
-    if not args.no_launch and not _launch_windows(plan):
+    if not args.no_launch and not _launch_windows(plan, width=args.width, height=args.height):
         return 2
     if not _wait_pipes(plan):
         return 2
@@ -530,6 +533,13 @@ def main():
     p.add_argument("--smoke-steps", type=int, default=0, metavar="N",
                    help="stop after N steps instead of the full run (a live check "
                         "isolated in the <scene>__smoke folder)")
+    p.add_argument("--width", type=int, metavar="N",
+                   help="window render width (Unity -screen-width). Cuts GPU load "
+                        "per window; telemetry observation is unaffected. "
+                        "Env: HKMB_WIDTH")
+    p.add_argument("--height", type=int, metavar="N",
+                   help="window render height (Unity -screen-height). "
+                        "Env: HKMB_HEIGHT")
     p.set_defaults(func=cmd_start)
 
     p = sub.add_parser("stop", help="stop the trainer and close the windows")

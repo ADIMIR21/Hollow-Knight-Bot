@@ -229,13 +229,21 @@ def wait_for_window(proc, n, wait_s):
     return "no-pipe"
 
 
-def launch_one(n, wait_s):
+def launch_one(n, wait_s, width=None, height=None):
     exe = instance_exe(n)
     if exe is None:
         return None, "missing"
     env = os.environ.copy()
     env["PIPE_SUFFIX"] = "" if n == 1 else f"_{n}"
-    proc = subprocess.Popen([str(exe)], cwd=str(exe.parent), env=env)
+    cmd = [str(exe)]
+    # Unity command-line args: shrink the render target so several windows
+    # don't hammer the GPU. Hollow Knight's observation is telemetry-only, so
+    # a smaller window does not change what the bot sees.
+    if width:
+        cmd += ["-screen-width", str(int(width))]
+    if height:
+        cmd += ["-screen-height", str(int(height))]
+    proc = subprocess.Popen(cmd, cwd=str(exe.parent), env=env)
     state = wait_for_window(proc, n, wait_s)
     return proc, state
 
@@ -246,6 +254,12 @@ def cmd_launch(args):
     if game is None:
         print("Hollow Knight not found. Set the HK_GAME_DIR environment variable.")
         return 1
+
+    width = args.width or os.environ.get("HKMB_WIDTH")
+    height = args.height or os.environ.get("HKMB_HEIGHT")
+    if width or height:
+        print(f"Launching with render size {width or 'default'}x{height or 'default'} "
+              "(HKMB_WIDTH/HKMB_HEIGHT env or --width/--height).")
 
     missing = [n for n in range(1, count + 1) if not instance_exe(n).exists()]
     if missing:
@@ -261,7 +275,7 @@ def cmd_launch(args):
     results = {}  # n -> (proc, state)
     for n in range(1, count + 1):
         print(f"  instance {n}: starting...", flush=True)
-        proc, state = launch_one(n, args.wait)
+        proc, state = launch_one(n, args.wait, width=width, height=height)
         if proc is None:
             print(f"    missing (run setup first)")
             continue
@@ -281,7 +295,7 @@ def cmd_launch(args):
         if old.poll() is None:
             old.kill()  # a window without a pipe is no use, restart it clean
             time.sleep(2.0)
-        proc, state = launch_one(n, args.wait)
+        proc, state = launch_one(n, args.wait, width=width, height=height)
         if proc is not None:
             results[n] = (proc, state)
             print(f"    {'up (PID %d)' % proc.pid if state == 'ok' else state}")
@@ -363,6 +377,13 @@ def main():
     p.add_argument("count", type=int, nargs="?", default=DEFAULT_COUNT)
     p.add_argument("--wait", type=int, default=DEFAULT_WAIT,
                    help="seconds to wait for one window to come up")
+    p.add_argument("--width", type=int, metavar="N",
+                   help="window render width (Unity -screen-width). "
+                        "Reduces GPU load; telemetry observation is unaffected. "
+                        "Env: HKMB_WIDTH")
+    p.add_argument("--height", type=int, metavar="N",
+                   help="window render height (Unity -screen-height). "
+                        "Env: HKMB_HEIGHT")
     p.set_defaults(func=cmd_launch)
 
     p = sub.add_parser("stop", help="close every game window")
