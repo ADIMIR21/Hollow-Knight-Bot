@@ -268,6 +268,15 @@ models/ppo_hk/
   - `s` - disable auto-restart
   - `q` - quit
 
+### Training in several windows
+
+Several windows of the game can run side by side from the one Steam install
+(`tools/multibox/`), each window serving its own named pipe
+(`hk_ai_mod`, `hk_ai_mod_2`, ...). A `train.py` process picks its window with
+`HK_PIPE_NAME`. The full parallel-training plan (per-run checkpoint folders,
+the orchestrator, the shared-save caveat) lives in
+`docs/multi_window_training.md`.
+
 Environment variables:
 
 | Variable | Default | Description |

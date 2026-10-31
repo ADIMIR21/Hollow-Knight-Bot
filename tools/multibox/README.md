@@ -1,0 +1,49 @@
+# tools/multibox - multi-window launcher
+
+Launches several Hollow Knight windows from the ONE Steam install, using
+hardlinks and NTFS junctions instead of folder copies (~0 bytes per window):
+
+```
+HK_Instance<N>/
+  hollow_knight_<N>.exe    hardlink to the game exe (a different exe name is
+                           what lets windows run side by side and bypasses
+                           the Steam DRM wrapper)
+  hollow_knight_<N>_Data   junction to hollow_knight_Data
+  MonoBleedingEdge         junction
+  UnityPlayer.dll          hardlink
+  steam_appid.txt          "367520" - launches without the Steam client
+```
+
+The instance folders live on the game's volume (hardlinks cannot cross
+volumes), by default in `D:\HKMultiInstance`; override with `HKMB_INSTANCES`.
+
+## Commands
+
+```
+python tools/multibox/hk_multibox.py setup 4     create instances 1..4
+python tools/multibox/hk_multibox.py launch 4    safe sequential launch
+python tools/multibox/hk_multibox.py stop        close every window
+python tools/multibox/hk_multibox.py list        instances + real disk usage
+python tools/multibox/hk_multibox.py status      running windows + mod pipes
+```
+
+`launch` starts one window at a time and waits until the AiTrainHK mod of
+that window has created its named pipe (`hk_ai_mod`, `hk_ai_mod_2`, ...) -
+the pipe is the proof the window is really up - and retries a window once if
+it fails. `stop` closes windows gracefully first and force-kills survivors
+(including stray Unity crash handlers).
+
+## Pipes
+
+The mod reads `PIPE_SUFFIX` on start, so window N serves pipe
+`hk_ai_mod` (N=1) / `hk_ai_mod_<N>`. `launch` sets the variable itself.
+A training process picks its window with `HK_PIPE_NAME` - see
+`docs/multi_window_training.md` for the full parallel-training plan.
+
+## Notes
+
+- Saves (`AppData\LocalLow\Team Cherry\Hollow Knight`) and the settings
+  registry key are shared by all windows.
+- A public, mod-free edition of this tool lives at
+  https://github.com/ADIMIR21/hk-multibox; this copy adds the pipe-aware
+  launch/status integration the training loop relies on.

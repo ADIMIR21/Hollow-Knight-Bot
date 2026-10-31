@@ -87,7 +87,12 @@ python tests/run_pipe_harness.py     # builds the mock, runs --selftest-stuck, t
 | `train.py` | PPO training, checkpoint layout, `logs/progress.txt` journal |
 | `progress_log.py`, `plot_progress.py` | Journal parsing (imports nothing, so tier 1 tests it) and the run's figures |
 | `teleport.py`, `ai_receiver.py` | Boss selection/teleport tooling, live telemetry debugger |
+<<<<<<< HEAD
 | `tools/deploy_mod.ps1` | Game lookup (Steam registry), build and deploy of the mod DLL |
+=======
+| `tools/multibox/` | Multi-window launcher: hardlink/junction instances of the one Steam install, per-window named pipes; the plan for parallel training lives in `docs/multi_window_training.md` |
+| `deploy_mod.ps1` | Game lookup (Steam registry), build and deploy of the mod DLL |
+>>>>>>> f61602d (Add tools/multibox: multi-window launcher from one game install)
 | `tests/` | Units + registry parity; `tests/pipe_sim/` is the mock mod and its integration checks |
 | `.github/workflows/ci.yml` | CI: units on Linux, pipe harness on Windows |
 
