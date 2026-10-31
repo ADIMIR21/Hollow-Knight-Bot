@@ -88,9 +88,13 @@ python tests/run_pipe_harness.py     # builds the mock, runs --selftest-stuck, t
 | `progress_log.py`, `plot_progress.py` | Journal parsing (imports nothing, so tier 1 tests it) and the run's figures |
 | `teleport.py`, `ai_receiver.py` | Boss selection/teleport tooling, live telemetry debugger |
 <<<<<<< HEAD
+<<<<<<< HEAD
 | `tools/deploy_mod.ps1` | Game lookup (Steam registry), build and deploy of the mod DLL |
 =======
 | `tools/multibox/` | Multi-window launcher: hardlink/junction instances of the one Steam install, per-window named pipes; the plan for parallel training lives in `docs/multi_window_training.md` |
+=======
+| `tools/multibox/` | Multi-window launcher: hardlink/junction instances of the one Steam install, per-window named pipes, and the `train_multi.py` orchestrator (one trainer over N windows for the same boss, or one `train.py` per window); the plan for parallel training lives in `docs/multi_window_training.md` |
+>>>>>>> 6580777 (Multi-window phase 3: the orchestrator - one trainer over N windows)
 | `deploy_mod.ps1` | Game lookup (Steam registry), build and deploy of the mod DLL |
 >>>>>>> f61602d (Add tools/multibox: multi-window launcher from one game install)
 | `tests/` | Units + registry parity; `tests/pipe_sim/` is the mock mod and its integration checks |

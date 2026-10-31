@@ -377,6 +377,13 @@ namespace AiTrainHK
             var ticker = host.AddComponent<AiModTicker>();
             ticker.OnTick += OnTick;
 
+            // Multi-window training runs every window but one in the background, and
+            // Unity's default is to stop the whole player loop when unfocused: the
+            // telemetry stalls and a load coroutine started from the pipe never
+            // finishes (observed live). Keep every window simulating while it is
+            // behind others - the trainer never needs the window in the foreground.
+            Application.runInBackground = true;
+
             ModHooks.HeroUpdateHook += OnHeroUpdate;
             On.InputHandler.Update += OnInputHandlerUpdate;
             On.HeroController.Update += OnHeroControllerUpdate;

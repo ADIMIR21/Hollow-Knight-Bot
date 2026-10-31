@@ -40,6 +40,31 @@ The mod reads `PIPE_SUFFIX` on start, so window N serves pipe
 A training process picks its window with `HK_PIPE_NAME` - see
 `docs/multi_window_training.md` for the full parallel-training plan.
 
+## Training over several windows
+
+`train_multi.py` is the phase 3 orchestrator: from one JSON plan it launches
+the windows, waits for every pipe and starts the training.
+
+```
+python tools/multibox/train_multi.py start plan.json --boss hornet --timescale fast
+python tools/multibox/train_multi.py stop
+python tools/multibox/train_multi.py status
+```
+
+The plan is a list of windows (`[{"window": 1}, {"window": 2}]`); the pipe and
+the save slot are derived by default (pipes follow the launcher naming, save
+slots cycle 2-3-4-1). Two variants:
+
+- `--variant b` (default, the goal): ONE trainer over all windows - a
+  SubprocVecEnv with one worker per window, all windows on the same boss,
+  one set of checkpoints/journal. `--smoke-steps N` isolates a short live
+  check in `<scene>__smoke`.
+- `--variant a` (interim): one independent `train.py` per window, namespaced
+  by a tag; the orchestrator watches the pairs and restarts a dead pair.
+
+The windows must run the CURRENT mod: it sets `Application.runInBackground`,
+so a window keeps simulating while another one has the focus.
+
 ## Notes
 
 - Saves (`AppData\LocalLow\Team Cherry\Hollow Knight`) and the settings

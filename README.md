@@ -279,7 +279,12 @@ Several windows of the game can run side by side from the one Steam install
 `--pipe` / `HK_PIPE_NAME` and namespaces its checkpoint folder and journal with
 `--tag` / `HK_RUN_TAG` (`models/ppo_hk/<scene>__<tag>/`,
 `logs/progress__<tag>.txt`); `--save-slot` / `HK_SAVE_SLOT` picks which save
-slot that window boots from. The full parallel-training plan (the orchestrator,
+slot that window boots from. `tools/multibox/train_multi.py` drives the whole
+thing from a JSON plan: it launches the windows and either trains them all
+with one trainer over their pipes (`--variant b`, the same boss in every
+window), or runs one independent `train.py` per window (`--variant a`). The
+mod sets `Application.runInBackground`, so a window keeps simulating while
+another one is focused. The full parallel-training plan (the orchestrator,
 the shared-save caveat) lives in
 `docs/multi_window_training.md`.
 

@@ -198,8 +198,12 @@ class HollowKnightGym(gym.Env):
         self._last_damage_this_frame = 0.0
         self._last_action_was_dash = False
         self._time_since_last_hit = 0  # frames since last damage dealt to the boss
-        self._console_thread = threading.Thread(target=self._console_listener, daemon=True)
-        self._console_thread.start()
+        # The r/s/q console keys exist only where a human console exists: a
+        # SubprocVecEnv worker (multi-window training) has no tty, and its
+        # listener would busy-loop on a closed stdin forever.
+        if sys.stdin is not None and sys.stdin.isatty():
+            self._console_thread = threading.Thread(target=self._console_listener, daemon=True)
+            self._console_thread.start()
         
     def _console_listener(self):
         while self._running:

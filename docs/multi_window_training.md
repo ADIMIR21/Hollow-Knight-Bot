@@ -66,17 +66,29 @@ single `train.py` can already pick a window with `HK_PIPE_NAME`.
 - `hk_run_config.py` fingerprint is untouched - the tag namespacing must not
   change any training value.
 
-### Phase 3 - the orchestrator
+### Phase 3 - the orchestrator (done, variant B proven live)
 
 **Decision: every window trains the same boss.** The maintainer wants all
 windows on one boss, so the target topology is *one trainer over N windows*:
 `tools/multibox/train_multi.py` opens one pipe per window and exposes them to
-a single PPO run as N parallel sub-environments (a VecEnv over N pipes). All
+a single PPO run as N parallel sub-environments (a SubprocVecEnv: one worker
+process per window, so the one-shared-client-per-process rule holds). All
 N windows share the boss, the timescale and the run's checkpoints/journal;
 sample throughput scales with the number of windows. The per-window `--tag`
-variant (N independent `train.py` processes, one boss per process, namespaced
-folders) stays as the interim way to split the *arena list* across windows
-until the shared-trainer orchestrator lands.
+variant (`--variant a`, N independent `train.py` processes) stays for
+splitting the *arena list* across windows.
+
+Proven live (two windows, False Knight, `--smoke-steps 2000`): both windows
+loaded their own save slots (2 and 3) and fought in the same PPO rollout
+while unfocused - the mod sets `Application.runInBackground = true`, so a
+window does not need the foreground to keep simulating. A smoke run is
+isolated in `<scene>__smoke` and cannot touch real checkpoints.
+
+Still open: a window that dies takes the whole variant B rollout down (a
+SubprocVecEnv worker cannot be replaced); the orchestrator restarts pairs
+only in variant A. If screen capture is ever enabled, windows must also be
+tiled and captured per instance - the telemetry-only observation does not
+need it today.
 
 The orchestrator reads a small run-plan file (JSON), e.g.:
 
@@ -89,9 +101,9 @@ The orchestrator reads a small run-plan file (JSON), e.g.:
 It then: launches the windows (`hk_multibox`), waits for each pipe, and -
 variant B (the goal) - feeds all pipes into one trainer; variant A (interim)
 starts one `train.py` per window with the right `--pipe`/`--tag`/`--save-slot`.
-It watches the processes and restarts a window+trainer pair that died (a
-trainer alone is pointless without its window). Subcommands: `start <plan>`,
-`stop`, `status`.
+Variant A watches the processes and restarts a window+trainer pair that died
+(a trainer alone is pointless without its window). Subcommands:
+`start <plan>`, `stop`, `status`.
 
 ### Phase 4 - the save-file question (partially verified)
 
