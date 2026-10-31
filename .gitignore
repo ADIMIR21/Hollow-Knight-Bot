@@ -16,3 +16,7 @@ tests/pipe_sim/obj/
 tests/pipe_sim/bosses.json
 tests/mono_il/bin/
 tests/mono_il/obj/
+
+# Personal training launcher scripts with hard-coded local paths — not part of the repo.
+train_4x.bat
+train_4x_night.bat
