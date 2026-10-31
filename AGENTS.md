@@ -87,20 +87,8 @@ python tests/run_pipe_harness.py     # builds the mock, runs --selftest-stuck, t
 | `train.py` | PPO training, checkpoint layout, `logs/progress.txt` journal |
 | `progress_log.py`, `plot_progress.py` | Journal parsing (imports nothing, so tier 1 tests it) and the run's figures |
 | `teleport.py`, `ai_receiver.py` | Boss selection/teleport tooling, live telemetry debugger |
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
-| `tools/deploy_mod.ps1` | Game lookup (Steam registry), build and deploy of the mod DLL |
-=======
-| `tools/multibox/` | Multi-window launcher: hardlink/junction instances of the one Steam install, per-window named pipes; the plan for parallel training lives in `docs/multi_window_training.md` |
-=======
-| `tools/multibox/` | Multi-window launcher: hardlink/junction instances of the one Steam install, per-window named pipes, and the `train_multi.py` orchestrator (one trainer over N windows for the same boss, or one `train.py` per window); the plan for parallel training lives in `docs/multi_window_training.md` |
->>>>>>> 6580777 (Multi-window phase 3: the orchestrator - one trainer over N windows)
-=======
 | `tools/multibox/` | Multi-window launcher: hardlink/junction instances of the one Steam install, per-window named pipes, reduced-resolution launch (`--width`/`--height`), the `train_multi.py` orchestrator (one trainer over N windows for the same boss, or one `train.py` per window), `sync_saves.py` (copy one save slot into the others with backups, refuses to run while the game is open), and example plans (`plan_4windows.json`, `plan_6windows.json`); the plan for parallel training lives in `docs/multi_window_training.md` |
->>>>>>> 25919c8 (Prepare night run: 6 windows at 300x150, plan_6windows.json, save-slot docs)
-| `deploy_mod.ps1` | Game lookup (Steam registry), build and deploy of the mod DLL |
->>>>>>> f61602d (Add tools/multibox: multi-window launcher from one game install)
+| `tools/deploy_mod.ps1` | Game lookup (Steam registry), build and deploy of the mod DLL |
 | `tests/` | Units + registry parity; `tests/pipe_sim/` is the mock mod and its integration checks |
 | `.github/workflows/ci.yml` | CI: units on Linux, pipe harness on Windows |
 
