@@ -597,6 +597,7 @@ class HollowKnightGym(gym.Env):
         vel_y = obs[IDX["vel_y"]]
         boss_is_attacking = obs[IDX["boss_is_attacking"]]
         boss_is_open = obs[IDX["boss_open"]] > 0.5
+        was_hit = obs[IDX["was_hit"]] > 0.5
         
         reward = 0.0
         reward_parts = {
@@ -631,7 +632,7 @@ class HollowKnightGym(gym.Env):
 
         # Hit penalty: taking damage from the boss costs more than a step but less than a mask.
         # Makes the policy flinch instead of standing in the attack.
-        if was_hit > 0.5:
+        if was_hit:
             reward -= HIT_PENALTY / self.last_time_scale
             reward_parts["hit_penalty"] -= HIT_PENALTY / self.last_time_scale
 
@@ -645,7 +646,7 @@ class HollowKnightGym(gym.Env):
         # Dodge bonus: dashed while the boss was attacking and did not get hit.
         # Rewards the dodge, not just the movement.
         action_is_dash = action in DASH_ACTIONS
-        if action_is_dash and boss_is_attacking and was_hit <= 0.5:
+        if action_is_dash and boss_is_attacking and not was_hit:
             reward += DODGE_BONUS / self.last_time_scale
             reward_parts["dodge"] += DODGE_BONUS / self.last_time_scale
         self._last_action_was_dash = action_is_dash
