@@ -70,4 +70,13 @@ if (-not (Test-Path $modsDir)) {
 }
 Copy-Item $dll (Join-Path $modsDir "AiTrainHK.dll") -Force
 Write-Host "Deploy finished: $modsDir\AiTrainHK.dll" -ForegroundColor Green
-Write-Host "Launch the game and check ModLog - the mod version should be 1."
+
+$csFile = Join-Path $PSScriptRoot "..\Mod\AiTrainHK\AiDataExporter.cs"
+$modVersion = "unknown"
+if (Test-Path $csFile) {
+    $line = Select-String -Path $csFile -Pattern 'GetVersion\(\) => "([^"]+)"' | Select-Object -First 1
+    if ($line) {
+        $modVersion = $line.Matches[0].Groups[1].Value
+    }
+}
+Write-Host "Launch the game and check ModLog - the mod version should be $modVersion."
