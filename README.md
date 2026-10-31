@@ -39,6 +39,8 @@ The mod keeps a duplex server on `\\.\pipe\hk_ai_mod` (up to 4 clients, so train
 | `warp` | Return the hero to the arena gate without reloading the scene (if thrown out of the fight / stuck) |
 | `pause` | **Freeze the fight** (`Time.timeScale = 0`): the boss FSM, the hero's input and every animation stop while the game keeps publishing telemetry. Answered with a `paused` event |
 | `resume` | Unfreeze the fight and restore the time scale it had before. Answered with a `resumed` event. Both commands are idempotent, and the mod lifts the pause by itself after 120 s without a `resume` - a trainer that died mid-update must not leave the game frozen |
+| `timescale <value>` | **Set the game time scale** for faster training (`1.0` = normal speed, `2.0` = double speed, max `6.0`). Also accepts presets `normal`, `fast`, `x4`, `x6`. The telemetry stream - and therefore the PPO steps - arrive proportionally faster. Values above ~3x risk breaking Hollow Knight's frame-tied physics (missed collisions, tunneling), so `2.0`-`3.0` is the recommended training window. Answered with a `timescale_changed` event |
+| `normaltime` | Restore the normal `1x` game speed. Answered with a `timescale_changed` event |
 | `action <id>` | **Press the hero's buttons through the game's own input** (`0`-`18`, the table in `hk_features.py`). The mod commits the state on InControl's `PlayerAction`s and re-commits it on every hero update, so no emulated controller is involved and a killed trainer cannot leave the game bound to a dead pad. The id stays held until the next `action` command, and for at most 2 s after the last one arrives, so a trainer that dies cannot leave the hero pressing a button |
 
 Telemetry contains a `scene` field (the current scene) - so Python and the human can see which boss's arena the fight is taking place in. If a scene transition hangs (the hero stays in `transitioning`), the mod's watchdog finds the entry point after 2.5 seconds via the `TransitionPoint.TransitionPoints` registry and properly triggers `HeroController.EnterScene`; on a repeated hang it teleports the hero to the gate and lifts the freeze directly (the private `FinishedEnteringScene` + re-enabling rendering). The 2.5 s window is only the first line of defence: a hang that starts later is caught by the same repair after 5 s of frozen state, and the fade has a 15 s backstop. The watchdog also raises `Time.timeScale` if the transition zeroed out time. While a `pause` is active the watchdogs and the deferred transition stand down entirely: a frozen game is not a stuck one, and it must not start a scene transition behind the trainer's back.
@@ -162,7 +164,7 @@ The project locates the game by itself (Steam registry or standard paths on driv
 The DLL cannot be overwritten while the game is running - close the game before deploying a new build. For convenience there is a script:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File deploy_mod.ps1 -Build
+powershell -ExecutionPolicy Bypass -File tools/deploy_mod.ps1 -Build
 ```
 
 The build must match the Python side: from the pipe transport on, the mod talks to Python over the named pipe `\\.\pipe\hk_ai_mod`, so with an old DLL deployed the framework will not see the game at all (it reports that the mod did not answer within 20 s).
@@ -214,6 +216,35 @@ python train.py --boss nkg      # aliases work as in teleport.py
 
 No environment variable is needed: the controller sends `action <id>` into the pipe by default, and the mod presses the hero's buttons (see the note under "Python RL framework").
 
+## Training speed presets (time scale)
+
+The game time scale controls how fast the fight runs, and therefore how fast telemetry and PPO steps arrive. `--timescale` / `HK_TIMESCALE` accepts either a preset name or a raw float:
+
+| Preset / value | Speed | When to use |
+|----------------|-------|-------------|
+| `normal` / `1.0` | 1× | Normal speed, debugging, final runs |
+| `fast` / `2.0` | 2× | **Recommended training speed** — doubles step rate |
+| `x4` / `4.0` | 4× | Fast training, physics still holds |
+| `x6` / `6.0` | 6× | Maximum speed; above ~3× risks collision tunneling |
+
+Examples:
+
+```powershell
+python train.py --boss "False Knight" --timescale fast    # 2x speed
+python train.py --boss hornet --timescale x4             # 4x speed
+python train.py --boss nkg --timescale 1.5               # custom float
+set HK_TIMESCALE=x6                                      # environment variable
+python train.py --boss hornet
+```
+
+**How it works:** The bot reads the real `time_scale` from the mod's telemetry every step — not just the value you passed on the command line. If the mod applies `2.0`, the bot trains at `2.0` regardless of what `--timescale` said.
+
+**Step penalty scales inversely:** `STEP_PENALTY` is divided by `time_scale`, so a fight at 2× doesn't punish hesitation twice as hard per frame just because frames arrive twice as fast. The total penalty per real second stays the same.
+
+**Checkpoint fingerprint:** `time_scale` is part of the checkpoint fingerprint (`run_config_values()`). A model trained at 2× cannot be resumed at 1× (or vice versa) — `train.py` refuses and names the differing value. To change speed on an existing boss, start a new training run rather than resuming.
+
+**Recommended boss to start with:** `False Knight` (default). Move to Hornet Protector once the bot wins reliably.
+
 Training files are laid out per boss **automatically** - nothing has to be created by hand:
 
 ```
@@ -245,6 +276,7 @@ Environment variables:
 | `HK_ENTRY_GATE` | `door_dreamEnter` | Arena entry gate; sent to the mod with `set_gate` at startup (if the gate is not in the scene, the mod still picks an existing one itself) |
 | `HK_FRAME_SKIP` | `4` | No longer used - kept for backward compatibility only / ignored; each step now syncs to a fresh telemetry write instead |
 | `HK_FRAME_STACK` | `4` | How many recent observations go into the stack |
+| `HK_TIMESCALE` | `normal` | Game time scale for training: preset `normal` (1.0), `fast` (2.0), `x4` (4.0), `x6` (6.0), or a raw float (`1.0` = normal speed, max `6.0`). Passed to `train.py` with `--timescale` |
 
 ### The game is paused while the policy updates
 

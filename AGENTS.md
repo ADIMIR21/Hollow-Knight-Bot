@@ -87,7 +87,7 @@ python tests/run_pipe_harness.py     # builds the mock, runs --selftest-stuck, t
 | `train.py` | PPO training, checkpoint layout, `logs/progress.txt` journal |
 | `progress_log.py`, `plot_progress.py` | Journal parsing (imports nothing, so tier 1 tests it) and the run's figures |
 | `teleport.py`, `ai_receiver.py` | Boss selection/teleport tooling, live telemetry debugger |
-| `deploy_mod.ps1` | Game lookup (Steam registry), build and deploy of the mod DLL |
+| `tools/deploy_mod.ps1` | Game lookup (Steam registry), build and deploy of the mod DLL |
 | `tests/` | Units + registry parity; `tests/pipe_sim/` is the mock mod and its integration checks |
 | `.github/workflows/ci.yml` | CI: units on Linux, pipe harness on Windows |
 
@@ -148,6 +148,27 @@ python tests/run_pipe_harness.py     # builds the mock, runs --selftest-stuck, t
   would shrink the action space, change the fingerprint and invalidate every checkpoint. Give the
   button back by flipping the flag, not by editing the table.
 
+* **Game time scale (Update 11).** `Time.timeScale` in the mod drives training speed: `1.0` is
+  normal speed, `2.0` runs the fight at double speed and the telemetry stream (and therefore PPO
+  steps) arrive twice as fast. The pipe commands `timescale <value>` and `normaltime` set it, and
+  Python mirrors them with `bosses.set_timescale` / `bosses.set_normal_time` and
+  `HollowKnightGym.set_timescale` / `set_normal_time`. The mod clamps to `[0.01, 6.0]` and
+  rejects out-of-range values with a `command_error`.
+
+  Quick presets for `--timescale` / `HK_TIMESCALE`: `normal` (1.0), `fast` (2.0), `x4` (4.0),
+  `x6` (6.0). Values above ~3x are allowed but flagged as risky — Hollow Knight's physics is
+  frame-tied, so at 6x collisions and hitboxes can tunnel and per-frame reward shaping drifts.
+  `2.0`–`3.0` is the recommended training window.
+
+  **Switching speeds mid-run (2× → 1× and back).** The mod applies a new time scale instantly on
+  the next frame, so `timescale 1.0` after `timescale 2.0` works live. However, a checkpoint's
+  value function and VecNormalize statistics are only valid under the speed they were trained
+  with: `GAMMA`, rewards and step penalties are calibrated per frame at 1×. `train.py`
+  fingerprints `time_scale` together with the reward economics and refuses to resume a model
+  whose saved speed differs from the requested one — it names the differing value in the logs.
+  To change speed on an existing boss, start a fresh training run (new checkpoints) rather than
+  resuming across a speed change.
+
 ## 4. Environment, build, deploy
 
 * Windows. Python 3.11+ with the dependencies from `requirements.txt` (needed for training, not
@@ -173,7 +194,7 @@ python tests/run_pipe_harness.py     # builds the mock, runs --selftest-stuck, t
   builds and copies in one go:
 
   ```powershell
-  powershell -ExecutionPolicy Bypass -File deploy_mod.ps1 -Build
+  powershell -ExecutionPolicy Bypass -File tools/deploy_mod.ps1 -Build
   ```
 
   If the game is running, build only and say in the report that the deploy is still pending — it
