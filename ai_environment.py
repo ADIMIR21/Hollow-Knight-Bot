@@ -30,7 +30,7 @@ class HollowKnightEnv:
         else:
             print("[ENV] WARNING: the mod did not respond within 20s. Is the game running? Is the AiTrainHK.dll mod installed?")
             print("[ENV] Note: an older mod build is not enough — the pipe transport needs the current DLL "
-                  "(powershell -ExecutionPolicy Bypass -File deploy_mod.ps1 -Build, with the game closed).")
+                  "(powershell -ExecutionPolicy Bypass -File tools/deploy_mod.ps1 -Build, with the game closed).")
             print("[ENV] Continuing: the client will keep connecting in the background.")
 
         print("[ENV] Hollow Knight found successfully!")

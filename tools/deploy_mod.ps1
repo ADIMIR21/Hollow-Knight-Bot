@@ -1,7 +1,7 @@
-﻿# Deploy the AiTrainHK mod into the game (run while the game is CLOSED).
+# Deploy the AiTrainHK mod into the game (run while the game is CLOSED).
 # Usage:
-#   powershell -ExecutionPolicy Bypass -File deploy_mod.ps1
-#   powershell -ExecutionPolicy Bypass -File deploy_mod.ps1 -Build   # rebuild before deploying
+#   powershell -ExecutionPolicy Bypass -File tools\deploy_mod.ps1
+#   powershell -ExecutionPolicy Bypass -File tools\deploy_mod.ps1 -Build   # rebuild before deploying
 #
 # NOTE: this file must stay ASCII-only and is kept in UTF-8 **with BOM**.
 # Windows PowerShell 5.1 without a BOM reads non-ASCII bytes as CP1251, which used
@@ -26,7 +26,7 @@ function Find-GameDir {
             $libs += (Get-Content $vdf | Select-String '"path"' | ForEach-Object { ($_ -split '"')[3] -replace '\\\\', '\' })
         }
     }
-    $libs += @('C:\Games\Steam', 'D:\Games\Steam', 'C:\Program Files (x86)\Steam', 'C:\Program Files\Steam')
+    $libs += @('C:\Games\Steam', 'D:\Games\Steam', 'C:\Program Files (x86)\Steam', 'C:\Program Files\Steam', 'C:\Steam', 'D:\Steam')
 
     foreach ($lib in $libs) {
         if (-not $lib) { continue }
@@ -51,14 +51,14 @@ if ($game) {
 
 if ($Build) {
     Write-Host "Building the mod (Release)..."
-    dotnet build (Join-Path $PSScriptRoot "Mod\AiTrainHK\AiTrainHK.csproj") -c Release
+    dotnet build (Join-Path $PSScriptRoot "..\Mod\AiTrainHK\AiTrainHK.csproj") -c Release
     if ($LASTEXITCODE -ne 0) {
         Write-Host "Build failed." -ForegroundColor Red
         exit 1
     }
 }
 
-$dll = Join-Path $PSScriptRoot "Mod\AiTrainHK\bin\Release\net472\AiTrainHK.dll"
+$dll = Join-Path $PSScriptRoot "..\Mod\AiTrainHK\bin\Release\net472\AiTrainHK.dll"
 if (-not (Test-Path $dll)) {
     Write-Host "DLL not found: $dll (run dotnet build -c Release first)" -ForegroundColor Red
     exit 1
