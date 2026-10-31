@@ -68,7 +68,12 @@ $modsDir = Join-Path $gameDir "hollow_knight_Data\Managed\Mods\AiTrainHK"
 if (-not (Test-Path $modsDir)) {
     New-Item -ItemType Directory -Path $modsDir -Force | Out-Null
 }
-Copy-Item $dll (Join-Path $modsDir "AiTrainHK.dll") -Force
+$oldDll = Join-Path $modsDir "AiTrainHK.dll"
+if (Test-Path $oldDll) {
+    Remove-Item $oldDll -Force
+    Write-Host "Old mod removed: $oldDll" -ForegroundColor Cyan
+}
+Copy-Item $dll (Join-Path $modsDir "AiTrainHK.dll")
 Write-Host "Deploy finished: $modsDir\AiTrainHK.dll" -ForegroundColor Green
 
 $csFile = Join-Path $PSScriptRoot "..\Mod\AiTrainHK\AiDataExporter.cs"
