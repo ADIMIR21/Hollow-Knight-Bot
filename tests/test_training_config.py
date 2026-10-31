@@ -316,6 +316,10 @@ class RewardEconomicsTest(unittest.TestCase):
             "STEP_PENALTY",
             "OPEN_WINDOW_DAMAGE_MULTIPLIER",
             "EPISODE_STEP_LIMIT",
+            "HIT_PENALTY",
+            "DODGE_BONUS",
+            "CLOSE_DURING_ATTACK_PENALTY",
+            "DISTANCE_DANGER_ZONE",
         ):
             value = module_number(self.gym, name)
             self.assertIsNotNone(
@@ -413,6 +417,48 @@ class RewardEconomicsTest(unittest.TestCase):
             "trading a full win for a death pays %.1f while refusing to engage pays %.1f: a "
             "reward that punishes dying harder than it pays for winning teaches the policy to "
             "run away instead" % (trade, passive),
+        )
+
+    def test_hit_penalty_is_raised_to_discourage_tanking(self):
+        """The hit penalty must be high enough to make tanking a conscious trade, not free.
+
+        At the old value (100), one nail hit (480) minus the hit penalty left +380 net —
+        pure profit for standing in the attack. At 300 the trade is still positive but far
+        slimmer, and combined with the per-frame close-during-attack penalty the policy now
+        has a reason to back off instead of trading every frame.
+        """
+        numbers = self.reward_numbers()
+        self.assertGreaterEqual(
+            numbers["HIT_PENALTY"],
+            200.0,
+            "HIT_PENALTY (%.1f) is too low to discourage tanking: one hit pays %.1f, so the "
+            "net is still strongly positive" % (numbers["HIT_PENALTY"],
+                                                 self.NAIL_HIT_HP * numbers["DAMAGE_REWARD_PER_HP"]),
+        )
+
+    def test_dodge_bonus_is_meaningful(self):
+        """The dodge bonus must be large enough to compete with landing a hit."""
+        numbers = self.reward_numbers()
+        one_hit = self.NAIL_HIT_HP * numbers["DAMAGE_REWARD_PER_HP"]
+        self.assertGreater(
+            numbers["DODGE_BONUS"],
+            one_hit * 0.2,
+            "dodge bonus (%.1f) is too small vs one hit (%.1f): the policy has no reason to "
+            "dash instead of attacking" % (numbers["DODGE_BONUS"], one_hit),
+        )
+
+    def test_close_during_attack_penalty_exists(self):
+        """Standing inside the boss's attack while it swings must be punished per frame."""
+        numbers = self.reward_numbers()
+        self.assertGreater(
+            numbers["CLOSE_DURING_ATTACK_PENALTY"],
+            0.0,
+            "CLOSE_DURING_ATTACK_PENALTY must be positive to discourage belly-dancing",
+        )
+        self.assertGreater(
+            numbers["DISTANCE_DANGER_ZONE"],
+            0.0,
+            "DISTANCE_DANGER_ZONE must be positive to define the danger band",
         )
 
     def test_a_full_kill_out_pays_the_whole_health_bar(self):

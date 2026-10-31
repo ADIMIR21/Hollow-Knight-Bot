@@ -148,6 +148,8 @@ def run_config_values():
         VICTORY_REWARD,
         DISTANCE_BONUS_SCALE,
         DISTANCE_OPTIMAL,
+        CLOSE_DURING_ATTACK_PENALTY,
+        DISTANCE_DANGER_ZONE,
     )
     from hk_features import ACTION_COUNT
 
@@ -166,6 +168,8 @@ def run_config_values():
         "dodge_bonus": DODGE_BONUS,
         "open_window_bonus": OPEN_WINDOW_BONUS,
         "distance_optimal": DISTANCE_OPTIMAL,
+        "close_during_attack_penalty": CLOSE_DURING_ATTACK_PENALTY,
+        "distance_danger_zone": DISTANCE_DANGER_ZONE,
         "observation_size": STATS_SIZE * FRAME_STACK,
         "action_count": ACTION_COUNT,
         "time_scale": GLOBAL_TIMESCALE,

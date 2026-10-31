@@ -59,7 +59,7 @@ ENTRY_GATE = os.environ.get("HK_ENTRY_GATE", "door_dreamEnter")
 # FRAME_SKIP is no longer used: the step is synchronized by fresh telemetry
 # (see wait_for_fresh_telemetry in ai_environment.py). Kept for compatibility.
 FRAME_SKIP = max(1, int(os.environ.get("HK_FRAME_SKIP", "4")))
-FRAME_STACK = max(1, int(os.environ.get("HK_FRAME_STACK", "4")))
+FRAME_STACK = max(1, int(os.environ.get("HK_FRAME_STACK", "6")))
 
 # Victory is confirmed by boss_dead — that is already a game event (HealthManager.isDead /
 # OnBossesDead / FSM "Death Anim Start"), not a guess from hp, so a couple of frames is enough.
@@ -116,14 +116,17 @@ EPISODE_STEP_LIMIT = 3000
 # Penalty for taking a hit from the boss. A mask costs HEALTH_PENALTY_PER_MASK (200) but
 # a single hit can cost more than one mask, so the hit penalty sits between them: high enough
 # to make the policy flinch, low enough that trading a hit for a kill is still viable.
-HIT_PENALTY = 100.0
+HIT_PENALTY = 300.0
 # Optimal distance to the boss: close enough to nail, far enough to react. Outside this band
 # the policy gets a small shaping nudge to close in; inside it, a nudge to back off.
 DISTANCE_OPTIMAL = 2.5
-DISTANCE_BONUS_SCALE = 0.02
+# Inside this distance while the boss is attacking, the hero is in the danger zone and pays
+# a per-frame penalty — this is what stops the "standing on the boss's belly" behaviour.
+DISTANCE_DANGER_ZONE = 2.0
+CLOSE_DURING_ATTACK_PENALTY = 1.0
 # Bonus for dashing while the boss is attacking and not getting hit — rewards the dodge,
 # not just the movement.
-DODGE_BONUS = 50.0
+DODGE_BONUS = 120.0
 # Flat bonus on top of the ×3 multiplier for damage landed while the boss is open.
 OPEN_WINDOW_BONUS = 25.0
 
@@ -609,6 +612,7 @@ class HollowKnightGym(gym.Env):
             "distance": 0.0,
             "dodge": 0.0,
             "open_window": 0.0,
+            "close_during_attack": 0.0,
         }
         terminated = False
         truncated = False
@@ -642,6 +646,12 @@ class HollowKnightGym(gym.Env):
         distance_bonus = -dist_error * DISTANCE_BONUS_SCALE / self.last_time_scale
         reward += distance_bonus
         reward_parts["distance"] += distance_bonus
+
+        # Close-during-attack penalty: standing inside the danger zone while the boss
+        # is attacking is punished per frame — this stops the "belly-dancing" behaviour.
+        if boss_is_attacking and current_dist < DISTANCE_DANGER_ZONE:
+            reward -= CLOSE_DURING_ATTACK_PENALTY / self.last_time_scale
+            reward_parts["close_during_attack"] -= CLOSE_DURING_ATTACK_PENALTY / self.last_time_scale
 
         # Dodge bonus: dashed while the boss was attacking and did not get hit.
         # Rewards the dodge, not just the movement.
