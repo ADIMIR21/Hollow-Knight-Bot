@@ -147,6 +147,7 @@ def run_config_values():
         STEP_PENALTY,
         VICTORY_REWARD,
         DISTANCE_BONUS_SCALE,
+        DISTANCE_BONUS_SCALE,
         DISTANCE_OPTIMAL,
         CLOSE_DURING_ATTACK_PENALTY,
         DISTANCE_DANGER_ZONE,

@@ -120,6 +120,7 @@ HIT_PENALTY = 300.0
 # Optimal distance to the boss: close enough to nail, far enough to react. Outside this band
 # the policy gets a small shaping nudge to close in; inside it, a nudge to back off.
 DISTANCE_OPTIMAL = 2.5
+DISTANCE_BONUS_SCALE = 0.02
 # Inside this distance while the boss is attacking, the hero is in the danger zone and pays
 # a per-frame penalty — this is what stops the "standing on the boss's belly" behaviour.
 DISTANCE_DANGER_ZONE = 2.0
