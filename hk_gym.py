@@ -14,7 +14,7 @@ from ai_controller import HollowKnightController
 from bosses import resolve_query
 from screen_capture import USE_SCREEN_CAPTURE
 from hk_features import (damage_weight, victory_bonus, ACTION_COUNT, BossStateTracker,
-                           redirect_action, press_dash, DASH_ACTIONS)
+                           redirect_action, press_dash)
 
 
 def _enable_precise_sleep():
@@ -39,9 +39,6 @@ STAT_NAMES = [
     "grounded", "facing_right", "boss_facing_right",
     "is_attacking", "is_dashing", "is_jumping", "is_falling", "is_recoiling",
     "boss_is_attacking", "near_hazard", "was_hit",
-    # Update 12: new telemetry-driven observations for anti-tank and distance control.
-    "damage_this_frame", "hero_invuln_frames", "boss_attack_cooldown",
-    "boss_can_take_damage", "facing_boss", "time_since_last_hit",
     # Update 10: what the boss is doing right now. The mod already sends the
     # state name every frame; the tracker turns it into features (hk_features.py).
     "boss_attack_antic", "boss_open", "boss_dead",
@@ -59,7 +56,7 @@ ENTRY_GATE = os.environ.get("HK_ENTRY_GATE", "door_dreamEnter")
 # FRAME_SKIP is no longer used: the step is synchronized by fresh telemetry
 # (see wait_for_fresh_telemetry in ai_environment.py). Kept for compatibility.
 FRAME_SKIP = max(1, int(os.environ.get("HK_FRAME_SKIP", "4")))
-FRAME_STACK = max(1, int(os.environ.get("HK_FRAME_STACK", "6")))
+FRAME_STACK = max(1, int(os.environ.get("HK_FRAME_STACK", "4")))
 
 # Victory is confirmed by boss_dead — that is already a game event (HealthManager.isDead /
 # OnBossesDead / FSM "Death Anim Start"), not a guess from hp, so a couple of frames is enough.
@@ -109,27 +106,6 @@ VICTORY_REWARD = 1000.0
 DEATH_PENALTY = 500.0
 STEP_PENALTY = 0.05
 EPISODE_STEP_LIMIT = 3000
-
-# --------------------------------------------------------------------------- #
-# New reward terms (Update: anti-tank, distance control, dodge incentive)
-# --------------------------------------------------------------------------- #
-# Penalty for taking a hit from the boss. A mask costs HEALTH_PENALTY_PER_MASK (200) but
-# a single hit can cost more than one mask, so the hit penalty sits between them: high enough
-# to make the policy flinch, low enough that trading a hit for a kill is still viable.
-HIT_PENALTY = 300.0
-# Optimal distance to the boss: close enough to nail, far enough to react. Outside this band
-# the policy gets a small shaping nudge to close in; inside it, a nudge to back off.
-DISTANCE_OPTIMAL = 2.5
-DISTANCE_BONUS_SCALE = 0.02
-# Inside this distance while the boss is attacking, the hero is in the danger zone and pays
-# a per-frame penalty — this is what stops the "standing on the boss's belly" behaviour.
-DISTANCE_DANGER_ZONE = 2.0
-CLOSE_DURING_ATTACK_PENALTY = 1.0
-# Bonus for dashing while the boss is attacking and not getting hit — rewards the dodge,
-# not just the movement.
-DODGE_BONUS = 120.0
-# Flat bonus on top of the ×3 multiplier for damage landed while the boss is open.
-OPEN_WINDOW_BONUS = 25.0
 
 class HollowKnightGym(gym.Env):
     def __init__(self):
@@ -200,11 +176,6 @@ class HollowKnightGym(gym.Env):
         # At x4, telemetry arrives ~240/sec; if Python step() takes longer than ~4 ms,
         # frames get skipped. Log every 100 skips so you can see if x4 is too fast.
         self._skipped_frames = 0
-        # Anti-tank / distance-control state, persisted across steps.
-        self._last_was_hit = 0.0
-        self._last_damage_this_frame = 0.0
-        self._last_action_was_dash = False
-        self._time_since_last_hit = 0  # frames since last damage dealt to the boss
         # The r/s/q console keys exist only where a human console exists: a
         # SubprocVecEnv worker (multi-window training) has no tty, and its
         # listener would busy-loop on a closed stdin forever.
@@ -316,10 +287,6 @@ class HollowKnightGym(gym.Env):
         boss_is_attacking = 0.0
         near_hazard = 0.0
         was_hit = 0.0
-        damage_this_frame = 0.0
-        hero_invuln_frames = 0.0
-        boss_attack_cooldown = 0.0
-        boss_can_take_damage = 0.0
 
         # The summed health of every HealthManager in the scene, and the mod's monotone damage
         # counter over them. The boss field alone describes a pool the game repairs during the
@@ -353,10 +320,6 @@ class HollowKnightGym(gym.Env):
             boss_is_attacking = float(telemetry.get("boss_is_attacking", 0))
             near_hazard = float(telemetry.get("near_hazard", 0))
             was_hit = float(telemetry.get("was_hit", 0))
-            damage_this_frame = float(telemetry.get("damage_this_frame", 0))
-            hero_invuln_frames = float(telemetry.get("hero_invuln_frames", 0))
-            boss_attack_cooldown = float(telemetry.get("boss_attack_cooldown", 0))
-            boss_can_take_damage = float(telemetry.get("boss_can_take_damage", 0))
         
         # The boss state string never reaches the policy as text: the tracker turns it
         # into "an attack is winding up", "he is open for a hit" and the state's age.
@@ -369,26 +332,12 @@ class HollowKnightGym(gym.Env):
         dx_to_boss = (boss_x - x) / (dist_to_boss + 0.001)
         dy_to_boss = (boss_y - y) / (dist_to_boss + 0.001)
         
-        # facing_boss: 1.0 if the hero looks toward the boss, 0.0 otherwise.
-        facing_right_bool = facing_right > 0.5
-        facing_boss = 1.0 if ((facing_right_bool and dx_to_boss > 0) or
-                               (not facing_right_bool and dx_to_boss < 0)) else 0.0
-        
-        # time_since_last_hit grows while no damage lands, resets when damage is dealt.
-        if damage_this_frame > 0:
-            self._time_since_last_hit = 0
-        else:
-            self._time_since_last_hit += 1
-        time_since_last_hit = float(self._time_since_last_hit)
-        
         stats = np.array([
             hp, mana, boss_hp, scene_hp, x, y, boss_x, boss_y, dist_to_boss, dx_to_boss, dy_to_boss,
             vel_x, vel_y, boss_vel_x, boss_vel_y,
             grounded, facing_right, boss_facing_right,
             is_attacking, is_dashing, is_jumping, is_falling, is_recoiling,
             boss_is_attacking, near_hazard, was_hit,
-            damage_this_frame, hero_invuln_frames, boss_attack_cooldown,
-            boss_can_take_damage, facing_boss, time_since_last_hit,
             # Same order as the tail of STAT_NAMES (see hk_features.py).
             *boss_state_features
         ], dtype=np.float32)
@@ -484,9 +433,6 @@ class HollowKnightGym(gym.Env):
         self._weighted_damage_start = self._weighted_damage
         if self._episode_active:
             self._last_phi = self._potential(float(obs[IDX["hp"]]), self._weighted_damage)
-        self._last_was_hit = 0.0
-        self._last_damage_this_frame = 0.0
-        self._last_action_was_dash = False
 
         stacked_obs = np.concatenate(list(self._obs_deque)).astype(np.float32)
         self._log_reset_timing(reset_reason, time.time() - reset_started)
@@ -596,7 +542,6 @@ class HollowKnightGym(gym.Env):
         vel_y = obs[IDX["vel_y"]]
         boss_is_attacking = obs[IDX["boss_is_attacking"]]
         boss_is_open = obs[IDX["boss_open"]] > 0.5
-        was_hit = obs[IDX["was_hit"]] > 0.5
         
         reward = 0.0
         reward_parts = {
@@ -604,11 +549,6 @@ class HollowKnightGym(gym.Env):
             "shaping": 0.0,
             "victory": 0.0,
             "death": 0.0,
-            "hit_penalty": 0.0,
-            "distance": 0.0,
-            "dodge": 0.0,
-            "open_window": 0.0,
-            "close_during_attack": 0.0,
         }
         terminated = False
         truncated = False
@@ -630,43 +570,10 @@ class HollowKnightGym(gym.Env):
         reward -= STEP_PENALTY / self.last_time_scale
         reward_parts["step_penalty"] -= STEP_PENALTY / self.last_time_scale
 
-        # Hit penalty: taking damage from the boss costs more than a step but less than a mask.
-        # Makes the policy flinch instead of standing in the attack.
-        if was_hit:
-            reward -= HIT_PENALTY / self.last_time_scale
-            reward_parts["hit_penalty"] -= HIT_PENALTY / self.last_time_scale
-
-        # Distance shaping: nudge toward the optimal band (close enough to nail, far enough
-        # to react). Standing on the boss's belly is punished; keeping a healthy gap is rewarded.
-        dist_error = abs(current_dist - DISTANCE_OPTIMAL)
-        distance_bonus = -dist_error * DISTANCE_BONUS_SCALE / self.last_time_scale
-        reward += distance_bonus
-        reward_parts["distance"] += distance_bonus
-
-        # Close-during-attack penalty: standing inside the danger zone while the boss
-        # is attacking is punished per frame — this stops the "belly-dancing" behaviour.
-        if boss_is_attacking and current_dist < DISTANCE_DANGER_ZONE:
-            reward -= CLOSE_DURING_ATTACK_PENALTY / self.last_time_scale
-            reward_parts["close_during_attack"] -= CLOSE_DURING_ATTACK_PENALTY / self.last_time_scale
-
-        # Dodge bonus: dashed while the boss was attacking and did not get hit.
-        # Rewards the dodge, not just the movement.
-        action_is_dash = action in DASH_ACTIONS
-        if action_is_dash and boss_is_attacking and not was_hit:
-            reward += DODGE_BONUS / self.last_time_scale
-            reward_parts["dodge"] += DODGE_BONUS / self.last_time_scale
-        self._last_action_was_dash = action_is_dash
-
-        # The counter only ever grows, so the damage of this step is its increment,
-        # and what that damage is worth depends on whether the boss was open when it landed.
+        # The counter only ever grows, so the damage of this step is its increment, and what that
+        # damage is worth depends on whether the boss was open when it landed.
         damage_now = max(0.0, self._scene_damage - self._last_scene_damage)
         self._last_scene_damage = self._scene_damage
-
-        # Open window bonus: flat bonus on top of the ×3 multiplier for damage while the
-        # boss is stunned / recovering — the only window where the fight can be finished.
-        if damage_now > 0 and boss_is_open:
-            reward += OPEN_WINDOW_BONUS / self.last_time_scale
-            reward_parts["open_window"] += OPEN_WINDOW_BONUS / self.last_time_scale
 
         self._weighted_damage += damage_weight(
             damage_now, boss_is_open, OPEN_WINDOW_DAMAGE_MULTIPLIER)
