@@ -122,17 +122,25 @@ two names for one outcome.
 
 ## Reward function
 
-Potential-based shaping: `r = Φ(s') - Φ(s)`, where `Φ = DAMAGE_REWARD_PER_HP * (damage dealt to the boss) - HEALTH_PENALTY_PER_MASK * (player HP lost)`.
+Shaping over two counters that only move when the fight does: `r = Φ(s') - Φ(s)`, where
+`Φ = DAMAGE_REWARD_PER_HP * (damage dealt to the boss) - HEALTH_PENALTY_PER_MASK * (player HP lost)`.
+Damage enters the potential weighted by where it lands: a hit point taken while the boss is open
+counts `OPEN_WINDOW_DAMAGE_MULTIPLIER` (3) times, because the stunned window is where the fight
+is actually won - the same hit paying the same anywhere made the policy hover instead of committing.
 
-- **+1000** for defeating the boss (terminal)
+- **+1000…+2000** for defeating the boss (terminal): the base 1000 scaled by the masks the win was
+  carried out with - a clean win pays twice the base (`hk_features.victory_bonus`)
 - **-500** for player death (terminal)
 - **-0.05** per step (penalty for hesitation)
 
-Every number lives in one block in `hk_gym.py`, because they only mean anything relative to each other. The decisive one is what a lost mask costs, and it is priced **below** the hit it buys on purpose: at 200 a mask is cheaper than the uncharged hit it buys (32 of the boss's 260, so 480), so standing inside an attack to land one more hit pays better than backing off, and the policy is left free to make that trade. It was raised to 800 once, to force dodging; the run that followed learned no faster than the one before it, so the balance went back. The win still has to be worth more than refusing to engage: a kill pays 3900 of damage plus 1000 of bonus against a death at 500 and a full bar at 1800.
+Every number lives in one block in `hk_gym.py`, because they only mean anything relative to each other. The decisive one is what a lost mask costs, and it is priced **below** the hit it buys on purpose: at 200 a mask is cheaper than the uncharged hit it buys (32 of the boss's 260, so 480), so standing inside an attack to land one more hit pays better than backing off, and the policy is left free to make that trade. It was raised to 800 once, to force dodging; the run that followed learned no faster than the one before it, so the balance went back. The win still has to be worth more than refusing to engage: a kill pays 3900 of damage plus a bonus of 1000-2000 scaled by the masks left, against a death at 500 and a full bar at 1800.
 
 Changing any of these (or `gamma`, or the observation/action sizes) writes a different fingerprint into the boss folder (`hk_run_config.py`). A checkpoint whose fingerprint does not match is not resumed - the value function and the normalization statistics belong to the old reward scale - and the console says which value changed.
 
-Such shaping mathematically does not change the optimal policy and does not let the agent "farm" auxiliary bonuses (spamming jumps/movement) that were present in the old reward function.
+The dense part cannot be farmed by idle behaviour: both counters in `Φ` move only when a hit lands
+or a mask is lost, so spamming jumps/movement earns nothing but the step penalty. The two weights,
+on the other hand, shape the policy deliberately: the open-window multiplier pays for committing in
+the punish window, and the mask-scaled bonus pays for finishing the fight with health to spare.
 
 ## Installation and running
 
