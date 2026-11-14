@@ -2,7 +2,7 @@
 
 Requires the AiTrainHK mod in the game: the boss/teleport/bosses/warp commands
 go through the named pipe ``\\\\.\\pipe\\hk_ai_mod``. The %TEMP% file protocol
-is gone, there is no fallback for the old mod v1.1 anymore.
+is gone, there is no fallback for the old mod anymore.
 
 Usage:
   python teleport.py                  — interactive boss selection menu;
