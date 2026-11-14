@@ -440,6 +440,22 @@ def get_shared_client(verbose=True):
         return _shared_client
 
 
+def close_shared_client():
+    """Closes the shared client, so the next get_shared_client() re-resolves HK_PIPE_NAME.
+
+    The singleton is bound to one pipe for the whole life of the process. A process
+    that walks several windows (tools/sweep/park_windows.py) re-points HK_PIPE_NAME
+    between them: without closing, window 1's client would keep serving its own pipe
+    and every later window would silently talk to window 1 while reporting success.
+    """
+    global _shared_client
+    with _shared_lock:
+        client = _shared_client
+        _shared_client = None
+    if client is not None:
+        client.stop()
+
+
 def send_command(text):
     """Send a command to the mod through the shared client."""
     return get_shared_client().send_command(text)

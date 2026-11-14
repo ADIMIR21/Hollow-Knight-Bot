@@ -55,6 +55,11 @@ def park_one(window, slot, boss, wait_s=180.0, pause=True, resend_every=60.0):
 
     pipe_name = hk_multibox.PIPE_BASE if window == 1 else f"{hk_multibox.PIPE_BASE}_{window}"
     os.environ["HK_PIPE_NAME"] = pipe_name
+    # The shared client is a per-process singleton bound to one pipe name: walking
+    # several windows in this process has to close it between windows, or windows
+    # 2..N would keep using window 1's client and park nothing (silently).
+    import hk_pipe
+    hk_pipe.close_shared_client()
 
     import bosses
     if not bosses.ensure_save_loaded(slot, timeout=wait_s, verbose=True):

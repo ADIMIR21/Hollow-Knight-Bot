@@ -19,6 +19,11 @@ sys.path.insert(0, REPO_ROOT)
 
 import run_experiment  # noqa: E402
 import report  # noqa: E402
+import park_windows  # noqa: E402  (needs the tools/sweep + tools/multibox paths above)
+import hk_multibox  # noqa: E402
+import hk_pipe  # noqa: E402
+import bosses  # noqa: E402
+import unittest.mock  # noqa: E402
 
 
 def write_json(folder, name, payload):
@@ -238,6 +243,42 @@ class CollectTest(unittest.TestCase):
         table = report.build_table(rows)
         self.assertIn("eval_win", table)
         self.assertIn("exp-x", table)
+
+
+class ParkOneRebindsTheSharedClientTest(unittest.TestCase):
+    """park_one walks windows 2..N in one process: the shared pipe client is a
+    per-process singleton bound to one pipe name, so between windows it has to be
+    closed, or window 2 would keep window 1's client and park nothing (silently,
+    reported as success)."""
+
+    def test_each_window_repoints_the_env_and_freshens_the_client(self):
+        events = []
+        no_telemetry = unittest.mock.Mock()
+        no_telemetry.get_telemetry.return_value = {}
+        with unittest.mock.patch.object(hk_multibox, "game_processes", return_value=set()), \
+             unittest.mock.patch.object(hk_multibox, "PIPE_BASE", "hk_ai_mod_sim"), \
+             unittest.mock.patch.object(hk_multibox, "launch_one",
+                                        side_effect=lambda window, wait_s: (None, "ok")), \
+             unittest.mock.patch.object(bosses, "get_shared_client", return_value=no_telemetry), \
+             unittest.mock.patch.object(bosses, "ensure_save_loaded",
+                                        side_effect=lambda *a, **k: events.append(
+                                            ("load", os.environ.get("HK_PIPE_NAME"))) or True), \
+             unittest.mock.patch.object(bosses, "send_command", return_value=None), \
+             unittest.mock.patch.object(hk_pipe, "close_shared_client",
+                                        side_effect=lambda: events.append(
+                                            ("close", os.environ.get("HK_PIPE_NAME")))), \
+             unittest.mock.patch.dict(os.environ, {"HK_PIPE_NAME": "hk_ai_mod_sim"}):
+            # The fight never comes up within the wait (telemetry is stubbed out), so
+            # park_one reports False - what the test pins is the per-window re-bind.
+            park_windows.park_one(2, 3, "GG_False_Knight", wait_s=1, pause=False)
+
+        self.assertIn(("close", "hk_ai_mod_sim_2"), events,
+                      "park_one did not close the shared client before window 2")
+        self.assertIn(("load", "hk_ai_mod_sim_2"), events,
+                      "window 2's save load did not run under window 2's pipe name")
+        self.assertLess(events.index(("close", "hk_ai_mod_sim_2")),
+                        events.index(("load", "hk_ai_mod_sim_2")),
+                        "the shared client was closed after window 2's pipe was already in use")
 
 
 if __name__ == "__main__":

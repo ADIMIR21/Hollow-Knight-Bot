@@ -130,5 +130,52 @@ class WaitForStatusTest(unittest.TestCase):
         self.assertIsNotNone(self.client.wait_for_status("resumed", timeout=0.01))
 
 
+class SharedClientTest(unittest.TestCase):
+    """close_shared_client() must really forget the singleton.
+
+    park_windows.py walks several windows in one process and re-points HK_PIPE_NAME
+    between them: if the closed client survived (or the next one reused the old
+    pipe), windows 2..N would silently talk to window 1. The clients here bind the
+    harness pipe name only - never the production name (see AGENTS.md).
+    """
+
+    def setUp(self):
+        self._old_name = os.environ.get("HK_PIPE_NAME")
+        os.environ["HK_PIPE_NAME"] = "hk_ai_mod_sim"
+        self.addCleanup(self._restore_env)
+
+    def _restore_env(self):
+        import hk_pipe
+        hk_pipe.close_shared_client()
+        if self._old_name is None:
+            os.environ.pop("HK_PIPE_NAME", None)
+        else:
+            os.environ["HK_PIPE_NAME"] = self._old_name
+
+    def test_a_closed_client_is_stopped_and_not_returned_again(self):
+        import hk_pipe
+        first = hk_pipe.get_shared_client(verbose=False)
+        hk_pipe.close_shared_client()
+        self.assertTrue(first._stop,
+                        "the closed client kept its reader thread running")
+        second = hk_pipe.get_shared_client(verbose=False)
+        self.assertIsNot(second, first,
+                         "get_shared_client returned the closed singleton again")
+
+    def test_the_next_client_lands_on_the_repointed_pipe(self):
+        import hk_pipe
+        hk_pipe.get_shared_client(verbose=False)
+        hk_pipe.close_shared_client()
+        os.environ["HK_PIPE_NAME"] = "hk_ai_mod_sim_2"
+        second = hk_pipe.get_shared_client(verbose=False)
+        self.assertEqual(second.pipe_path, "\\\\.\\pipe\\hk_ai_mod_sim_2",
+                         "the client after close_shared_client() ignored the new HK_PIPE_NAME")
+
+    def test_close_without_a_client_is_a_no_op(self):
+        import hk_pipe
+        hk_pipe.close_shared_client()
+        self.assertIsNotNone(hk_pipe.get_shared_client(verbose=False))
+
+
 if __name__ == "__main__":
     unittest.main()
