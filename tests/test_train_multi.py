@@ -151,5 +151,25 @@ class SmokeTagTest(unittest.TestCase):
         self.assertNotEqual(journal_path(None), journal_path("smoke"))
 
 
+class SharedTimescaleFingerprintTest(unittest.TestCase):
+    """Variant B must fingerprint the time scale the windows actually run at.
+
+    run_config_values() fingerprints train.GLOBAL_TIMESCALE, but variant B only
+    printed the value it read back from the mod - the global stayed at 1.0, so
+    every run above normal speed wrote 'time_scale: 1.0' into run_config.json
+    and the whole resume-safety check compared against a lie.
+    """
+
+    def test_the_shared_trainer_records_the_actual_time_scale(self):
+        import inspect
+        source = inspect.getsource(train_multi.run_shared_trainer)
+        self.assertTrue(
+            source, "run_shared_trainer() source could not be read")
+        self.assertIn(
+            "train.GLOBAL_TIMESCALE = actual", source,
+            "run_shared_trainer() does not record the mod's actual time scale into "
+            "train.GLOBAL_TIMESCALE - the checkpoint fingerprint would claim normal speed")
+
+
 if __name__ == "__main__":
     unittest.main()

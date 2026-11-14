@@ -12,7 +12,7 @@ from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 from ai_controller import HollowKnightController
 from bosses import (resolve_query, set_boss_scene, set_gate, ensure_save_loaded,
-                    DEFAULT_SCENE, preset_timescale, TIMESCALE_MIN, TIMESCALE_MAX)
+                    DEFAULT_SCENE, resolve_timescale)
 import hk_run_config as run_config
 from progress_log import boss_dir_name, journal_path
 
@@ -582,19 +582,11 @@ def main():
     # mod's pipe, so a stale or missing DLL means the game keeps running at
     # normal speed.
     global GLOBAL_TIMESCALE
-    try:
-        timescale = preset_timescale(args.timescale)
-    except ValueError:
-        try:
-            timescale = float(args.timescale)
-        except (TypeError, ValueError):
-            print(f"[SYSTEM] Invalid --timescale {args.timescale!r}, "
-                  f"keeping normal speed (1.0)")
-            timescale = 1.0
-    if not TIMESCALE_MIN <= timescale <= TIMESCALE_MAX:
-        print(f"[SYSTEM] --timescale {timescale} out of range "
-              f"[{TIMESCALE_MIN}, {TIMESCALE_MAX}], keeping normal speed (1.0)")
-        timescale = 1.0
+    # Accepts a preset name (normal, fast, x4, x6) or a raw float; anything
+    # invalid resolves to normal speed (1.0) - the mod rejects out-of-range
+    # values the same way.
+    timescale = resolve_timescale(args.timescale,
+                                  problem=lambda msg: print(f"[SYSTEM] {msg}"))
     base_vec_env.env_method("set_timescale", timescale)
 
     # Read the ACTUAL time scale from the mod's telemetry. This is the source of

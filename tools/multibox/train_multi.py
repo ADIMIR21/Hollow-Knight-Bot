@@ -296,7 +296,7 @@ def run_shared_trainer(plan, boss_scene, boss_label, entry_gate, timescale, smok
     """Variant B: one PPO run over one pipe per window (this process)."""
     import train
     from stable_baselines3.common.vec_env import SubprocVecEnv
-    from bosses import preset_timescale, TIMESCALE_MIN, TIMESCALE_MAX
+    from bosses import resolve_timescale
     from progress_log import boss_dir_name, journal_path
 
     print(f"[MULTI] Shared trainer over {len(plan)} window(s), boss: "
@@ -308,24 +308,20 @@ def run_shared_trainer(plan, boss_scene, boss_label, entry_gate, timescale, smok
     base_vec_env = SubprocVecEnv(factories, start_method="spawn")
 
     # The same time scale in every window: the command goes to each worker's
-    # own pipe through its own controller (mirrors train.py's validation).
-    try:
-        scale = preset_timescale(timescale)
-    except ValueError:
-        try:
-            scale = float(timescale)
-        except (TypeError, ValueError):
-            print(f"[MULTI] Invalid --timescale {timescale!r}, keeping normal speed.")
-            scale = 1.0
-    if not TIMESCALE_MIN <= scale <= TIMESCALE_MAX:
-        print(f"[MULTI] --timescale {scale} out of range "
-              f"[{TIMESCALE_MIN}, {TIMESCALE_MAX}], keeping normal speed.")
-        scale = 1.0
+    # own pipe through its own controller (the same resolver train.py uses).
+    scale = resolve_timescale(timescale,
+                              problem=lambda msg: print(f"[MULTI] {msg}"))
     base_vec_env.env_method("set_timescale", scale)
     actual = max(base_vec_env.env_method("get_time_scale"))
     print(f"[MULTI] Game time scale in the windows: {actual:g}")
     if actual > 3.0:
         print("[MULTI]  WARNING: above 3x risks breaking frame-tied physics")
+    # The mod's telemetry is the source of truth for what speed the checkpoints
+    # train at: run_config_values() fingerprints train.GLOBAL_TIMESCALE, and
+    # leaving it at the default 1.0 wrote a wrong fingerprint for every run
+    # above normal speed - a mismatched checkpoint would resume silently (or a
+    # matching one be refused) with nothing in the logs to say why.
+    train.GLOBAL_TIMESCALE = actual
 
     # The shared run folder is the plain per-boss layout (no tag): one policy,
     # one journal, checkpoints resumable across a changed window count. A smoke

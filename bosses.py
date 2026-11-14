@@ -58,6 +58,36 @@ def preset_timescale(name):
     return value
 
 
+def resolve_timescale(raw, default=1.0, problem=None):
+    """A --timescale / HK_TIMESCALE value from the command line: preset or raw float.
+
+    Anything invalid (an unknown preset name, a non-number) or out of the mod's
+    range falls back to `default` (normal speed), mirroring what the mod itself
+    would do with an out-of-range value. `problem` receives one human-readable
+    line per rejected value, so the console still says why the request was not
+    honoured. Both entry points (train.py and the multi-window orchestrator)
+    resolve the argument through this one function, so they can never disagree
+    about what was requested.
+    """
+    def reject(message):
+        if problem is not None:
+            problem(message)
+        return default
+
+    try:
+        return preset_timescale(raw)
+    except ValueError:
+        pass
+    try:
+        scale = float(raw)
+    except (TypeError, ValueError):
+        return reject(f"invalid time scale {raw!r}, keeping normal speed ({default:g})")
+    if not TIMESCALE_MIN <= scale <= TIMESCALE_MAX:
+        return reject(f"time scale {scale:g} out of range "
+                      f"[{TIMESCALE_MIN}, {TIMESCALE_MAX}], keeping normal speed ({default:g})")
+    return scale
+
+
 # (scene, label) — the order and labels match the mod's registry.
 BOSS_LIST = [
     # Pantheon of the Master (early bosses)
