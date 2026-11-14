@@ -179,6 +179,56 @@ def damage_weight(damage, boss_open, open_multiplier):
     return damage * open_multiplier if boss_open else damage
 
 
+# --------------------------------------------------------------------------- #
+# Reward shaping
+# --------------------------------------------------------------------------- #
+class PotentialTracker:
+    """Baseline bookkeeping for the damage/health potential behind the shaping term.
+
+    The shaping a step pays is the *change* of the potential
+    (``DAMAGE_REWARD_PER_HP * damage done - HEALTH_PENALTY_PER_MASK * health lost``), so
+    everything depends on where the baseline sits. It has to be re-set at exactly two kinds
+    of episode boundary:
+
+      * when a fresh fight starts. The new fight's potential says nothing about the finished
+        one: the previous fight's damage was already paid, and keeping its baseline turns the
+        first step of every new episode into one huge negative spike (phi(next fight ~ 0)
+        minus phi(end of the previous fight)) - several times the victory bonus, charged for
+        nothing, poisoning the value function, the reward-normalization statistics and every
+        reward plot.
+      * when a step-limit truncation continues the same fight. The cap only cuts the
+        bookkeeping window; re-basing keeps the progress already paid inside it from being
+        paid a second time.
+
+    The numbers are the same named constants hk_gym fingerprints (hk_run_config.py), passed
+    in by the caller so this module stays free of the reward block.
+    """
+
+    def __init__(self, damage_reward_per_hp, health_penalty_per_mask):
+        self._damage_reward = float(damage_reward_per_hp)
+        self._health_penalty = float(health_penalty_per_mask)
+        self.last_phi = 0.0
+
+    def phi(self, damage_done, hp_lost):
+        """The potential of one state, without touching the baseline."""
+        return self._potential(damage_done, hp_lost)
+
+    def rebaseline(self, damage_done, hp_lost):
+        """Makes the current state the new zero: the next delta from here is 0.0."""
+        self.last_phi = self._potential(damage_done, hp_lost)
+        return self.last_phi
+
+    def delta(self, damage_done, hp_lost):
+        """The shaping for one step: phi(now) - phi(baseline). Remembers phi(now)."""
+        phi = self._potential(damage_done, hp_lost)
+        shaping = phi - self.last_phi
+        self.last_phi = phi
+        return shaping
+
+    def _potential(self, damage_done, hp_lost):
+        return self._damage_reward * float(damage_done) - self._health_penalty * float(hp_lost)
+
+
 BOSS_STATE_IDLE = 0
 BOSS_STATE_WINDUP = 1
 BOSS_STATE_ATTACK = 2

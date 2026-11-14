@@ -325,16 +325,21 @@ class RewardEconomicsTest(unittest.TestCase):
         return numbers
 
     def test_the_potential_is_built_from_the_named_numbers(self):
-        body = method_body(self.gym, "_potential")
-        self.assertIsNotNone(body, "_potential() is missing from hk_gym.py")
-        self.assertIn("DAMAGE_REWARD_PER_HP", body)
-        self.assertIn("HEALTH_PENALTY_PER_MASK", body)
-        # A literal next to the names is how the two drift apart: the constant block would stop
-        # describing what is actually paid.
-        literal = re.search(r"\b\d+\.\d+\s*\*", body)
-        self.assertIsNone(
-            literal, "the potential still scales by a literal: %r" % body.strip()
-        )
+        # The potential and its baseline live in hk_features.PotentialTracker now, and its
+        # behaviour is tested by execution (tests/test_potential_baseline.py). What has to
+        # hold here is that hk_gym builds it from the named constants and pays the shaping
+        # through it - not from a literal of its own.
+        body = method_body(self.gym, "step")
+        self.assertIsNotNone(body, "step() is missing from hk_gym.py")
+        self.assertIn(
+            "_phi.delta(", body,
+            "step() does not pay the shaping through PotentialTracker")
+        constructor = re.search(
+            r"PotentialTracker\(\s*DAMAGE_REWARD_PER_HP\s*,\s*HEALTH_PENALTY_PER_MASK\s*\)",
+            self.gym)
+        self.assertIsNotNone(
+            constructor,
+            "hk_gym.py does not construct PotentialTracker from the named reward constants")
 
     def test_the_rewards_are_paid_from_the_named_numbers(self):
         body = method_body(self.gym, "step")
