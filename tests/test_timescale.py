@@ -103,6 +103,35 @@ class PresetTimescaleTest(unittest.TestCase):
             mock_send.assert_called_once_with("timescale 4")
 
 
+class GymTimescaleConfirmationTest(unittest.TestCase):
+    """The env's set_timescale must record what the mod confirmed, not a stale 1.0.
+
+    hk_gym.py cannot be imported here (numpy, cv2, the game stack), so the wiring is
+    checked against the source - with a parsable guard. The red case: the startup
+    readback (train.py, the multi-window trainer) fingerprinted time_scale 1.0 for
+    every fast run because no step had updated last_time_scale yet.
+    """
+
+    GYM_PY = os.path.join(REPO, "hk_gym.py")
+
+    def test_the_source_is_parsable(self):
+        with open(self.GYM_PY, encoding="utf-8") as handle:
+            source = handle.read()
+        self.assertIn("def set_timescale", source)
+
+    def test_set_timescale_waits_for_the_mod_confirmation(self):
+        with open(self.GYM_PY, encoding="utf-8") as handle:
+            source = handle.read()
+        match = re.search(r"def set_timescale\(.*?(?=\n    def |\n    @|\nclass )",
+                          source, re.DOTALL)
+        self.assertIsNotNone(match, "set_timescale() could not be located in hk_gym.py")
+        body = match.group(0)
+        for needle in ("wait_for_status", "timescale_changed", "last_time_scale"):
+            self.assertIn(needle, body,
+                          f"set_timescale() does not {needle} - the startup readback "
+                          f"would fingerprint a stale time scale")
+
+
 class ResolveTimescaleTest(unittest.TestCase):
     """The command-line resolver both entry points share."""
 

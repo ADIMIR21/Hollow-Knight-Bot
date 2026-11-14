@@ -262,9 +262,26 @@ class HollowKnightGym(gym.Env):
         """Set the game time scale through the mod ("timescale <value>").
 
         1.0 is normal speed; 2.0 runs the fight at double speed and the PPO steps
-        arrive twice as fast. Returns True if the command reached the mod.
+        arrive twice as fast. Waits for the mod's timescale_changed confirmation and
+        records what the mod actually applied: get_time_scale() is read back at
+        startup to fingerprint the run (train.py, the multi-window trainer), and it
+        used to answer with a stale 1.0 for every fast run - the fingerprint lied
+        about the speed the checkpoints were trained at until the first step
+        happened to arrive.
         """
-        return self.controller.set_timescale(value)
+        pipe = getattr(self.game_env, "pipe", None)
+        before = pipe.get_seq() if pipe is not None else None
+        if not self.controller.set_timescale(value):
+            return False
+        if pipe is None:
+            return True
+        reply = pipe.wait_for_status("timescale_changed", timeout=2.0, after_seq=before)
+        if reply is None:
+            print(f"[TIMESCALE] no timescale_changed confirmation from the mod "
+                  f"(requested {value:g}); the telemetry stays the source of truth.")
+            return False
+        self.last_time_scale = float(reply.get("time_scale", value))
+        return True
 
     def set_normal_time(self):
         """Restore the normal (1x) game speed through the mod ("normaltime")."""
