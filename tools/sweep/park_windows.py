@@ -34,13 +34,24 @@ def _window_slot(window):
     return (window - 1 + 1) % 4 + 1
 
 
-def park_one(window, slot, boss, wait_s=180.0, pause=True):
-    """Launches one window and walks it into the arena. True when a fight is live."""
+def park_one(window, slot, boss, wait_s=180.0, pause=True, resend_every=60.0):
+    """Launches one window (unless it is already up) and walks it into the arena.
+
+    True when a fight is live. The boss command is re-sent every ``resend_every``
+    seconds while waiting: a window whose save sits mid-world (a Waterways bench,
+    for one of the maintainer's slots) does not cross into Godhome on the first
+    command - the mod defers the restart until its view of the game settles, and
+    only the repeated request (or its own force timeout) gets it there.
+    """
     import hk_multibox
-    proc, state = hk_multibox.launch_one(window, wait_s)
-    print(f"[PARK] window {window}: {state}")
-    if state != "ok":
-        return False
+    running = f"hollow_knight_{window}" in {name for _, name in hk_multibox.game_processes()}
+    if running:
+        print(f"[PARK] window {window} is already running (skipping the launch).")
+    else:
+        proc, state = hk_multibox.launch_one(window, wait_s)
+        print(f"[PARK] window {window}: {state}")
+        if state != "ok":
+            return False
 
     pipe_name = hk_multibox.PIPE_BASE if window == 1 else f"{hk_multibox.PIPE_BASE}_{window}"
     os.environ["HK_PIPE_NAME"] = pipe_name
@@ -53,7 +64,8 @@ def park_one(window, slot, boss, wait_s=180.0, pause=True):
     # Teleport to the arena ("boss <query>" = set scene + restart), then wait for a
     # live fight with the same conditions the trainer's awaiting loop uses.
     bosses.send_command(f"boss {boss}")
-    deadline = time.monotonic() + wait_s
+    last_send = time.monotonic()
+    deadline = last_send + wait_s
     while time.monotonic() < deadline:
         telemetry = bosses.get_shared_client().get_telemetry() or {}
         if (telemetry.get("status") == "fight"
@@ -65,6 +77,11 @@ def park_one(window, slot, boss, wait_s=180.0, pause=True):
                 bosses.send_command("pause")
                 time.sleep(0.5)
             return True
+        if time.monotonic() - last_send >= resend_every:
+            last_send = time.monotonic()
+            bosses.send_command(f"boss {boss}")
+            print(f"[PARK] window {window}: re-sent the boss command "
+                  f"(scene {telemetry.get('scene')})")
         time.sleep(1.0)
     print(f"[PARK] window {window}: no live fight within {wait_s:.0f} s "
           f"(last: {telemetry})")
