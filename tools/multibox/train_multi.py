@@ -145,9 +145,9 @@ def worker_env_vars(cfg, boss_scene, entry_gate):
     }
 
 
-def train_command(cfg, boss, timescale, tag):
+def train_command(cfg, boss, timescale, tag, steps=None):
     """The variant A command line: one independent train.py per window."""
-    return [
+    command = [
         sys.executable, str(_REPO_ROOT / "train.py"),
         "--pipe", cfg["pipe"],
         "--save-slot", str(cfg["save_slot"]),
@@ -155,6 +155,9 @@ def train_command(cfg, boss, timescale, tag):
         "--boss", boss,
         "--timescale", str(timescale),
     ]
+    if steps:
+        command += ["--steps", str(steps)]
+    return command
 
 
 def read_state():
@@ -293,7 +296,7 @@ def _worker_env(cfg, boss_scene, entry_gate):
 
 
 def run_shared_trainer(plan, boss_scene, boss_label, entry_gate, timescale, smoke_steps,
-                       eval_episodes=3, eval_every=20):
+                       eval_episodes=3, eval_every=20, steps=None):
     """Variant B: one PPO run over one pipe per window (this process)."""
     import train
     import hk_logging
@@ -356,9 +359,11 @@ def run_shared_trainer(plan, boss_scene, boss_label, entry_gate, timescale, smok
         vec_env, boss_dir, vecnorm_path, journal_path(tag),
         eval_episodes=eval_episodes, eval_every=eval_every)
 
-    total = smoke_steps if smoke_steps else 5000000
+    total = smoke_steps or steps or 5000000
     if smoke_steps:
         print(f"[MULTI] SMOKE RUN: {smoke_steps} steps in {boss_dir}.")
+    elif steps:
+        print(f"[MULTI] Bounded run: {steps} steps in {boss_dir}.")
     print("[MULTI] Ctrl+C saves and exits (the per-window console keys are not available here).")
     try:
         model.learn(total_timesteps=total, reset_num_timesteps=False, callback=callbacks)
@@ -378,7 +383,7 @@ def run_shared_trainer(plan, boss_scene, boss_label, entry_gate, timescale, smok
 
 # ------------------------------------------------------------------ variant A
 
-def run_per_window(plan, boss, timescale):
+def run_per_window(plan, boss, timescale, steps=None):
     """Variant A: one independent train.py per window, watched and restarted."""
     import hk_multibox
 
@@ -386,7 +391,7 @@ def run_per_window(plan, boss, timescale):
     restarts = {}
     for cfg in plan:
         processes[cfg["window"]] = subprocess.Popen(
-            train_command(cfg, boss, timescale, tag=f"w{cfg['window']}"),
+            train_command(cfg, boss, timescale, tag=f"w{cfg['window']}", steps=steps),
             cwd=str(_REPO_ROOT))
         restarts[cfg["window"]] = 0
 
@@ -428,7 +433,7 @@ def run_per_window(plan, boss, timescale):
                 print(f"[MULTI] window {window}: restarting the trainer "
                       f"(attempt {restarts[window]}/{_PAIR_RESTARTS_LIMIT})...", flush=True)
                 processes[window] = subprocess.Popen(
-                    train_command(cfg, boss, timescale, tag=f"w{window}"),
+                    train_command(cfg, boss, timescale, tag=f"w{window}", steps=steps),
                     cwd=str(_REPO_ROOT))
             if all(window_is_down(cfg) for cfg in plan):
                 print("[MULTI] All windows are done (or past the restart limit).")
@@ -474,8 +479,8 @@ def cmd_start(args):
         return run_shared_trainer(plan, boss_scene, boss_label,
                                   args.entry_gate, args.timescale, args.smoke_steps,
                                   eval_episodes=args.eval_episodes,
-                                  eval_every=args.eval_every)
-    return run_per_window(plan, boss_scene, args.timescale)
+                                  eval_every=args.eval_every, steps=args.steps)
+    return run_per_window(plan, boss_scene, args.timescale, steps=args.steps)
 
 
 def cmd_stop(args):
@@ -544,6 +549,9 @@ def main():
                         "(0 disables the probe; same meaning as train.py's flag)")
     p.add_argument("--eval-every", type=int, default=20, metavar="ROLLOUTS",
                    help="run the deterministic probe every ROLLOUTS rollouts")
+    p.add_argument("--steps", type=int, default=None, metavar="N",
+                   help="training budget in steps (default 5000000, the open-ended "
+                        "night run; the sweep bench passes a bounded budget here)")
     p.add_argument("--width", type=int, metavar="N",
                    help="window render width (Unity -screen-width). Cuts GPU load "
                         "per window; telemetry observation is unaffected. "

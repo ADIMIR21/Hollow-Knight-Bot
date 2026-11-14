@@ -141,6 +141,13 @@ class TrainCommandTest(unittest.TestCase):
         self.assertEqual(cmd[cmd.index("--tag") + 1], "w2")
         self.assertEqual(cmd[cmd.index("--boss") + 1], "GG_Hornet_1")
         self.assertEqual(cmd[cmd.index("--timescale") + 1], "fast")
+        self.assertNotIn("--steps", cmd,
+                         "an unbounded night run must not carry a step budget")
+
+    def test_a_bounded_run_carries_the_step_budget(self):
+        cfg = {"window": 1, "pipe": "hk_ai_mod", "save_slot": 2}
+        cmd = train_multi.train_command(cfg, "GG_Hornet_1", "fast", tag="w1", steps=200000)
+        self.assertEqual(cmd[cmd.index("--steps") + 1], "200000")
 
 
 class SmokeTagTest(unittest.TestCase):

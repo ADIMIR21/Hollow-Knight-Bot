@@ -94,6 +94,12 @@ def parse_args():
         help="run the deterministic probe every ROLLOUTS rollouts "
              "(default 20, i.e. every ~160k steps).",
     )
+    parser.add_argument(
+        "--steps", metavar="N", type=int, default=5000000,
+        help="training budget in steps (default 5000000). The sweep bench "
+             "(tools/sweep) runs bounded experiments with this; the default "
+             "stays the open-ended night run.",
+    )
     return parser.parse_args()
 
 
@@ -892,7 +898,7 @@ def main():
     LOG.info("LET'S GO!\n")
 
     try:
-        model.learn(total_timesteps=5000000, reset_num_timesteps=False, callback=callback_list)
+        model.learn(total_timesteps=args.steps, reset_num_timesteps=False, callback=callback_list)
 
     except KeyboardInterrupt:
         LOG.info("\n[SYSTEM] Training interrupted. Saving what we have...")
