@@ -47,6 +47,39 @@ namespace HKPipeInterop
 
         private static readonly IntPtr INVALID_HANDLE_VALUE = new IntPtr(-1);
 
+        /// <summary>
+        /// The pipe name this window serves: the base name plus the PIPE_SUFFIX the
+        /// multi-window launcher (tools/multibox) sets per window ("", "_2", "_3", ...).
+        /// Unset or malformed means the plain base name. Shared by the mod and the
+        /// harness mock (tests/pipe_sim), so the harness verifies exactly the naming the
+        /// game runs - the launcher and three docs promised this suffix for a long time
+        /// while the mod silently ignored it, and windows 2..N never opened a pipe.
+        /// </summary>
+        public static string BuildPipeName(string baseName)
+        {
+            string suffix;
+            try
+            {
+                suffix = Environment.GetEnvironmentVariable("PIPE_SUFFIX");
+            }
+            catch (Exception)
+            {
+                return baseName;            // no environment to speak of: window 1
+            }
+            if (string.IsNullOrWhiteSpace(suffix)) return baseName;
+            suffix = suffix.Trim();
+            // One guard between a poisoned environment and CreateNamedPipe failing far
+            // from the cause: the suffix may only widen the name with word characters.
+            if (suffix.Length > 16) return baseName;
+            foreach (char c in suffix)
+            {
+                bool ok = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z')
+                          || (c >= 'A' && c <= 'Z') || c == '_';
+                if (!ok) return baseName;
+            }
+            return baseName + suffix;
+        }
+
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         private static extern IntPtr CreateNamedPipeW(
             string lpName,

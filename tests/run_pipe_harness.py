@@ -19,6 +19,7 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, ".."))
+sys.path.insert(0, ROOT)
 SIM_DIR = os.path.join(HERE, "pipe_sim")
 CSPROJ = os.path.join(SIM_DIR, "pipe_sim.csproj")
 REGISTRY_JSON = os.path.join(SIM_DIR, "bosses.json")
@@ -105,6 +106,42 @@ def stop_mock(process, lines, failed):
         print("\n".join(lines[-40:]))
 
 
+def suffix_check(exe, suffix, expected_pipe):
+    """The launcher's per-window naming, end to end: the mock with PIPE_SUFFIX set must
+    serve <base><suffix> (and a malformed suffix must be ignored - the plain name).
+
+    This is the check that would have caught the mod ignoring PIPE_SUFFIX: the launcher
+    and the docs promised pipes hk_ai_mod_2..N while the game opened only hk_ai_mod, and
+    every multi-window run died in _wait_pipes.
+    """
+    env = child_env()
+    if suffix is None:
+        env.pop("PIPE_SUFFIX", None)
+    else:
+        env["PIPE_SUFFIX"] = suffix
+    process = subprocess.Popen(
+        [exe, REGISTRY_JSON],
+        cwd=ROOT, env=env,
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
+    lines = []
+    threading.Thread(target=pump, args=(process.stdout, lines), daemon=True).start()
+    try:
+        import hk_pipe
+        client = hk_pipe.HKPipeClient(pipe_path="\\\\.\\pipe\\" + expected_pipe, verbose=False)
+        try:
+            if not client.wait_connected(timeout=15.0):
+                return f"no pipe {expected_pipe} (suffix {suffix!r})"
+            hello = client.wait_hello(timeout=5.0)
+            if hello is None or hello.get("protocol") != 3:
+                return f"no hello on {expected_pipe} (suffix {suffix!r})"
+        finally:
+            client.stop()
+    finally:
+        stop_mock(process, lines, False)
+    return None
+
+
 def main(argv):
     # In CI stdout is a pipe, and the checks below run as a child process writing to the same
     # file descriptor: line buffering keeps this runner's own messages in the right order.
@@ -135,17 +172,17 @@ def main(argv):
         print("FAILED: hkpipesim.exe not found - build the harness first (drop --no-build)")
         return 1
 
-    print("\n=== [1/3] stuck-client selftest (a client that stops reading must not eat a slot) ===")
+    print("\n=== [1/4] stuck-client selftest (a client that stops reading must not eat a slot) ===")
     code = run([exe, "--selftest-stuck"])
     if code != 0:
         print("FAILED: the stuck-client selftest did not pass")
         return code
 
-    print("\n=== [2/3] mock mod (pipe %s, registry %s) ===" % (PIPE_NAME, os.path.basename(REGISTRY_JSON)))
+    print("\n=== [2/4] mock mod (pipe %s, registry %s) ===" % (PIPE_NAME, os.path.basename(REGISTRY_JSON)))
     mock, lines = start_mock(exe)
     code = 1
     try:
-        print("\n=== [3/3] integration checks ===")
+        print("\n=== [3/4] integration checks ===")
         test = subprocess.Popen([sys.executable, TEST_SCRIPT], cwd=ROOT, env=child_env())
         try:
             code = test.wait(timeout=TEST_TIMEOUT)
@@ -156,9 +193,25 @@ def main(argv):
             print("FAILED: the integration checks did not finish in %.0f s" % TEST_TIMEOUT)
     finally:
         stop_mock(mock, lines, code != 0)
+    if code != 0:
+        print("\nPIPE HARNESS FAILED (exit %d)" % code)
+        return code
 
-    print("\n" + ("PIPE HARNESS PASSED" if code == 0 else "PIPE HARNESS FAILED (exit %d)" % code))
-    return code
+    print("\n=== [4/4] per-window pipe naming (PIPE_SUFFIX) ===")
+    problem = suffix_check(exe, "_9", PIPE_NAME + "_9")
+    if problem:
+        print("FAILED: a suffixed window serves no pipe: " + problem)
+        return 1
+    print("  ok  PIPE_SUFFIX=_9 serves %s" % (PIPE_NAME + "_9"))
+    problem = suffix_check(exe, "bad name!", PIPE_NAME)
+    if problem:
+        print("FAILED: a malformed suffix must be ignored (plain %s expected): %s"
+              % (PIPE_NAME, problem))
+        return 1
+    print("  ok  a malformed suffix falls back to %s" % PIPE_NAME)
+
+    print("\nPIPE HARNESS PASSED")
+    return 0
 
 
 if __name__ == "__main__":

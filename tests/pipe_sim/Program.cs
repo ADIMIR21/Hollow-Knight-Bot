@@ -18,9 +18,11 @@ namespace hkpipesim
         // The harness pipe name differs from the production one: the mock must not be
         // able to take over the pipe of a running game and hijack its clients (nor may
         // the test start driving the game instead of the mock). HK_PIPE_NAME overrides
-        // this.
+        // this, and the launcher's PIPE_SUFFIX widens it exactly as it widens the mod's
+        // name (Win32Pipe.BuildPipeName) - the harness verifies the real naming code.
         private static readonly string PIPE_NAME =
-            Environment.GetEnvironmentVariable("HK_PIPE_NAME") ?? "hk_ai_mod_sim";
+            Win32Pipe.BuildPipeName(
+                Environment.GetEnvironmentVariable("HK_PIPE_NAME") ?? "hk_ai_mod_sim");
         private const int MAX_CLIENTS = 4;
         private const int POLL_MS = 25;
 

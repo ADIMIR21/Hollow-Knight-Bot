@@ -33,6 +33,9 @@ namespace AiTrainHK
         // / hk_ai_boss.txt / hk_ai_gate.txt / hk_ai_bosses.json: no file races,
         // no extra sleeps on the Python side and no file polling by the mod.
         private const string PIPE_NAME = "hk_ai_mod";
+        // The launcher (tools/multibox) sets PIPE_SUFFIX per window ("", "_2", ...);
+        // window N serves \\.\pipe\hk_ai_mod<N>. See Win32Pipe.BuildPipeName.
+        private static readonly string PipeName = Win32Pipe.BuildPipeName(PIPE_NAME);
         private const int MAX_PIPE_CLIENTS = 4;
         private const int PIPE_POLL_MS = 25;
         private const int PROTOCOL_VERSION = 3;
@@ -231,7 +234,7 @@ namespace AiTrainHK
             pipeThread.Start();
 
             Publish(StatusJson("initialized"));
-            Log($"[AI] Exporter {MOD_VERSION} is running! Pipe: \\\\.\\pipe\\{PIPE_NAME}");
+            Log($"[AI] Exporter {MOD_VERSION} is running! Pipe: \\\\.\\pipe\\{PipeName}");
             Log("[AI] Commands: restart | teleport | set_boss <scene> | set_gate <gate> | boss <query> | bosses | load <slot> | warp | pause | resume");
         }
 
@@ -1465,7 +1468,7 @@ case "probe":
 
             while (!_shuttingDown)
             {
-                IntPtr pipe = Win32Pipe.Create(@"\\.\pipe\" + PIPE_NAME, MAX_PIPE_CLIENTS, 65536, 8192);
+                IntPtr pipe = Win32Pipe.Create(@"\\.\pipe\" + PipeName, MAX_PIPE_CLIENTS, 65536, 8192);
                 if (pipe == IntPtr.Zero)
                 {
                     if (!_shuttingDown)
