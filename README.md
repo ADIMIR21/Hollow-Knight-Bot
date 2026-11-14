@@ -411,6 +411,18 @@ python plot_progress.py --all       # every run in the journal
 python plot_progress.py --show      # open a window as well as saving
 ```
 
+## Experiment sweep
+
+Changes to the reward or the exploration bonus are decided by experiment, not by hope:
+`tools/sweep/run_experiment.py` runs a JSON config as a **bounded, tagged** training run
+(`models/ppo_hk/<scene>__exp-<name>/`, its own journal, `--steps` budget, reward values
+passed through `HK_REWARD_OVERRIDES` and captured by the fingerprint), and
+`tools/sweep/report.py --boss <scene>` compares every experiment in one table - the
+reward values each run really trained under, the training win rate and the deterministic
+probe's `eval/win_rate`, the step of the first win. The plan (noise floor first, then the
+grid) lives in `docs/sweep.md`.
+
+
 The figure carries the reward per episode and per fight with the cumulative win count, the win rate
 against the share of deaths and timeouts, the fight length, and the optimiser's own signals -
 entropy loss (is the policy still exploring) and explained variance (does the value function know

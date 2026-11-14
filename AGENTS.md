@@ -89,6 +89,7 @@ python tests/run_pipe_harness.py     # builds the mock, runs --selftest-stuck, t
 | `progress_log.py`, `plot_progress.py` | Journal parsing (imports nothing, so tier 1 tests it) and the run's figures |
 | `teleport.py`, `ai_receiver.py` | Boss selection/teleport tooling, live telemetry debugger |
 | `tools/multibox/` | Multi-window launcher: hardlink/junction instances of the one Steam install, per-window named pipes, reduced-resolution launch (`--width`/`--height`), the `train_multi.py` orchestrator (one trainer over N windows for the same boss, or one `train.py` per window), `sync_saves.py` (copy one save slot into the others with backups, refuses to run while the game is open), and example plans (`plan_4windows.json`, `plan_6windows.json`); the plan for parallel training lives in `docs/multi_window_training.md` |
+| `tools/sweep/` | The experiment bench: `run_experiment.py` (one JSON config -> one bounded, tagged run of the trainers) and `report.py` (all experiments of a boss compared in one table); the plan and the first grid live in `docs/sweep.md` |
 | `tools/deploy_mod.ps1` | Game lookup (Steam registry), build and deploy of the mod DLL |
 | `tests/` | Units + registry parity; `tests/pipe_sim/` is the mock mod and its integration checks; `tests/csharp/RegistryTests/` executes the game-independent registry/resolver on net8.0 (CI has no game, so the rest of the mod cannot be compiled there) |
 | `.github/workflows/ci.yml` | CI: units on Linux, pipe harness on Windows |

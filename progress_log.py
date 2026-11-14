@@ -60,6 +60,21 @@ def classify_outcome(reward_parts):
     return "timeout"
 
 
+def victory_steps(text):
+    """The trainer step numbers of every finished episode the bot won, oldest first.
+
+    parse_journal keeps the episode counter but drops the step number; the sweep report
+    needs the step (how far into training the first win landed), so the journal lines
+    are matched once more here.
+    """
+    steps = []
+    for raw in text.splitlines():
+        episode = _EPISODE.match(raw.strip())
+        if episode and episode.group(4) == "victory":
+            steps.append(int(episode.group(3)))
+    return steps
+
+
 def parse_journal(text):
     """Splits the journal into (blocks, episodes).
 
