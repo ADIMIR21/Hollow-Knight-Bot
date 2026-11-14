@@ -162,6 +162,10 @@ BATCH_SIZE = 256
 # test_reward_economics.py pins that.
 GAMMA = 0.9995
 LEARNING_RATE = 3e-4
+# The exploration bonus, as a module constant so the manifest reports what really trained.
+# The sweep bench overrides it per experiment through HK_PPO_ENT_COEF; like the reward
+# block, the experiment's value is whatever the run actually started with.
+ENT_COEF = float(os.environ.get("HK_PPO_ENT_COEF", "0.02"))
 
 # Resolved game time scale for this run: preset name ("normal", "fast", "x4", "x6")
 # or a raw float. Parsed from --timescale / HK_TIMESCALE in main() after args are
@@ -614,7 +618,7 @@ def make_model(env):
         n_steps=N_STEPS,
         batch_size=BATCH_SIZE,
         n_epochs=10,
-        ent_coef=0.02,
+        ent_coef=ENT_COEF,
         clip_range=0.2,
         gae_lambda=0.95,
         gamma=GAMMA,

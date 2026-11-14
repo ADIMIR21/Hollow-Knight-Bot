@@ -9,11 +9,13 @@ it is accepting.
 import os
 import re
 import sys
+import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from hk_run_config import RESUME_OVERRIDE_ENV, build_config, matches, override_requested  # noqa: E402
+from hk_run_config import (REWARD_OVERRIDES_ENV, RESUME_OVERRIDE_ENV,  # noqa: E402
+                           apply_reward_overrides, build_config, matches, override_requested)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -53,6 +55,61 @@ class ResumeOverrideTest(unittest.TestCase):
         # by assignment (resume_allowed = True) or by returning straight away (return True).
         self.assertRegex(found.group(1), r"(resume_allowed = True|return True)",
                          "the override says it is resuming but never allows the resume")
+
+
+class RewardOverridesTest(unittest.TestCase):
+    """The sweep bench's A/B reward overrides, applied to a module's globals."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+
+    def _write(self, content, name="overrides.json"):
+        path = os.path.join(self._tmp.name, name)
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(content)
+        return path
+
+    def test_unset_variable_is_a_no_op(self):
+        values = {"HEALTH_PENALTY_PER_MASK": 200.0}
+        self.assertEqual(apply_reward_overrides(values, environ={}), [])
+        self.assertEqual(values, {"HEALTH_PENALTY_PER_MASK": 200.0})
+
+    def test_overrides_replace_the_named_constants(self):
+        path = self._write('{"HEALTH_PENALTY_PER_MASK": 400, "OPEN_WINDOW_DAMAGE_MULTIPLIER": 6}')
+        values = {"HEALTH_PENALTY_PER_MASK": 200.0, "OPEN_WINDOW_DAMAGE_MULTIPLIER": 3.0}
+        applied = apply_reward_overrides(values, path=path)
+        self.assertEqual(applied, ["HEALTH_PENALTY_PER_MASK", "OPEN_WINDOW_DAMAGE_MULTIPLIER"])
+        self.assertEqual(values["HEALTH_PENALTY_PER_MASK"], 400.0)
+        self.assertEqual(values["OPEN_WINDOW_DAMAGE_MULTIPLIER"], 6.0)
+
+    def test_the_environment_variable_selects_the_file(self):
+        path = self._write('{"VICTORY_REWARD": 500}')
+        values = {"VICTORY_REWARD": 1000.0}
+        apply_reward_overrides(values, environ={REWARD_OVERRIDES_ENV: path})
+        self.assertEqual(values["VICTORY_REWARD"], 500.0)
+
+    def test_a_lowercase_key_is_refused(self):
+        path = self._write('{"health_penalty_per_mask": 400}')
+        with self.assertRaises(SystemExit):
+            apply_reward_overrides({}, path=path)
+
+    def test_a_non_number_value_is_refused(self):
+        path = self._write('{"VICTORY_REWARD": "big"}')
+        with self.assertRaises(SystemExit):
+            apply_reward_overrides({}, path=path)
+        path = self._write('{"VICTORY_REWARD": true}')
+        with self.assertRaises(SystemExit):
+            apply_reward_overrides({}, path=path)
+
+    def test_a_non_object_file_is_refused(self):
+        path = self._write("[1, 2, 3]")
+        with self.assertRaises(SystemExit):
+            apply_reward_overrides({}, path=path)
+
+    def test_a_missing_file_is_refused(self):
+        with self.assertRaises(SystemExit):
+            apply_reward_overrides({}, path=os.path.join(self._tmp.name, "gone.json"))
 
 
 if __name__ == "__main__":

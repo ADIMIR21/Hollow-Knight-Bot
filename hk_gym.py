@@ -107,6 +107,13 @@ DEATH_PENALTY = 500.0
 STEP_PENALTY = 0.05
 EPISODE_STEP_LIMIT = 3000
 
+# The sweep bench's A/B reward overrides (tools/sweep): applied on top of the block above,
+# before anything reads it, and captured by run_config_values() into the checkpoint
+# fingerprint - an experiment's checkpoints are never resumed by a default run.
+import hk_run_config as _run_config
+_run_config.apply_reward_overrides(globals())
+
+
 class HollowKnightGym(gym.Env):
     def __init__(self):
         super().__init__()

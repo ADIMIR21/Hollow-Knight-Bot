@@ -23,6 +23,7 @@ import time
 CONFIG_NAME = "run_config.json"
 MANIFEST_NAME = "run_manifest.json"
 RESUME_OVERRIDE_ENV = "HK_RESUME_CONFIG_CHANGED"
+REWARD_OVERRIDES_ENV = "HK_REWARD_OVERRIDES"
 
 
 def build_config(values):
@@ -119,3 +120,40 @@ def differences(path, values):
         elif stored[key] != expected[key]:
             changed.append(f"{key}: {stored[key]} -> {expected[key]}")
     return changed
+
+
+def apply_reward_overrides(module_globals, environ=None, path=None):
+    """Applies the sweep bench's reward overrides to a module's globals.
+
+    The environment variable ``HK_REWARD_OVERRIDES`` names a JSON file whose keys are
+    the reward constants (``DAMAGE_REWARD_PER_HP`` and friends) and whose values
+    replace them at import time - this is how ``tools/sweep`` runs A/B configurations
+    without editing the tree. The applied values land in the checkpoint fingerprint
+    (``run_config_values()`` reads the same module attributes afterwards), so a
+    checkpoint trained under an override is never resumed by a run without it.
+
+    Anything malformed - a missing file, a non-object, a lowercase key, a non-number -
+    is refused loudly with SystemExit instead of silently training the default.
+    Returns the list of overridden names (empty when the variable is unset).
+    """
+    environ = os.environ if environ is None else environ
+    if path is None:
+        path = environ.get(REWARD_OVERRIDES_ENV, "")
+    if not path:
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            overrides = json.load(handle)
+    except (OSError, ValueError) as exc:
+        raise SystemExit(f"{REWARD_OVERRIDES_ENV}={path}: cannot read the overrides: {exc}")
+    if not isinstance(overrides, dict):
+        raise SystemExit(f"{REWARD_OVERRIDES_ENV}={path}: the file must hold a JSON object")
+    applied = []
+    for name, value in overrides.items():
+        if not (isinstance(name, str) and name.isidentifier() and name.isupper()):
+            raise SystemExit(f"{REWARD_OVERRIDES_ENV}={path}: not a constant name: {name!r}")
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise SystemExit(f"{REWARD_OVERRIDES_ENV}={path}: {name}: not a number: {value!r}")
+        module_globals[name] = float(value)
+        applied.append(name)
+    return applied
