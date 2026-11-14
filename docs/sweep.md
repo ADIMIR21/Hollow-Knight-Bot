@@ -54,6 +54,23 @@ is a live risk. So a budget of 200k steps costs roughly the same wall-clock per 
 batch regardless of the experiment count: run experiments in batches of four-window
 variant-b sessions, one after another.
 
+## Continuing an interrupted experiment
+
+The trainer resumes only from `hk_model_final.zip`; the periodic
+`hk_night_run_*_steps.zip` checkpoints are history, and a power cut (or a hard kill)
+loses everything after the last of them. To continue where a dead run stopped,
+promote its newest checkpoint and restart the same experiment - the fingerprint
+guard makes sure the folder is only resumed by a run with the same reward and
+time scale:
+
+```
+cp models/ppo_hk/<scene>__exp-<name>/hk_night_run_<N>_steps.zip    models/ppo_hk/<scene>__exp-<name>/hk_model_final.zip
+python tools/sweep/run_experiment.py experiments/<name>.json --no-launch
+```
+
+The checkpoint and the normalization statistics are written at the same
+boundaries, so a promoted pair is always consistent.
+
 ## Before a batch: park the windows
 
 A window that boots from a save parked mid-world has to cross into Godhome while the
