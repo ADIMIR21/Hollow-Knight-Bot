@@ -39,7 +39,7 @@ The mod keeps a duplex server on `\\.\pipe\hk_ai_mod` (up to 4 clients, so train
 | `load <slot>` | **Load a save slot while the game is in the main menu** (`1`-`4`, the `user1.dat`..`user4.dat` files). Refused with a `command_error` outside the menu. Answered with `load_requested`, then `load_result` (with `success: 0|1`) events |
 | `warp` | Return the hero to the arena gate without reloading the scene (if thrown out of the fight / stuck) |
 | `pause` | **Freeze the fight** (`Time.timeScale = 0`): the boss FSM, the hero's input and every animation stop while the game keeps publishing telemetry. Answered with a `paused` event |
-| `resume` | Unfreeze the fight and restore the time scale it had before. Answered with a `resumed` event. Both commands are idempotent, and the mod lifts the pause by itself after 120 s without a `resume` - a trainer that died mid-update must not leave the game frozen |
+| `resume` | Unfreeze the fight and restore the time scale it had before. Answered with a `resumed` event. Both commands are idempotent, and the mod lifts the pause by itself after 600 s without a `resume` - a trainer that died mid-update must not leave the game frozen |
 | `timescale <value>` | **Set the game time scale** for faster training (`1.0` = normal speed, `2.0` = double speed, max `6.0`). Also accepts presets `normal`, `fast`, `x4`, `x6`. The telemetry stream - and therefore the PPO steps - arrive proportionally faster. Values above ~3x risk breaking Hollow Knight's frame-tied physics (missed collisions, tunneling), so `2.0`-`3.0` is the recommended training window. Answered with a `timescale_changed` event |
 | `normaltime` | Restore the normal `1x` game speed. Answered with a `timescale_changed` event |
 | `action <id>` | **Press the hero's buttons through the game's own input** (`0`-`18`, the table in `hk_features.py`). The mod commits the state on InControl's `PlayerAction`s and re-commits it on every hero update, so no emulated controller is involved and a killed trainer cannot leave the game bound to a dead pad. The id stays held until the next `action` command, and for at most 2 s after the last one arrives, so a trainer that dies cannot leave the hero pressing a button |
@@ -349,7 +349,7 @@ the next rollout begins, where the game is unfrozen again. The freeze itself is 
 (`pause`/`resume`), so the state is real and confirmed: `hk_gym.pause_game()` releases the
 buttons, sends the command and waits for the mod's event. A keyboard interrupt inside the update
 still unfreezes the game through the `finally` block, and if the process is killed outright the
-mod lifts the pause by itself after 120 s. The resume is sent whenever a pause was requested, not
+mod lifts the pause by itself after 600 s. The resume is sent whenever a pause was requested, not
 only when the mod confirmed it (a busy machine can eat the confirmation window), a fresh run asks
 for one resume before its first step (a pause left behind by a killed trainer must not outlive
 it), and frozen time is not treated as a stuck fight: the transition watchdogs measure real time,

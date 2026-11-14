@@ -3,7 +3,7 @@
     "boss": "GG_False_Knight",
     "timescale": "fast",
     "steps": 200000,
-    "windows": 4,
+    "windows": 3,
     "eval_episodes": 3,
     "eval_every": 2,
     "reward": {},

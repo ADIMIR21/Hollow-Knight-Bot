@@ -110,7 +110,13 @@ namespace AiTrainHK
         // the fight up (and the telemetry stream with it). Parked at 1f by default; the
         // "timescale <value>" pipe command changes it, "normaltime" restores 1f.
         private float _timeScale = 1f;
-        private const float PAUSE_TIMEOUT_SECONDS = 120f;
+        // 600 s, not 120 s: a PPO update on a loaded CPU legitimately runs longer than two
+        // minutes, and the backstop firing mid-update unfroze the fight while the trainer was
+        // still computing - three windows then ran wild (deaths, restarts, transitions) and
+        // the next rollout collected the wreckage as white-stuck transitions (observed live).
+        // A long pause is safe - the game just stands frozen; a self-unfreeze mid-update is
+        // not. The backstop is still here for a trainer that died without "resume".
+        private const float PAUSE_TIMEOUT_SECONDS = 600f;
         private const float TIMESCALE_MIN = 0.01f;
         private const float TIMESCALE_MAX = 6.0f;
         private string _restartTargetScene = "";
