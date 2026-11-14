@@ -255,12 +255,15 @@ models/ppo_hk/
 ├── GG_False_Knight/        # each boss has its own folder
 │   ├── hk_model_final.zip      # final model
 │   ├── vecnormalize.pkl        # normalization statistics
+│   ├── run_config.json         # the fingerprint a resume is validated against
+│   ├── run_manifest.json       # provenance: git commit, library versions, PPO hyperparameters
 │   └── hk_night_run_*_steps.zip # checkpoints every 20000 steps
 ├── GG_Hornet_1/
 └── ...
 ```
 
 - The model automatically loads the latest save from **its own** boss's folder (`models/ppo_hk/<scene>/hk_model_final.zip`) if it exists - training continues from where it left off
+- `run_manifest.json` is provenance, not validity: nothing in it is compared on a resume - the fingerprint (`run_config.json`) alone decides
 - If a saved `vecnormalize.pkl` belongs to a different observation space - it is discarded and normalization starts from scratch
 - A model saved under an older observation space is not loaded either: the vector grew from 25 to 31 numbers per frame (the five boss-state values and `scene_hp`), and a checkpoint whose space does not match is refused - that folder starts from scratch and says so on the console
 - Old files from the root of `models/ppo_hk/` (training from before the per-boss layout, the False Knight arena) are automatically moved to `models/ppo_hk/GG_False_Knight/` on the first run
@@ -354,7 +357,7 @@ so the paused interval is shifted out of their stamps.
 
 ### Training progress log
 
-All metrics that go to TensorBoard and are printed to the console are also mirrored to the text file **`logs/progress.txt`** (UTF-8, appended on every run - if training crashes, the progress already written is not lost):
+All metrics that go to TensorBoard and are printed to the console are also mirrored to the text file **`logs/progress.txt`** (UTF-8, appended on every run - if training crashes, the progress already written is not lost). The trainer's own decisions (why a resume was refused, which speed the mod applied, whether a pause was confirmed) go to **`logs/train.log`** (`logs/train__<tag>.log` for a tagged run) with timestamps, appended across runs:
 
 - a line `EPISODE ...` for each finished episode: the outcome (`outcome=victory` / `death` / `timeout`), reward, length, the victory counter and the win rate over a window of 100 episodes;
 - the metrics table after every rollout (`n_steps = 8192` steps) - exactly the block printed to the console: `custom/victories`, `custom/win_rate`, `custom/last100_*`, `reward_breakdown/*`, `eval/*`, `rollout/*`, `train/*`. With `verbose=1` it is written by the Stable-Baselines3 logger itself through `HumanOutputFormat`; with `verbose=0` the values are collected by the callback.

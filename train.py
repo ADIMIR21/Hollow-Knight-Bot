@@ -1,7 +1,9 @@
 import os
 import glob
+import sys
 import time
 import argparse
+import logging
 from collections import deque
 
 from stable_baselines3 import PPO
@@ -13,8 +15,14 @@ from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 from ai_controller import HollowKnightController
 from bosses import (resolve_query, set_boss_scene, set_gate, ensure_save_loaded,
                     DEFAULT_SCENE, resolve_timescale)
+import hk_logging
 import hk_run_config as run_config
-from progress_log import boss_dir_name, classify_outcome, journal_path
+from progress_log import boss_dir_name, classify_outcome, journal_path, trainer_log_path
+
+# The trainer's own decisions (why a resume was refused, what speed the mod applied,
+# whether a pause was confirmed) go to the console exactly as print() used to and,
+# with timestamps, to logs/train[__<tag>].log - see main() for the setup.
+LOG = hk_logging.get_logger()
 
 # hk_gym is imported in main() AFTER the boss scene is fixed:
 # the scene is read from HK_BOSS_SCENE at module import time.
@@ -110,11 +118,11 @@ def migrate_legacy_model(scene, boss_dir):
         return
     if os.path.exists(os.path.join(boss_dir, "hk_model_final.zip")):
         return  # the boss already has its own save — leave the old files untouched
-    print(f"[SYSTEM] Moving old training files into the boss folder: {boss_dir}")
+    LOG.info(f"[SYSTEM] Moving old training files into the boss folder: {boss_dir}")
     for f in legacy_files:
         dst = os.path.join(boss_dir, os.path.basename(f))
         os.replace(f, dst)
-        print(f"[SYSTEM]   {os.path.basename(f)} -> {dst}")
+        LOG.info(f"[SYSTEM]   {os.path.basename(f)} -> {dst}")
 
 
 # Update 8: the PPO configuration. The previous values were tuned for a
@@ -267,7 +275,7 @@ class GamePauseCallback(BaseCallback):
         self._pause_requested = True
         self._paused = any(self.vec_env.env_method("pause_game"))
         if not self._paused and self.verbose >= 1:
-            print("[PAUSE] The mod did not confirm the pause (the game keeps running).")
+            LOG.info("[PAUSE] The mod did not confirm the pause (the game keeps running).")
         return True
 
     def _on_rollout_start(self) -> bool:
@@ -410,7 +418,7 @@ class DeterministicEvalCallback(BaseCallback):
             self.logger.record(
                 "eval/mean_reward", sum(rewards) / len(rewards))
         if self.verbose >= 1:
-            print(f"[EVAL] deterministic batch: {outcomes} "
+            LOG.info(f"[EVAL] deterministic batch: {outcomes} "
                   f"rewards={[f'{r:.0f}' for r in rewards]} "
                   f"(overall {self.victories}/{self.episodes})")
 
@@ -488,7 +496,7 @@ class ProgressFileCallback(BaseCallback):
                 handle.write(text)
             return True
         except OSError as exc:
-            print(f"[PROGRESS] Failed to write {self.path}: {exc}")
+            LOG.info(f"[PROGRESS] Failed to write {self.path}: {exc}")
             return False
 
     def _on_training_start(self) -> bool:
@@ -703,6 +711,50 @@ def build_callbacks(vec_env, boss_dir, vecnorm_path, progress_path,
     return callbacks, game_pause_callback
 
 
+def write_run_manifest(boss_dir, model, source, log=None):
+    """The provenance record of the run, next to the fingerprint.
+
+    Everything here describes where a checkpoint came from - code version, library
+    versions, the hyperparameters the model will really train with - and nothing in
+    it is compared on a resume: a different commit does not make the value function
+    wrong the way a changed reward scale does. The hyperparameters are read back
+    from the constructed model, not from the call site, so there is one source of
+    truth about what a resumed run trains with.
+    """
+    import stable_baselines3
+    try:
+        import torch
+        torch_version = torch.__version__
+    except Exception:
+        torch_version = None
+
+    def plain(value):
+        return value if isinstance(value, (int, float, str, bool, list)) else str(value)
+
+    manifest = {
+        "source": source,
+        "git_commit": run_config.git_commit(),
+        "python": plain(sys.version.split()[0]),
+        "sb3": plain(stable_baselines3.__version__),
+        "torch": torch_version,
+        "hyperparameters": {
+            "n_steps": plain(model.n_steps),
+            "batch_size": plain(model.batch_size),
+            "gamma": plain(model.gamma),
+            "learning_rate": plain(model.learning_rate),
+            "clip_range": plain(model.clip_range),
+            "gae_lambda": plain(model.gae_lambda),
+            "ent_coef": plain(model.ent_coef),
+            "n_epochs": plain(model.n_epochs),
+            "max_grad_norm": plain(model.max_grad_norm),
+            "policy_kwargs": plain(model.policy_kwargs),
+        },
+    }
+    path = run_config.config_path(boss_dir, run_config.MANIFEST_NAME)
+    run_config.write_manifest(path, manifest)
+    (log or LOG.info)(f"[SYSTEM] Run manifest: {path}")
+
+
 def load_compatible_vecnorm(vec_env, vecnorm_path, resume=True):
     if not resume:
         # The saved statistics belong to a different reward scale or discount (see
@@ -714,7 +766,7 @@ def load_compatible_vecnorm(vec_env, vecnorm_path, resume=True):
         loaded = VecNormalize.load(vecnorm_path, vec_env)
         obs_dim = vec_env.observation_space.shape[0]
         if loaded.obs_rms is not None and loaded.obs_rms.mean.shape[0] != obs_dim:
-            print(f"[SYSTEM] vecnormalize.pkl from a different observation space "
+            LOG.info(f"[SYSTEM] vecnormalize.pkl from a different observation space "
                   f"({loaded.obs_rms.mean.shape[0]} != {obs_dim}). Restarting normalization.")
             return fresh_vecnorm(vec_env)
         loaded.training = True
@@ -722,10 +774,10 @@ def load_compatible_vecnorm(vec_env, vecnorm_path, resume=True):
         # The statistics were saved under a different discount: the policy
         # and the reward normalization must agree on one.
         loaded.gamma = GAMMA
-        print(f"\n[SYSTEM] Restoring normalization statistics: {vecnorm_path}")
+        LOG.info(f"\n[SYSTEM] Restoring normalization statistics: {vecnorm_path}")
         return loaded
     except Exception as e:
-        print(f"[SYSTEM] Failed to load vecnormalize.pkl: {e}. Restarting normalization.")
+        LOG.info(f"[SYSTEM] Failed to load vecnormalize.pkl: {e}. Restarting normalization.")
         return fresh_vecnorm(vec_env)
 
 
@@ -741,12 +793,15 @@ def fresh_vecnorm(vec_env):
 
 def main():
     args = parse_args()
+    # The trainer's log file first: everything after this (including a refused
+    # resume) lands in logs/train[__<tag>].log with timestamps.
+    hk_logging.setup_logging(trainer_log_path(args.tag))
     # The pipe name is read by hk_pipe lazily (at the first shared-client call),
     # but set it first thing so nothing before the boss setup talks anywhere.
     if args.pipe:
         os.environ["HK_PIPE_NAME"] = args.pipe
     scene, label = resolve_boss(args)
-    print(f"[SYSTEM] Training boss: {label} ({scene})")
+    LOG.info(f"[SYSTEM] Training boss: {label} ({scene})")
 
     # The boss scene must be set BEFORE importing hk_gym: it reads
     # HK_BOSS_SCENE at module import time. We also write the mod configs so
@@ -759,7 +814,7 @@ def main():
     # A fresh window boots into the main menu; walk it into the game by
     # loading the configured save slot (no-op when a scene is already up).
     if not ensure_save_loaded(args.save_slot):
-        print(f"[SYSTEM] ERROR: the game never left the main menu "
+        LOG.info(f"[SYSTEM] ERROR: the game never left the main menu "
               f"(save slot {args.save_slot}); check the window and ModLog.")
         return 1
 
@@ -774,9 +829,9 @@ def main():
     os.makedirs(boss_dir, exist_ok=True)
     migrate_legacy_model(scene, boss_dir)
     vecnorm_path = os.path.join(boss_dir, "vecnormalize.pkl")
-    print(f"[SYSTEM] Boss training folder: {boss_dir}")
+    LOG.info(f"[SYSTEM] Boss training folder: {boss_dir}")
 
-    print("Creating the HK environment...")
+    LOG.info("Creating the HK environment...")
     raw_env = HollowKnightGym()
     monitored_env = Monitor(raw_env)
     base_vec_env = DummyVecEnv([lambda: monitored_env])
@@ -790,7 +845,7 @@ def main():
     # invalid resolves to normal speed (1.0) - the mod rejects out-of-range
     # values the same way.
     timescale = resolve_timescale(args.timescale,
-                                  problem=lambda msg: print(f"[SYSTEM] {msg}"))
+                                  problem=lambda msg: LOG.info(f"[SYSTEM] {msg}"))
     base_vec_env.env_method("set_timescale", timescale)
 
     # Read the ACTUAL time scale from the mod's telemetry. This is the source of
@@ -798,17 +853,17 @@ def main():
     # so there is no confusion about what speed the run is at.
     actual_time_scale = raw_env.get_time_scale()
     if actual_time_scale != timescale:
-        print(f"[SYSTEM] Requested {timescale:g}, mod reports actual time scale: "
+        LOG.info(f"[SYSTEM] Requested {timescale:g}, mod reports actual time scale: "
               f"{actual_time_scale:g}")
     else:
-        print(f"[SYSTEM] Game time scale set to {actual_time_scale:g} "
+        LOG.info(f"[SYSTEM] Game time scale set to {actual_time_scale:g} "
               f"(1.0 = normal speed)")
     GLOBAL_TIMESCALE = actual_time_scale
     risky = actual_time_scale > 3.0
     if risky:
-        print(f"[SYSTEM]  WARNING: above 3x risks breaking frame-tied physics")
+        LOG.info(f"[SYSTEM]  WARNING: above 3x risks breaking frame-tied physics")
 
-    resume_allowed = decide_resume(boss_dir)
+    resume_allowed = decide_resume(boss_dir, log=LOG.info)
 
     vec_env = load_compatible_vecnorm(base_vec_env, vecnorm_path, resume=resume_allowed)
 
@@ -818,28 +873,29 @@ def main():
     # unaffected).
     try:
         vec_env.env_method("resume_game")
-        print("[SYSTEM] Asked the mod to lift a pause left by a previous run.")
+        LOG.info("[SYSTEM] Asked the mod to lift a pause left by a previous run.")
     except Exception as e:
-        print(f"[SYSTEM] Could not ask the mod to resume: {e}")
+        LOG.info(f"[SYSTEM] Could not ask the mod to resume: {e}")
 
-    model = load_or_create_model(vec_env, boss_dir, resume_allowed)
+    model = load_or_create_model(vec_env, boss_dir, resume_allowed, log=LOG.info)
+    write_run_manifest(boss_dir, model, source="train.py")
 
     progress_path = journal_path(args.tag)
     callback_list, game_pause_callback = build_callbacks(
         vec_env, boss_dir, vecnorm_path, progress_path,
         eval_episodes=args.eval_episodes, eval_every=args.eval_every)
 
-    print("\n[SYSTEM] AI is ready for training.")
-    print(f"[SYSTEM] Progress log: {progress_path} (history is appended)")
-    print("Starting in 10 seconds")
+    LOG.info("\n[SYSTEM] AI is ready for training.")
+    LOG.info(f"[SYSTEM] Progress log: {progress_path} (history is appended)")
+    LOG.info("Starting in 10 seconds")
     time.sleep(10)
-    print("LET'S GO!\n")
+    LOG.info("LET'S GO!\n")
 
     try:
         model.learn(total_timesteps=5000000, reset_num_timesteps=False, callback=callback_list)
 
     except KeyboardInterrupt:
-        print("\n[SYSTEM] Training interrupted. Saving what we have...")
+        LOG.info("\n[SYSTEM] Training interrupted. Saving what we have...")
 
     finally:
         # Ctrl+C can land inside the PPO update, with the game still frozen.
@@ -847,8 +903,8 @@ def main():
         final_save_path = os.path.join(boss_dir, "hk_model_final")
         model.save(final_save_path)
         vec_env.save(vecnorm_path)
-        print(f"[SYSTEM] AI saved to: {final_save_path}.zip")
-        print(f"[SYSTEM] Normalization statistics saved to: {vecnorm_path}")
+        LOG.info(f"[SYSTEM] AI saved to: {final_save_path}.zip")
+        LOG.info(f"[SYSTEM] Normalization statistics saved to: {vecnorm_path}")
 
 if __name__ == "__main__":
     main()

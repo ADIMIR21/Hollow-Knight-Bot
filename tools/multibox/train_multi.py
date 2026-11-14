@@ -296,9 +296,16 @@ def run_shared_trainer(plan, boss_scene, boss_label, entry_gate, timescale, smok
                        eval_episodes=3, eval_every=20):
     """Variant B: one PPO run over one pipe per window (this process)."""
     import train
+    import hk_logging
     from stable_baselines3.common.vec_env import SubprocVecEnv
     from bosses import resolve_timescale
-    from progress_log import boss_dir_name, journal_path
+    from progress_log import boss_dir_name, journal_path, trainer_log_path
+
+    # A smoke run is isolated from the real checkpoints, and its trainer log is
+    # namespaced the same way so it cannot overwrite the real one either.
+    tag = SMOKE_TAG if smoke_steps else None
+    hk_logging.setup_logging(trainer_log_path(tag))
+    LOG = hk_logging.get_logger()
 
     print(f"[MULTI] Shared trainer over {len(plan)} window(s), boss: "
           f"{boss_label} ({boss_scene})")
@@ -327,14 +334,13 @@ def run_shared_trainer(plan, boss_scene, boss_label, entry_gate, timescale, smok
     # The shared run folder is the plain per-boss layout (no tag): one policy,
     # one journal, checkpoints resumable across a changed window count. A smoke
     # run is isolated under the __smoke tag so it cannot touch real checkpoints.
-    tag = SMOKE_TAG if smoke_steps else None
     boss_dir = os.path.join(train.MODELS_ROOT, boss_dir_name(boss_scene, tag))
     os.makedirs(boss_dir, exist_ok=True)
     train.migrate_legacy_model(boss_scene, boss_dir)
     vecnorm_path = os.path.join(boss_dir, "vecnormalize.pkl")
     print(f"[MULTI] Shared training folder: {boss_dir}")
 
-    resume_allowed = train.decide_resume(boss_dir)
+    resume_allowed = train.decide_resume(boss_dir, log=LOG.info)
 
     vec_env = train.load_compatible_vecnorm(base_vec_env, vecnorm_path, resume=resume_allowed)
     # A pause left behind by a killed trainer is lifted on the way in.
@@ -343,7 +349,8 @@ def run_shared_trainer(plan, boss_scene, boss_label, entry_gate, timescale, smok
     except Exception as exc:
         print(f"[MULTI] Could not ask the windows to resume: {exc}")
 
-    model = train.load_or_create_model(vec_env, boss_dir, resume_allowed)
+    model = train.load_or_create_model(vec_env, boss_dir, resume_allowed, log=LOG.info)
+    train.write_run_manifest(boss_dir, model, source="train_multi.py (variant b)", log=LOG.info)
 
     callbacks, game_pause = train.build_callbacks(
         vec_env, boss_dir, vecnorm_path, journal_path(tag),

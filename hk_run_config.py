@@ -17,8 +17,11 @@ Imports nothing but the standard library, so the unit tier checks it directly (s
 
 import json
 import os
+import subprocess
+import time
 
 CONFIG_NAME = "run_config.json"
+MANIFEST_NAME = "run_manifest.json"
 RESUME_OVERRIDE_ENV = "HK_RESUME_CONFIG_CHANGED"
 
 
@@ -65,6 +68,39 @@ def matches(path, values):
 def write_config(path, values):
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(build_config(values), handle, indent=2, sort_keys=True)
+        handle.write("\n")
+
+
+def git_commit(repo_root=None):
+    """The short hash of the working tree's HEAD, or None without a repo/git.
+
+    Used only for the manifest: which code produced a checkpoint is provenance,
+    not validity - a different commit does not make the value function wrong the
+    way a changed reward scale does, so it must never leak into the fingerprint.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"], cwd=repo_root,
+            capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    commit = result.stdout.strip()
+    return commit or None
+
+
+def write_manifest(path, info):
+    """Writes the run's provenance record (versions, hyperparameters, scene).
+
+    Deliberately NOT the fingerprint: everything here describes *where a
+    checkpoint came from*, not *what problem it describes*. Nothing in the
+    manifest is compared on a resume.
+    """
+    record = dict(info)
+    record.setdefault("written", time.strftime("%Y-%m-%d %H:%M:%S"))
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(record, handle, indent=2, sort_keys=True, default=str)
         handle.write("\n")
 
 

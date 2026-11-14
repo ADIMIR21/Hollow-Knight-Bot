@@ -23,6 +23,7 @@ _WINDOW = re.compile(r"^\[([\d\- :]+)\]\s+WINDOW step=(\d+)\s+reward=(-?[\d.]+)\
 # the journal so two processes never write into the same files. No tag = the
 # historical layout, byte for byte.
 _JOURNAL_FMT = "logs/progress__{tag}.txt"
+_TRAINER_LOG_FMT = "logs/train__{tag}.log"
 
 
 def boss_dir_name(scene, tag=None):
@@ -35,6 +36,11 @@ def boss_dir_name(scene, tag=None):
 def journal_path(tag=None):
     """The journal file for a run: `logs/progress.txt` or `logs/progress__<tag>.txt`."""
     return _JOURNAL_FMT.format(tag=tag) if tag else "logs/progress.txt"
+
+
+def trainer_log_path(tag=None):
+    """The trainer's own log file: `logs/train.log` or `logs/train__<tag>.log`."""
+    return _TRAINER_LOG_FMT.format(tag=tag) if tag else "logs/train.log"
 
 
 def classify_outcome(reward_parts):
