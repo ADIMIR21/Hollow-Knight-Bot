@@ -292,7 +292,8 @@ def _worker_env(cfg, boss_scene, entry_gate):
     return Monitor(HollowKnightGym())
 
 
-def run_shared_trainer(plan, boss_scene, boss_label, entry_gate, timescale, smoke_steps):
+def run_shared_trainer(plan, boss_scene, boss_label, entry_gate, timescale, smoke_steps,
+                       eval_episodes=3, eval_every=20):
     """Variant B: one PPO run over one pipe per window (this process)."""
     import train
     from stable_baselines3.common.vec_env import SubprocVecEnv
@@ -345,7 +346,8 @@ def run_shared_trainer(plan, boss_scene, boss_label, entry_gate, timescale, smok
     model = train.load_or_create_model(vec_env, boss_dir, resume_allowed)
 
     callbacks, game_pause = train.build_callbacks(
-        vec_env, boss_dir, vecnorm_path, journal_path(tag))
+        vec_env, boss_dir, vecnorm_path, journal_path(tag),
+        eval_episodes=eval_episodes, eval_every=eval_every)
 
     total = smoke_steps if smoke_steps else 5000000
     if smoke_steps:
@@ -463,7 +465,9 @@ def cmd_start(args):
     })
     if args.variant == "b":
         return run_shared_trainer(plan, boss_scene, boss_label,
-                                  args.entry_gate, args.timescale, args.smoke_steps)
+                                  args.entry_gate, args.timescale, args.smoke_steps,
+                                  eval_episodes=args.eval_episodes,
+                                  eval_every=args.eval_every)
     return run_per_window(plan, boss_scene, args.timescale)
 
 
@@ -528,6 +532,11 @@ def main():
     p.add_argument("--smoke-steps", type=int, default=0, metavar="N",
                    help="stop after N steps instead of the full run (a live check "
                         "isolated in the <scene>__smoke folder)")
+    p.add_argument("--eval-episodes", type=int, default=3, metavar="N",
+                   help="deterministic evaluation episodes between rollouts "
+                        "(0 disables the probe; same meaning as train.py's flag)")
+    p.add_argument("--eval-every", type=int, default=20, metavar="ROLLOUTS",
+                   help="run the deterministic probe every ROLLOUTS rollouts")
     p.add_argument("--width", type=int, metavar="N",
                    help="window render width (Unity -screen-width). Cuts GPU load "
                         "per window; telemetry observation is unaffected. "

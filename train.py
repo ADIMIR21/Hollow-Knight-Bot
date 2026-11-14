@@ -14,7 +14,7 @@ from ai_controller import HollowKnightController
 from bosses import (resolve_query, set_boss_scene, set_gate, ensure_save_loaded,
                     DEFAULT_SCENE, resolve_timescale)
 import hk_run_config as run_config
-from progress_log import boss_dir_name, journal_path
+from progress_log import boss_dir_name, classify_outcome, journal_path
 
 # hk_gym is imported in main() AFTER the boss scene is fixed:
 # the scene is read from HK_BOSS_SCENE at module import time.
@@ -73,6 +73,18 @@ def parse_args():
         default=int(os.environ.get("HK_SAVE_SLOT", "2")),
         help="save slot to load when the game is sitting in the main menu "
              "(1..4, default 2 / HK_SAVE_SLOT). Ignored when a scene is already up.",
+    )
+    parser.add_argument(
+        "--eval-episodes", metavar="N", type=int, default=3,
+        help="deterministic evaluation episodes played on the training env "
+             "between rollouts (0 disables the probe, default 3). Reported as "
+             "eval/win_rate - the win rate of the policy the deployment would use, "
+             "not of the exploring one.",
+    )
+    parser.add_argument(
+        "--eval-every", metavar="ROLLOUTS", type=int, default=20,
+        help="run the deterministic probe every ROLLOUTS rollouts "
+             "(default 20, i.e. every ~160k steps).",
     )
     return parser.parse_args()
 
@@ -193,7 +205,9 @@ class RewardComponentLoggingCallback(BaseCallback):
     def _on_step(self) -> bool:
         for info in self.locals.get("infos", []):
             parts = info.get("reward_parts")
-            if not parts:
+            if not parts or info.get("eval_episode"):
+                # Eval episodes run on the same env between rollouts: their rewards are the
+                # probe's business, not the training breakdown's.
                 continue
             for key, value in parts.items():
                 self._sums[key] = self._sums.get(key, 0.0) + value
@@ -297,13 +311,13 @@ class WinRateLoggingCallback(BaseCallback):
                 # The step cap only cuts the bookkeeping window - the fight goes on - so this is
                 # not an episode outcome and must not dilute the win rate.
                 continue
-            parts = info.get("reward_parts") or {}
-            if parts.get("victory", 0.0) > 0:
-                outcome, reason = 1.0, "victory"
-            elif parts.get("death", 0.0) < 0:
-                outcome, reason = 0.0, "death"
-            else:
-                outcome, reason = 0.0, "timeout"
+            if info.get("eval_episode"):
+                # Deterministic probe episodes (DeterministicEvalCallback) play on this env
+                # between rollouts; the training win rate is measured on the exploration
+                # policy only, and the probe reports its own eval/win_rate.
+                continue
+            reason = classify_outcome(info.get("reward_parts"))
+            outcome = 1.0 if reason == "victory" else 0.0
             self._results.append(outcome)
             self._reasons.append(reason)
             self.total_episodes += 1
@@ -323,6 +337,104 @@ class WinRateLoggingCallback(BaseCallback):
                 self._reasons.count(reason) / len(self._reasons),
             )
         return True
+
+
+class DeterministicEvalCallback(BaseCallback):
+    """Periodic deterministic evaluation episodes, played between rollouts.
+
+    The win rate the training callbacks report is measured under the stochastic
+    exploration policy while rollouts are collected - it mixes the policy's skill
+    with its curiosity, and before this probe existed it was the only number a
+    run had (which is how reward tweaks were judged: by watching a noisy training
+    statistic and hoping). Between rollouts - when the rollout buffer is full and
+    nothing is being collected - this callback plays eval_episodes fights on the
+    training environment with the deterministic action the policy would take at
+    deployment, and reports eval/win_rate, eval/mean_reward and the batch
+    outcome mix to TensorBoard and the journal.
+
+    The environment is shared with training on purpose: a second arena would need
+    a second game window, and the probe's question is exactly "what would this
+    policy do in this arena right now". The episodes are flagged in info
+    (eval_episode, set through the env's set_eval_mode) so the training statistics
+    do not count them, and the VecNormalize statistics are frozen for the duration
+    so the probe cannot bend the running normalization towards its own state
+    distribution.
+    """
+
+    def __init__(self, eval_episodes=3, eval_every=20, verbose=0):
+        super().__init__(verbose)
+        self.eval_episodes = max(0, int(eval_episodes))
+        self.eval_every = max(1, int(eval_every))
+        self._rollouts = 0
+        self.episodes = 0
+        self.victories = 0
+        self.last_batch_outcomes = []
+        self.last_batch_rewards = []
+
+    def _on_step(self) -> bool:
+        return True
+
+    def _on_rollout_start(self) -> bool:
+        self._rollouts += 1
+        if self.eval_episodes <= 0 or (self._rollouts - 1) % self.eval_every != 0:
+            return True
+        self._run_eval()
+        return True
+
+    def _run_eval(self):
+        env = self.training_env
+        was_training = getattr(env, "training", None)
+        if was_training is not None:
+            env.training = False
+        env.env_method("set_eval_mode", True)
+        outcomes, rewards = [], []
+        try:
+            for _ in range(self.eval_episodes):
+                outcome, reward = self._eval_episode(env)
+                outcomes.append(outcome)
+                rewards.append(reward)
+        finally:
+            env.env_method("set_eval_mode", False)
+            if was_training is not None:
+                env.training = True
+        self.episodes += len(outcomes)
+        self.victories += sum(1 for outcome in outcomes if outcome == "victory")
+        self.last_batch_outcomes = outcomes
+        self.last_batch_rewards = rewards
+        if outcomes:
+            self.logger.record("eval/win_rate", self.victories / self.episodes)
+            self.logger.record("eval/episodes", self.episodes)
+            self.logger.record(
+                "eval/batch_win_rate",
+                sum(1 for outcome in outcomes if outcome == "victory") / len(outcomes))
+            self.logger.record(
+                "eval/mean_reward", sum(rewards) / len(rewards))
+        if self.verbose >= 1:
+            print(f"[EVAL] deterministic batch: {outcomes} "
+                  f"rewards={[f'{r:.0f}' for r in rewards]} "
+                  f"(overall {self.victories}/{self.episodes})")
+
+    def _eval_episode(self, env):
+        """One deterministic fight on the shared env. Returns (outcome, reward)."""
+        obs = env.reset()
+        total_reward = 0.0
+        while True:
+            action, _ = self.model.predict(obs, deterministic=True)
+            obs, rewards, dones, infos = env.step(action)
+            # VecNormalize hands back rewards scaled by its (frozen) statistics;
+            # the probe reports the reward the fight actually paid.
+            if hasattr(env, "get_original_reward"):
+                total_reward += float(env.get_original_reward()[0])
+            else:
+                total_reward += float(rewards[0])
+            if dones[0]:
+                info = infos[0]
+                outcome = classify_outcome(info.get("reward_parts"))
+                if info.get("step_limit"):
+                    # A step cap is not a fight outcome, but the probe's episode did
+                    # end: nobody had won by the cap, which is a timeout for the probe.
+                    outcome = "timeout"
+                return outcome, total_reward
 
 
 class ProgressFileCallback(BaseCallback):
@@ -404,15 +516,15 @@ class ProgressFileCallback(BaseCallback):
 
     @staticmethod
     def _classify(parts) -> str:
-        if parts.get("victory", 0.0) > 0:
-            return "victory"
-        if parts.get("death", 0.0) < 0:
-            return "death"
-        return "timeout"
+        return classify_outcome(parts)
 
     def _on_step(self) -> bool:
         for info in (self.locals or {}).get("infos", []):
             if "episode" not in info:
+                continue
+            if info.get("eval_episode"):
+                # The deterministic probe's episodes are not training outcomes; they are
+                # logged by the probe itself (eval/* in the metrics table).
                 continue
             parts = info.get("reward_parts") or {}
             reason = self._classify(parts)
@@ -583,6 +695,7 @@ def build_callbacks(vec_env, boss_dir, vecnorm_path, progress_path,
                                  save_freq=checkpoint_freq),
         RewardComponentLoggingCallback(),
         WinRateLoggingCallback(window=100),
+        DeterministicEvalCallback(eval_episodes=eval_episodes, eval_every=eval_every),
         # Last: by its _on_rollout_end the logger already contains the metrics
         # of the other callbacks (custom/*, reward_breakdown/*), which it writes to the file.
         ProgressFileCallback(progress_path, window=PROGRESS_WINDOW),
@@ -713,7 +826,8 @@ def main():
 
     progress_path = journal_path(args.tag)
     callback_list, game_pause_callback = build_callbacks(
-        vec_env, boss_dir, vecnorm_path, progress_path)
+        vec_env, boss_dir, vecnorm_path, progress_path,
+        eval_episodes=args.eval_episodes, eval_every=args.eval_every)
 
     print("\n[SYSTEM] AI is ready for training.")
     print(f"[SYSTEM] Progress log: {progress_path} (history is appended)")

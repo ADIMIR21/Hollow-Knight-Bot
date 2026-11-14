@@ -357,7 +357,16 @@ so the paused interval is shifted out of their stamps.
 All metrics that go to TensorBoard and are printed to the console are also mirrored to the text file **`logs/progress.txt`** (UTF-8, appended on every run - if training crashes, the progress already written is not lost):
 
 - a line `EPISODE ...` for each finished episode: the outcome (`outcome=victory` / `death` / `timeout`), reward, length, the victory counter and the win rate over a window of 100 episodes;
-- the metrics table after every rollout (`n_steps = 8192` steps) - exactly the block printed to the console: `custom/victories`, `custom/win_rate`, `custom/last100_*`, `reward_breakdown/*`, `rollout/*`, `train/*`. With `verbose=1` it is written by the Stable-Baselines3 logger itself through `HumanOutputFormat`; with `verbose=0` the values are collected by the callback.
+- the metrics table after every rollout (`n_steps = 8192` steps) - exactly the block printed to the console: `custom/victories`, `custom/win_rate`, `custom/last100_*`, `reward_breakdown/*`, `eval/*`, `rollout/*`, `train/*`. With `verbose=1` it is written by the Stable-Baselines3 logger itself through `HumanOutputFormat`; with `verbose=0` the values are collected by the callback.
+
+Every `--eval-every` rollouts (default 20, `--eval-episodes` fights per probe,
+default 3, `0` disables) the trainer pauses collection and plays deterministic
+evaluation episodes on the same environment: the action the policy would take at
+deployment instead of the exploring one. The probe reports `eval/win_rate` and
+`eval/mean_reward` - the training `custom/win_rate` mixes the policy's skill
+with its exploration noise, the probe does not. Its episodes are excluded from
+the training statistics, and the normalization statistics are frozen while it
+runs.
 
 Example:
 

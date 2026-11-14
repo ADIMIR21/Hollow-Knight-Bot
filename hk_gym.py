@@ -174,6 +174,10 @@ class HollowKnightGym(gym.Env):
         self._awaiting_fight = True
         self._awaiting_started_at = 0.0
         self._episode_active = False
+        # Deterministic evaluation probes (train.py) set this while they play their episodes
+        # on the same environment: the flagged steps are excluded from the training
+        # statistics, so the probe cannot dilute the win rate it is meant to report.
+        self._eval_mode = False
         self._telemetry_mtime = self.game_env.get_telemetry_mtime()
         # Counter of skipped telemetry frames (Python couldn't keep up with the game speed).
         # At x4, telemetry arrives ~240/sec; if Python step() takes longer than ~4 ms,
@@ -242,6 +246,10 @@ class HollowKnightGym(gym.Env):
 
     def resume_game(self, timeout=2.0):
         return self.set_paused(False, timeout=timeout)
+
+    def set_eval_mode(self, value):
+        """Marks this env as running deterministic evaluation episodes (see train.py)."""
+        self._eval_mode = bool(value)
 
     def set_timescale(self, value):
         """Set the game time scale through the mod ("timescale <value>").
@@ -505,6 +513,7 @@ class HollowKnightGym(gym.Env):
                 "time_scale": self.last_time_scale,
                 "skipped_frames": self._skipped_frames,
                 "awaiting_fight": True,
+                "eval_episode": self._eval_mode,
             }
             return stacked_obs, reward, False, False, info
 
@@ -676,5 +685,6 @@ class HollowKnightGym(gym.Env):
             "reward_parts": reward_parts,
             "step_limit": step_limit,
             "time_scale": self.last_time_scale,
+            "eval_episode": self._eval_mode,
         }
 

@@ -37,6 +37,23 @@ def journal_path(tag=None):
     return _JOURNAL_FMT.format(tag=tag) if tag else "logs/progress.txt"
 
 
+def classify_outcome(reward_parts):
+    """One outcome word from the environment's reward_parts: victory / death / timeout.
+
+    The training callbacks classify episode endings the same way the journal names them;
+    one shared rule so the TensorBoard win rate, the journal and the deterministic eval
+    probe can never disagree about what a victory is. A step-limit window is not an episode
+    outcome - the fight continues - and the callers skip it (info["step_limit"]) before
+    classifying.
+    """
+    parts = reward_parts or {}
+    if parts.get("victory", 0.0) > 0:
+        return "victory"
+    if parts.get("death", 0.0) < 0:
+        return "death"
+    return "timeout"
+
+
 def parse_journal(text):
     """Splits the journal into (blocks, episodes).
 
