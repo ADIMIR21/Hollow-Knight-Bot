@@ -228,6 +228,11 @@ def _kill(pid):
     return True
 
 
+def _window_tag(run_tag, window):
+    """A variant A trainer's tag: w1..wN by default, <run_tag>-wN for a namespaced run."""
+    return f"{run_tag}-w{window}" if run_tag else f"w{window}"
+
+
 def _window_running(window):
     """Is the launcher's process for this instance already up?"""
     import hk_multibox
@@ -296,7 +301,7 @@ def _worker_env(cfg, boss_scene, entry_gate):
 
 
 def run_shared_trainer(plan, boss_scene, boss_label, entry_gate, timescale, smoke_steps,
-                       eval_episodes=3, eval_every=20, steps=None):
+                       eval_episodes=3, eval_every=20, steps=None, run_tag=None):
     """Variant B: one PPO run over one pipe per window (this process)."""
     import train
     import hk_logging
@@ -305,8 +310,9 @@ def run_shared_trainer(plan, boss_scene, boss_label, entry_gate, timescale, smok
     from progress_log import boss_dir_name, journal_path, trainer_log_path
 
     # A smoke run is isolated from the real checkpoints, and its trainer log is
-    # namespaced the same way so it cannot overwrite the real one either.
-    tag = SMOKE_TAG if smoke_steps else None
+    # namespaced the same way so it cannot overwrite the real one either. An explicit
+    # run tag (the sweep bench's experiments) namespaces the same way.
+    tag = SMOKE_TAG if smoke_steps else run_tag
     hk_logging.setup_logging(trainer_log_path(tag))
     LOG = hk_logging.get_logger()
 
@@ -383,7 +389,7 @@ def run_shared_trainer(plan, boss_scene, boss_label, entry_gate, timescale, smok
 
 # ------------------------------------------------------------------ variant A
 
-def run_per_window(plan, boss, timescale, steps=None):
+def run_per_window(plan, boss, timescale, steps=None, run_tag=None):
     """Variant A: one independent train.py per window, watched and restarted."""
     import hk_multibox
 
@@ -391,7 +397,8 @@ def run_per_window(plan, boss, timescale, steps=None):
     restarts = {}
     for cfg in plan:
         processes[cfg["window"]] = subprocess.Popen(
-            train_command(cfg, boss, timescale, tag=f"w{cfg['window']}", steps=steps),
+            train_command(cfg, boss, timescale,
+                          tag=_window_tag(run_tag, cfg['window']), steps=steps),
             cwd=str(_REPO_ROOT))
         restarts[cfg["window"]] = 0
 
@@ -433,7 +440,8 @@ def run_per_window(plan, boss, timescale, steps=None):
                 print(f"[MULTI] window {window}: restarting the trainer "
                       f"(attempt {restarts[window]}/{_PAIR_RESTARTS_LIMIT})...", flush=True)
                 processes[window] = subprocess.Popen(
-                    train_command(cfg, boss, timescale, tag=f"w{window}", steps=steps),
+                    train_command(cfg, boss, timescale,
+                                  tag=_window_tag(run_tag, window), steps=steps),
                     cwd=str(_REPO_ROOT))
             if all(window_is_down(cfg) for cfg in plan):
                 print("[MULTI] All windows are done (or past the restart limit).")
@@ -479,8 +487,10 @@ def cmd_start(args):
         return run_shared_trainer(plan, boss_scene, boss_label,
                                   args.entry_gate, args.timescale, args.smoke_steps,
                                   eval_episodes=args.eval_episodes,
-                                  eval_every=args.eval_every, steps=args.steps)
-    return run_per_window(plan, boss_scene, args.timescale, steps=args.steps)
+                                  eval_every=args.eval_every, steps=args.steps,
+                                  run_tag=args.tag)
+    return run_per_window(plan, boss_scene, args.timescale, steps=args.steps,
+                          run_tag=args.tag)
 
 
 def cmd_stop(args):
@@ -552,6 +562,10 @@ def main():
     p.add_argument("--steps", type=int, default=None, metavar="N",
                    help="training budget in steps (default 5000000, the open-ended "
                         "night run; the sweep bench passes a bounded budget here)")
+    p.add_argument("--tag", default=None, metavar="NAME",
+                   help="namespaces the whole run's files (models/ppo_hk/<scene>__<tag>, "
+                        "journals, logs) - the sweep bench's experiments set this; "
+                        "variant a appends -w<N> per window")
     p.add_argument("--width", type=int, metavar="N",
                    help="window render width (Unity -screen-width). Cuts GPU load "
                         "per window; telemetry observation is unaffected. "
