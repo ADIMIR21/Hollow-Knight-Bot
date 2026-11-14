@@ -179,18 +179,50 @@ def clear_state():
 
 
 def _pid_alive(pid):
+    """Is a process with this pid alive?
+
+    This is NOT os.kill(pid, 0): on Windows os.kill terminates the target
+    (TerminateProcess with the signal as the exit code) instead of probing it,
+    so the old probe killed the very watcher it was reporting on - "status"
+    stopped the orchestrator, and _kill() always murdered the process before
+    its own taskkill could run (whose failure capture_output then swallowed).
+    """
+    if not pid or pid <= 0:
+        return False
+    if os.name == "nt":
+        return _windows_pid_alive(pid)
     try:
-        os.kill(pid, 0)
+        os.kill(pid, 0)      # POSIX: signal 0 probes without delivering anything
         return True
     except OSError:
         return False
 
 
+def _windows_pid_alive(pid):
+    """The Windows liveness probe: OpenProcess + GetExitCodeProcess."""
+    import ctypes
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    STILL_ACTIVE = 259
+    kernel32 = ctypes.windll.kernel32
+    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+    if not handle:
+        return False         # ERROR_ACCESS_LEVEL / ERROR_INVALID_PARAMETER: gone
+    try:
+        code = ctypes.c_ulong()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+            return False
+        return code.value == STILL_ACTIVE
+    finally:
+        kernel32.CloseHandle(handle)
+
+
 def _kill(pid):
-    if pid and _pid_alive(pid):
-        subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
-        return True
-    return False
+    if not pid:
+        return False
+    if not _pid_alive(pid):
+        return False
+    subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
+    return True
 
 
 def _window_running(window):
