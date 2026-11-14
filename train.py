@@ -163,8 +163,11 @@ BATCH_SIZE = 256
 GAMMA = 0.9995
 LEARNING_RATE = 3e-4
 # The exploration bonus, as a module constant so the manifest reports what really trained.
-# The sweep bench overrides it per experiment through HK_PPO_ENT_COEF; like the reward
-# block, the experiment's value is whatever the run actually started with.
+# The sweep bench overrides it per experiment through HK_PPO_ENT_COEF; the override also
+# becomes part of the checkpoint fingerprint (run_config_values), so an experiment's
+# checkpoints are never resumed by a default run and the other way around. A default run
+# emits no ent_coef key at all: its fingerprint stays byte-identical to the ones written
+# before the knob existed.
 ENT_COEF = float(os.environ.get("HK_PPO_ENT_COEF", "0.02"))
 
 # Resolved game time scale for this run: preset name ("normal", "fast", "x4", "x6")
@@ -198,7 +201,7 @@ def run_config_values():
     )
     from hk_features import ACTION_COUNT
 
-    return {
+    values = {
         "gamma": GAMMA,
         "damage_reward_per_hp": DAMAGE_REWARD_PER_HP,
         "open_window_damage_multiplier": OPEN_WINDOW_DAMAGE_MULTIPLIER,
@@ -212,6 +215,13 @@ def run_config_values():
         "action_count": ACTION_COUNT,
         "time_scale": GLOBAL_TIMESCALE,
     }
+    # The exploration bonus is part of the checkpoint's identity only when an experiment
+    # set it: a default run must keep matching the fingerprints written before the knob
+    # existed, while an override run must never be resumed by one without it (the same
+    # rule the reward overrides follow). differences() names the added/dropped key.
+    if os.environ.get("HK_PPO_ENT_COEF"):
+        values["ent_coef"] = ENT_COEF
+    return values
 
 
 class RewardComponentLoggingCallback(BaseCallback):

@@ -81,6 +81,22 @@ class FingerprintTest(unittest.TestCase):
         self.assertEqual(len(differences), 1, differences)
         self.assertIn("action_count", differences[0])
 
+    def test_an_ent_coef_override_is_never_resumed_across_the_boundary(self):
+        """The HK_PPO_ENT_COEF rule: the key exists in the fingerprint only while the
+        knob is set. A default run (no key) and an override run must refuse each other
+        in both directions - and stay compatible with themselves."""
+        base = dict(self.values)
+        override = dict(self.values, ent_coef=0.05)
+        hk_run_config.write_config(self.path, override)
+        self.assertFalse(hk_run_config.matches(self.path, base),
+                         "a default run resumed an experiment's ent_coef=0.05 checkpoint")
+        self.assertTrue(hk_run_config.matches(self.path, override))
+        hk_run_config.write_config(self.path, base)
+        self.assertFalse(hk_run_config.matches(self.path, override),
+                         "an override run resumed a checkpoint trained before the knob existed")
+        self.assertIn("ent_coef", hk_run_config.differences(self.path, override)[0],
+                      "the refusal message must name the knob")
+
     def test_a_missing_or_unusable_file_does_not_match(self):
         self.assertFalse(hk_run_config.matches(self.path, self.values))
         self.assertEqual(
@@ -116,6 +132,22 @@ class TrainingUsesTheFingerprintTest(unittest.TestCase):
                 body,
                 "hk_gym.%s is not part of the checkpoint fingerprint" % name,
             )
+
+    def test_the_exploration_bonus_is_fingerprinted_only_when_set(self):
+        """HK_PPO_ENT_COEF must reach the fingerprint when set, and must add no key when
+        unset: a default run's fingerprint stays byte-identical to the ones written
+        before the knob existed (test_an_ent_coef_override... pins the resume rule)."""
+        body = function_body(self.train, "run_config_values")
+        self.assertIsNotNone(body, "run_config_values() is missing from train.py")
+        assignment = 'values["ent_coef"] = ENT_COEF'
+        self.assertIn(assignment, body,
+                      "an HK_PPO_ENT_COEF override never reaches the checkpoint fingerprint")
+        self.assertIn('os.environ.get("HK_PPO_ENT_COEF")', body,
+                      "run_config_values() emits ent_coef unconditionally - a default run "
+                      "would stop matching the fingerprints written before the knob existed")
+        self.assertLess(
+            body.index('os.environ.get("HK_PPO_ENT_COEF")'), body.index(assignment),
+            "the ent_coef assignment escaped its HK_PPO_ENT_COEF guard")
 
     def test_the_fingerprint_is_checked_before_anything_is_resumed(self):
         self.assertIn("run_config.matches(", self.train)
