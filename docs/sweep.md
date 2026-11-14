@@ -54,6 +54,23 @@ is a live risk. So a budget of 200k steps costs roughly the same wall-clock per 
 batch regardless of the experiment count: run experiments in batches of four-window
 variant-b sessions, one after another.
 
+## Before a batch: park the windows
+
+A window that boots from a save parked mid-world has to cross into Godhome while the
+trainer's restart loop is already firing, and that combination can churn for tens of
+minutes per window (observed live: 143-467 s "the game state never freed up", cycled,
+zero fights detected). `tools/sweep/park_windows.py` walks each window in one at a
+time - load the save, wait for the teleport to land in a live fight, freeze it - and
+leaves every window paused in the arena; the trainer lifts the pauses on the way in:
+
+```
+python tools/sweep/park_windows.py --windows 4 --boss GG_False_Knight
+python tools/sweep/run_experiment.py experiments/baseline-1.json --no-launch
+```
+
+Save slots default to the launcher's cycling (2, 3, 4, 1). A window that never parked
+is reported; the trainer still tries to restart it itself, but expect a slow start.
+
 ## The order of experiments
 
 1. **Noise floor (before anything else).** Run the identical baseline config three
