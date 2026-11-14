@@ -40,17 +40,23 @@ class HollowKnightEnv:
         return self.pipe.get_telemetry()
 
     def get_telemetry_mtime(self):
-        """Stamp of the last telemetry record (pipe message counter) or None."""
+        """Stamp of the last telemetry record (pipe frame counter) or None.
+
+        The frame counter, not the message counter: one-shot events (a boss_list
+        or command_error reply) consume the message counter without carrying any
+        observation, and a step keyed on it would act on a stale frame while the
+        mod is busy answering a command.
+        """
         if not self.pipe.is_connected:
             return None
-        return self.pipe.get_seq()
+        return self.pipe.get_frame_seq()
 
     def wait_for_fresh_telemetry(self, last_seq, timeout=0.15):
         """
-        Update 4: we wait for a NEW pipe message (by the seq counter) instead of
-        fixed sleeps. The step runs exactly at the pace of the game.
+        Update 4: we wait for a NEW observation frame (by the frame counter)
+        instead of fixed sleeps. The step runs exactly at the pace of the game.
 
-        Returns the seq of the new data, or the previous last_seq
+        Returns the frame counter of the new data, or the previous last_seq
         if nothing arrived within the timeout (menu/pause — we keep working on old data).
         """
         return self.pipe.wait_for_fresh(last_seq, timeout)

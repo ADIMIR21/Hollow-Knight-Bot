@@ -104,11 +104,22 @@ class HKPipeClient:
         self.pipe_path = pipe_path
         self.reconnect_delay = reconnect_delay
         self.verbose = verbose
+        self._init_state()
 
+        self._thread = threading.Thread(target=self._run, daemon=True, name="HKPipeClient")
+        self._thread.start()
+
+    def _init_state(self):
+        """The message bookkeeping, without opening anything.
+
+        Split from __init__ so the unit tier can exercise the parsing and the
+        wait semantics without a background thread trying to open a pipe.
+        """
         self._cond = threading.Condition()
         self._latest = None          # latest telemetry frame (events excluded)
         self._last_any = None        # last message of any type (for debugging)
         self._seq = 0                # total number of messages received
+        self._frame_seq = 0          # number of observation frames received (events excluded)
         self._by_status = {}         # status -> last message with that status
         self._status_seq = {}        # status -> seq it arrived on
         self._hello = None           # mod hello message
@@ -117,9 +128,6 @@ class HKPipeClient:
 
         self._send_lock = threading.Lock()
         self._fd = None              # raw pipe handle (r+w)
-
-        self._thread = threading.Thread(target=self._run, daemon=True, name="HKPipeClient")
-        self._thread.start()
 
     # ------------------------------------------------------------------ API
 
@@ -189,6 +197,17 @@ class HKPipeClient:
         with self._cond:
             return self._seq
 
+    def get_frame_seq(self):
+        """Monotonic counter of received observation frames (one-shot events excluded).
+
+        This is the counter a step loop should wait on: an event (boss_list,
+        command_error, ...) consumes the message counter without producing any
+        observation, and a waiter keyed on get_seq() would hand the caller a
+        stale frame while the mod is answering a command.
+        """
+        with self._cond:
+            return self._frame_seq
+
     def get_status(self, status):
         """Last message with the given ``status`` or None."""
         with self._cond:
@@ -220,16 +239,21 @@ class HKPipeClient:
                 self._cond.wait(remaining)
 
     def wait_for_fresh(self, last_seq, timeout=0.15):
-        """Waits for a NEW message from the mod. Returns the current seq.
+        """Waits for a NEW observation frame from the mod. Returns the frame counter.
+
+        Compares against :meth:`get_frame_seq`, not get_seq(): one-shot events
+        (boss_list / boss_selected / command_error) consume the message counter
+        without carrying any observation, and a waiter keyed on it would act on
+        a stale frame while the mod is busy answering a command.
 
         If nothing arrives within the timeout (menu/pause/no link) it returns
         the previous last_seq, like the old mtime-based wait_for_fresh_telemetry.
         """
         with self._cond:
-            if self._seq != last_seq:
-                return self._seq
+            if self._frame_seq != last_seq:
+                return self._frame_seq
             self._cond.wait(timeout)
-            return self._seq
+            return self._frame_seq
 
     def send_command(self, text):
         """Send a command to the mod ('restart GG_False_Knight door_dreamEnter' etc.).
@@ -382,6 +406,7 @@ class HKPipeClient:
             # telemetry: otherwise an RL step would get JSON without hp/x/y.
             if not data.get("event"):
                 self._latest = data
+                self._frame_seq += 1
             self._cond.notify_all()
 
     def _set_connected(self, value):
