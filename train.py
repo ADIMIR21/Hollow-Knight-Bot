@@ -499,6 +499,97 @@ def make_model(env):
     )
 
 
+def decide_resume(boss_dir, log=print):
+    """Whether the saved model in boss_dir may be resumed, and why not when it may not.
+
+    The fingerprint decides (hk_run_config.py); the one way past it is the maintainer's
+    explicit HK_RESUME_CONFIG_CHANGED, which is announced with the list of what changed.
+    A refusal is announced just as loudly: a silent "trained from scratch" on a changed
+    reward scale is indistinguishable from a run that has learned nothing.
+    """
+    config_file = run_config.config_path(boss_dir)
+    resume_allowed = run_config.matches(config_file, run_config_values())
+    if not resume_allowed and run_config.override_requested():
+        # Deliberate warm start: the policy transfers, the critic and the running statistics
+        # do not, so say out loud what is being accepted.
+        log(f"[SYSTEM] Resuming across a changed run configuration: "
+            f"{run_config.RESUME_OVERRIDE_ENV} is set")
+        for line in run_config.differences(config_file, run_config_values()):
+            log(f"           {line}")
+        return True
+    if not resume_allowed and os.path.exists(os.path.join(boss_dir, "hk_model_final.zip")):
+        log("[SYSTEM] Not resuming the saved model: the run configuration changed")
+        for line in run_config.differences(config_file, run_config_values()):
+            log(f"           {line}")
+    return resume_allowed
+
+
+def load_or_create_model(vec_env, boss_dir, resume_allowed, log=print):
+    """The saved model when it may be resumed, a fresh one otherwise.
+
+    Both paths are pinned to the same constants (see make_model): SB3 applies the load
+    kwargs after the pickled data, so the load path repeating them is what a resumed run
+    really trains with. Afterwards the fingerprint is rewritten - from here on the model,
+    the statistics and the reward agree, so a later change is detected instead of silently
+    degrading the run.
+    """
+    model_path = os.path.join(boss_dir, "hk_model_final.zip")
+    have_saved_model = os.path.exists(model_path) and resume_allowed
+    if have_saved_model:
+        log(f"\n[SYSTEM] Save found: hk_model_final. Loading...")
+        try:
+            # The model was saved under Python 3.11: the schedules pickled into
+            # the file (learning_rate/clip_range) contain 3.11 bytecode that
+            # crashes Python 3.14 when called (access violation).
+            # We replace them with fresh objects via custom_objects.
+            model = PPO.load(
+                model_path,
+                env=vec_env,
+                custom_objects={
+                    "learning_rate": constant_lr,
+                    "clip_range": 0.2,
+                },
+                n_steps=N_STEPS,
+                batch_size=BATCH_SIZE,
+                gamma=GAMMA,
+            )
+            log("[SYSTEM] Model loaded successfully.")
+        except Exception as e:
+            log(f"[SYSTEM] Failed to load the model: {e}")
+            log("[SYSTEM] Creating a new model from scratch...")
+            model = make_model(vec_env)
+    else:
+        log("\n[SYSTEM] No save found for this boss. Creating a new one from scratch...")
+        model = make_model(vec_env)
+    run_config.write_config(run_config.config_path(boss_dir), run_config_values())
+    return model
+
+
+def build_callbacks(vec_env, boss_dir, vecnorm_path, progress_path,
+                    eval_episodes=0, eval_every=20, checkpoint_freq=20000):
+    """The callback list every training entry point runs, in the order that matters.
+
+    The GamePauseCallback comes back separately: the exit path must be able to lift a
+    pause even when Ctrl+C landed inside the PPO update, with the game still frozen.
+    """
+    # First in the list: the game is frozen before the bookkeeping runs and stays
+    # frozen through train().
+    game_pause_callback = GamePauseCallback(vec_env)
+    callbacks = CallbackList([
+        game_pause_callback,
+        CheckpointCallback(save_freq=checkpoint_freq, save_path=boss_dir,
+                           name_prefix="hk_night_run"),
+        VecNormalizeSaveCallback(vec_env=vec_env, save_path=vecnorm_path,
+                                 save_freq=checkpoint_freq),
+        RewardComponentLoggingCallback(),
+        WinRateLoggingCallback(window=100),
+        # Last: by its _on_rollout_end the logger already contains the metrics
+        # of the other callbacks (custom/*, reward_breakdown/*), which it writes to the file.
+        ProgressFileCallback(progress_path, window=PROGRESS_WINDOW),
+    ])
+    return callbacks, game_pause_callback
+
+
 def load_compatible_vecnorm(vec_env, vecnorm_path, resume=True):
     if not resume:
         # The saved statistics belong to a different reward scale or discount (see
@@ -604,27 +695,7 @@ def main():
     if risky:
         print(f"[SYSTEM]  WARNING: above 3x risks breaking frame-tied physics")
 
-    model_path = os.path.join(boss_dir, "hk_model_final.zip")
-    config_file = run_config.config_path(boss_dir)
-
-    # A checkpoint only means what it was trained to mean. If the reward scale, the discount or
-    # the observation/action sizes changed since it was written, its value function and its
-    # normalization statistics describe a different problem, and resuming them produces a run
-    # that looks as if it had learned nothing - with nothing in the logs to say why.
-    resume_allowed = run_config.matches(config_file, run_config_values())
-    if not resume_allowed and run_config.override_requested():
-        # Deliberate warm start: the policy transfers, the critic and the running statistics do not,
-        # so say out loud what is being accepted.
-        print(f"[SYSTEM] Resuming across a changed run configuration: "
-              f"{run_config.RESUME_OVERRIDE_ENV} is set")
-        for line in run_config.differences(config_file, run_config_values()):
-            print(f"           {line}")
-        resume_allowed = True
-    have_saved_model = os.path.exists(model_path) and resume_allowed
-    if os.path.exists(model_path) and not resume_allowed:
-        print("[SYSTEM] Not resuming the saved model: the run configuration changed")
-        for line in run_config.differences(config_file, run_config_values()):
-            print(f"           {line}")
+    resume_allowed = decide_resume(boss_dir)
 
     vec_env = load_compatible_vecnorm(base_vec_env, vecnorm_path, resume=resume_allowed)
 
@@ -638,70 +709,11 @@ def main():
     except Exception as e:
         print(f"[SYSTEM] Could not ask the mod to resume: {e}")
 
-    if have_saved_model:
-        print(f"\n[SYSTEM] Save found: hk_model_final ({scene}). Loading...")
-        try:
-            # The model was saved under Python 3.11: the schedules pickled into
-            # the file (learning_rate/clip_range) contain 3.11 bytecode that
-            # crashes Python 3.14 when called (access violation).
-            # We replace them with fresh objects via custom_objects.
-            model = PPO.load(
-                model_path,
-                env=vec_env,
-                custom_objects={
-                    "learning_rate": constant_lr,
-                    "clip_range": 0.2,
-                },
-                # Update 8: SB3 applies these kwargs AFTER the pickled data,
-                # so they are what a resumed run really trains with. Without
-                # them a loaded model keeps n_steps/batch_size/gamma from its
-                # file and the configuration above would only reach a fresh
-                # model.
-                n_steps=N_STEPS,
-                batch_size=BATCH_SIZE,
-                gamma=GAMMA,
-            )
-            print("[SYSTEM] Model loaded successfully.")
-        except Exception as e:
-            print(f"[SYSTEM] Failed to load the model: {e}")
-            print("[SYSTEM] Creating a new model from scratch...")
-            model = make_model(vec_env)
-    else:
-        print("\n[SYSTEM] No save found for this boss. Creating a new one from scratch...")
-        model = make_model(vec_env)
+    model = load_or_create_model(vec_env, boss_dir, resume_allowed)
 
-    # From here on the model, the statistics and the reward agree; remember what they agree on
-    # so that a later change is detected instead of silently degrading the run.
-    run_config.write_config(config_file, run_config_values())
-
-    checkpoint_callback = CheckpointCallback(
-        save_freq=20000,
-        save_path=boss_dir,
-        name_prefix="hk_night_run"
-    )
-    vecnorm_save_callback = VecNormalizeSaveCallback(
-        vec_env=vec_env, save_path=vecnorm_path, save_freq=20000
-    )
-
-    reward_logging_callback = RewardComponentLoggingCallback()
-    win_rate_callback = WinRateLoggingCallback(window=100)
-    # Last in the list: by its _on_rollout_end the logger already contains the metrics
-    # of the other callbacks (custom/*, reward_breakdown/*), which it writes to the file.
     progress_path = journal_path(args.tag)
-    progress_callback = ProgressFileCallback(progress_path, window=PROGRESS_WINDOW)
-
-    # First in the list: the game is frozen before the bookkeeping runs and stays
-    # frozen through train().
-    game_pause_callback = GamePauseCallback(vec_env)
-
-    callback_list = CallbackList([
-        game_pause_callback,
-        checkpoint_callback,
-        vecnorm_save_callback,
-        reward_logging_callback,
-        win_rate_callback,
-        progress_callback,
-    ])
+    callback_list, game_pause_callback = build_callbacks(
+        vec_env, boss_dir, vecnorm_path, progress_path)
 
     print("\n[SYSTEM] AI is ready for training.")
     print(f"[SYSTEM] Progress log: {progress_path} (history is appended)")

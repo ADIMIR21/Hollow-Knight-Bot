@@ -333,16 +333,7 @@ def run_shared_trainer(plan, boss_scene, boss_label, entry_gate, timescale, smok
     vecnorm_path = os.path.join(boss_dir, "vecnormalize.pkl")
     print(f"[MULTI] Shared training folder: {boss_dir}")
 
-    config_file = train.run_config.config_path(boss_dir)
-    resume_allowed = train.run_config.matches(config_file, train.run_config_values())
-    if not resume_allowed and train.run_config.override_requested():
-        print(f"[MULTI] Resuming across a changed run configuration: "
-              f"{train.run_config.RESUME_OVERRIDE_ENV} is set")
-        resume_allowed = True
-    model_path = os.path.join(boss_dir, "hk_model_final.zip")
-    have_saved_model = os.path.exists(model_path) and resume_allowed
-    if os.path.exists(model_path) and not resume_allowed:
-        print("[MULTI] Not resuming the saved model: the run configuration changed.")
+    resume_allowed = train.decide_resume(boss_dir)
 
     vec_env = train.load_compatible_vecnorm(base_vec_env, vecnorm_path, resume=resume_allowed)
     # A pause left behind by a killed trainer is lifted on the way in.
@@ -351,35 +342,10 @@ def run_shared_trainer(plan, boss_scene, boss_label, entry_gate, timescale, smok
     except Exception as exc:
         print(f"[MULTI] Could not ask the windows to resume: {exc}")
 
-    if have_saved_model:
-        print(f"[MULTI] Save found: hk_model_final ({boss_scene}). Loading...")
-        try:
-            model = train.PPO.load(
-                model_path,
-                env=vec_env,
-                custom_objects={"learning_rate": train.constant_lr, "clip_range": 0.2},
-                n_steps=train.N_STEPS,
-                batch_size=train.BATCH_SIZE,
-                gamma=train.GAMMA,
-            )
-        except Exception as exc:
-            print(f"[MULTI] Failed to load the model: {exc}. Training from scratch.")
-            model = train.make_model(vec_env)
-    else:
-        print(f"[MULTI] No save for this boss ({boss_dir}). Training from scratch.")
-        model = train.make_model(vec_env)
+    model = train.load_or_create_model(vec_env, boss_dir, resume_allowed)
 
-    train.run_config.write_config(config_file, train.run_config_values())
-
-    callbacks = train.CallbackList([
-        train.GamePauseCallback(vec_env),      # freezes every window during the update
-        train.CheckpointCallback(save_freq=20000, save_path=boss_dir, name_prefix="hk_night_run"),
-        train.VecNormalizeSaveCallback(vec_env=vec_env, save_path=vecnorm_path, save_freq=20000),
-        train.RewardComponentLoggingCallback(),
-        train.WinRateLoggingCallback(window=100),
-        # Last: by its _on_rollout_end the logger already has the other metrics.
-        train.ProgressFileCallback(journal_path(tag), window=train.PROGRESS_WINDOW),
-    ])
+    callbacks, game_pause = train.build_callbacks(
+        vec_env, boss_dir, vecnorm_path, journal_path(tag))
 
     total = smoke_steps if smoke_steps else 5000000
     if smoke_steps:
@@ -390,8 +356,9 @@ def run_shared_trainer(plan, boss_scene, boss_label, entry_gate, timescale, smok
     except KeyboardInterrupt:
         print("\n[MULTI] Interrupted. Saving what we have...")
     finally:
-        # GamePauseCallback is first in the list (train.py lays it out the same way).
-        callbacks.callbacks[0].resume()
+        # build_callbacks hands the pause callback back precisely for this: Ctrl+C
+        # can land inside the PPO update with every window still frozen.
+        game_pause.resume()
         final_path = os.path.join(boss_dir, "hk_model_final")
         model.save(final_path)
         vec_env.save(vecnorm_path)

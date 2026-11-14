@@ -49,8 +49,9 @@ class ResumeOverrideTest(unittest.TestCase):
         self.assertIn("override_requested", found.group(1),
                       "the override exists but the trainer never consults it")
         # Announcing the resume is not resuming: without this the run prints that it is resuming
-        # across the change and then starts from scratch anyway.
-        self.assertRegex(found.group(1), r"resume_allowed = True",
+        # across the change and then starts from scratch anyway. The branch may say it either
+        # by assignment (resume_allowed = True) or by returning straight away (return True).
+        self.assertRegex(found.group(1), r"(resume_allowed = True|return True)",
                          "the override says it is resuming but never allows the resume")
 
 
