@@ -5,6 +5,9 @@
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>disable</ImplicitUsings>
     <Nullable>disable</Nullable>
+    <!-- The other projects set this too (AGENTS.md §4): the self-check must run on
+         whatever .NET SDK/runtime the machine has, not only on the exact net8.0. -->
+    <RollForward>LatestMajor</RollForward>
     <AssemblyName>RegistryTests</AssemblyName>
     <RootNamespace>RegistryTests</RootNamespace>
   </PropertyGroup>

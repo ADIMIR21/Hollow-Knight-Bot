@@ -80,5 +80,30 @@ class RegistryParityTest(unittest.TestCase):
         self.assertEqual(bosses.DEFAULT_GATE, self.constants.get("DefaultEntryGate"))
 
 
+class RegistrySelfCheckProjectTest(unittest.TestCase):
+    """The C# self-check (tests/csharp/RegistryTests) executes this registry in CI.
+
+    It has to keep compiling the real registry as a link - not a copy - and it has to
+    run on whatever .NET the machine has: pipe_sim and the mod set RollForward, and a
+    self-check without it dies on a machine whose newest runtime is not net8.0 (the
+    maintainer's own machine), which quietly removes the C# half of the parity proof.
+    """
+
+    def setUp(self):
+        self.csproj = os.path.join(
+            ROOT, "tests", "csharp", "RegistryTests", "RegistryTests.csproj")
+        with open(self.csproj, "r", encoding="utf-8") as handle:
+            self.project = handle.read()
+
+    def test_it_executes_the_real_registry_as_a_link(self):
+        self.assertIn('Include="..\\..\\..\\Mod\\AiTrainHK\\BossRegistry.cs"', self.project,
+                      "RegistryTests stopped compiling the mod's own BossRegistry.cs")
+
+    def test_it_runs_on_any_installed_runtime(self):
+        self.assertIn("<RollForward>LatestMajor</RollForward>", self.project,
+                      "RegistryTests.csproj lost RollForward - the self-check fails on "
+                      "machines without the exact net8.0 runtime (CI only installs 8.0.x)")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
