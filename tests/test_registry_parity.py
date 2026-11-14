@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Parity check between the mod's boss registry (C#) and its Python mirror (bosses.py).
 
-bosses.py states that it mirrors BossRegistry in Mod/AiTrainHK/AiDataExporter.cs, but nothing
+bosses.py states that it mirrors BossRegistry in Mod/AiTrainHK/BossRegistry.cs, but nothing
 enforced it: an entry could be added, renamed or lost on one side only, and Python would then
 happily ask the mod to teleport into a scene it does not know (the mod answers
 "boss not recognized" and the run stalls). This test reads the C# source directly, so it needs
@@ -19,7 +19,7 @@ sys.path.insert(0, ROOT)
 
 import bosses  # noqa: E402
 
-MOD_SOURCE = os.path.join(ROOT, "Mod", "AiTrainHK", "AiDataExporter.cs")
+REGISTRY_SOURCE = os.path.join(ROOT, "Mod", "AiTrainHK", "BossRegistry.cs")
 
 ENTRY_RE = re.compile(r'new\s+BossEntry\(\s*"([^"]*)"\s*,\s*"([^"]*)"\s*\)')
 ALIAS_RE = re.compile(r'\{\s*"([^"]*)"\s*,\s*"([^"]*)"\s*\}')
@@ -27,12 +27,12 @@ CONST_RE = re.compile(r'const\s+string\s+(\w+)\s*=\s*"([^"]*)"')
 
 
 def read_mod_source():
-    with open(MOD_SOURCE, "r", encoding="utf-8") as handle:
+    with open(REGISTRY_SOURCE, "r", encoding="utf-8") as handle:
         return handle.read()
 
 
 def mod_registry(source):
-    start = source.index("BossRegistry = new BossEntry[]")
+    start = source.index("Entries = new BossEntry[]")
     end = source.index("};", start)
     return ENTRY_RE.findall(source[start:end])
 
@@ -63,7 +63,7 @@ class RegistryParityTest(unittest.TestCase):
 
     def test_counts_match(self):
         self.assertEqual(len(bosses.BOSS_LIST), len(self.registry),
-                         "bosses.py and the mod's BossRegistry hold a different number of entries")
+                         "bosses.py and the mod's BossRegistry.Entries hold a different number of entries")
 
     def test_entries_match_in_order(self):
         self.assertEqual([tuple(entry) for entry in bosses.BOSS_LIST], self.registry,
@@ -74,10 +74,10 @@ class RegistryParityTest(unittest.TestCase):
                          "bosses.py aliases have drifted from ExtraAliases in the mod")
 
     def test_default_scene_matches(self):
-        self.assertEqual(bosses.DEFAULT_SCENE, self.constants.get("DEFAULT_BOSS_SCENE"))
+        self.assertEqual(bosses.DEFAULT_SCENE, self.constants.get("DefaultBossScene"))
 
     def test_default_gate_matches(self):
-        self.assertEqual(bosses.DEFAULT_GATE, self.constants.get("DEFAULT_ENTRY_GATE"))
+        self.assertEqual(bosses.DEFAULT_GATE, self.constants.get("DefaultEntryGate"))
 
 
 if __name__ == "__main__":

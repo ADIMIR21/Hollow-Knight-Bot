@@ -47,6 +47,9 @@ jobs:
         with:
           dotnet-version: "8.0.x"
 
+      - name: C# self-check of the boss registry and query resolver
+        run: dotnet run --project tests/csharp/RegistryTests -c Release
+
       - name: Build the mock, run the selftest and the integration checks
         shell: pwsh
         run: |

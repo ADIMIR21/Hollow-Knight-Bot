@@ -64,8 +64,9 @@ python tests/run_pipe_harness.py     # builds the mock, runs --selftest-stuck, t
 * **Prove the test fails without your fix.** Perturb the input (or the source you parse) and
   watch the check go red; a test that is green on a broken tree is decoration.
 * **Two sides, one commit.** The mod (C#) and the Python framework are a matched pair. Change
-  `BossRegistry`/`ExtraAliases`/`DEFAULT_BOSS_SCENE`/`DEFAULT_ENTRY_GATE` in
-  `AiDataExporter.cs` and `bosses.py` together — `tests/test_registry_parity.py` fails otherwise.
+  `BossRegistry.Entries`/`ExtraAliases`/`DefaultBossScene`/`DefaultEntryGate` in
+  `Mod/AiTrainHK/BossRegistry.cs` and `bosses.py` together — `tests/test_registry_parity.py`
+  fails otherwise.
   The same goes for a telemetry field: the mod, the Python consumer (`ai_environment.py`,
   `hk_gym.py`) and the mock move together.
 * **No test may need the game, a running training loop, or a connected mod.** CI has no game.
@@ -78,7 +79,7 @@ python tests/run_pipe_harness.py     # builds the mock, runs --selftest-stuck, t
 
 | Path | What it is |
 | --- | --- |
-| `Mod/AiTrainHK/` | The C# mod: telemetry over the named pipe, command intake, boss registry, deferred restart, fade watchdog, pause |
+| `Mod/AiTrainHK/` | The C# mod: telemetry over the named pipe, command intake, deferred restart, fade watchdog, pause; the boss registry and query resolver live game-independently in `BossRegistry.cs` |
 | `hk_pipe.py` | Named-pipe client the whole Python side runs on (one shared client per process, auto-reconnect) |
 | `bosses.py` | Python mirror of the mod's registry + command helpers |
 | `hk_features.py` | Pure environment features (action table, aiming rule, boss-state tracker) - imports nothing, so tier 1 tests it directly |
@@ -89,7 +90,7 @@ python tests/run_pipe_harness.py     # builds the mock, runs --selftest-stuck, t
 | `teleport.py`, `ai_receiver.py` | Boss selection/teleport tooling, live telemetry debugger |
 | `tools/multibox/` | Multi-window launcher: hardlink/junction instances of the one Steam install, per-window named pipes, reduced-resolution launch (`--width`/`--height`), the `train_multi.py` orchestrator (one trainer over N windows for the same boss, or one `train.py` per window), `sync_saves.py` (copy one save slot into the others with backups, refuses to run while the game is open), and example plans (`plan_4windows.json`, `plan_6windows.json`); the plan for parallel training lives in `docs/multi_window_training.md` |
 | `tools/deploy_mod.ps1` | Game lookup (Steam registry), build and deploy of the mod DLL |
-| `tests/` | Units + registry parity; `tests/pipe_sim/` is the mock mod and its integration checks |
+| `tests/` | Units + registry parity; `tests/pipe_sim/` is the mock mod and its integration checks; `tests/csharp/RegistryTests/` executes the game-independent registry/resolver on net8.0 (CI has no game, so the rest of the mod cannot be compiled there) |
 | `.github/workflows/ci.yml` | CI: units on Linux, pipe harness on Windows |
 
 ## 3. Hard rules
@@ -219,8 +220,8 @@ python tests/run_pipe_harness.py     # builds the mock, runs --selftest-stuck, t
   `python teleport.py --verify` (Python and mod registries compared over the pipe),
   `python plot_progress.py` (draw `logs/progress.txt` - reward, wins, fight length, entropy).
 * CI (`.github/workflows/ci.yml`) runs on every push to `master`/`dev` and on every PR: units and
-  `compileall` on Linux, the pipe harness on Windows. The mod itself is not built in CI — it
-  needs the game's DLL, which is neither shipped nor downloadable.
+  `compileall` on Linux, the C# registry self-check and the pipe harness on Windows. The mod
+  itself is not built in CI — it needs the game's DLL, which is neither shipped nor downloadable.
 
 ## 5. Commits and pushes
 

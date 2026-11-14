@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <AssemblyName>RegistryTests</AssemblyName>
+    <RootNamespace>RegistryTests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The mod's own registry file, linked (not copied): CI has no game and cannot build
+         the mod itself, but this file is pure data and string logic with no game types,
+         so it compiles and runs on its own. -->
+    <Compile Include="..\..\..\Mod\AiTrainHK\BossRegistry.cs" Link="BossRegistry.cs" />
+  </ItemGroup>
+
+</Project>
