@@ -711,8 +711,10 @@ case "probe":
                 case "action":
                     if (parts.Length >= 2 &&
                         int.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out int heldActionId))
+                    {
                         _heldAction = heldActionId;
                         _heldActionAt = DateTime.UtcNow;
+                    }
                     break;
 
                 // "timescale <value>" — set the game time scale for faster/slower training.

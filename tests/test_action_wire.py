@@ -123,5 +123,33 @@ class ActionWireTest(unittest.TestCase):
                 )
 
 
+class ActionCommandShapeTest(unittest.TestCase):
+    """The 'action <id>' command handler must guard BOTH of its statements.
+
+    The handler sets the held id and refreshes its timeout stamp. The two
+    statements sat unbraced under the if, so C# executed the stamp refresh
+    unconditionally: a malformed 'action' command (missing or unparsable id)
+    kept the PREVIOUS action alive past its HeldActionTimeoutSeconds instead
+    of letting it lapse.
+    """
+
+    def test_the_action_case_braces_its_statements(self):
+        source = MOD_SOURCE.read_text(encoding="utf-8", errors="replace")
+        match = re.search(
+            r'case "action":(.*?)(?=case |default:)', source, re.DOTALL)
+        self.assertIsNotNone(
+            match, "the mod's 'action' command case could not be located")
+        block = match.group(1)
+        # The guard has to enclose both statements: a brace must open before the
+        # id is assigned and close after the stamp refresh.
+        self.assertLess(
+            block.find("{"), block.find("_heldAction ="),
+            "the held-action id is assigned outside a braced guard - a malformed "
+            "'action' command would refresh the previous action's timeout stamp")
+        self.assertGreater(
+            block.rfind("}"), block.find("_heldActionAt ="),
+            "the held-action timeout stamp is assigned outside a braced guard")
+
+
 if __name__ == "__main__":
     unittest.main()
