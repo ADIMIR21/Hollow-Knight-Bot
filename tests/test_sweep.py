@@ -44,6 +44,8 @@ class ParseExperimentTest(unittest.TestCase):
         self.assertEqual(exp["steps"], run_experiment.DEFAULT_STEPS)
         self.assertEqual(exp["variant"], "b")
         self.assertEqual(exp["windows"], run_experiment.DEFAULT_WINDOWS)
+        self.assertEqual(exp["eval_episodes"], 3)
+        self.assertEqual(exp["eval_every"], 20)
         self.assertEqual(exp["reward"], {})
         self.assertEqual(exp["ppo"], {})
 
@@ -75,6 +77,8 @@ class ParseExperimentTest(unittest.TestCase):
             self._parse({"name": "a", "ppo": {"unknown_knob": 0.1}})
         with self.assertRaises(SystemExit):
             self._parse({"name": "a", "ppo": {"ent_coef": False}})
+        with self.assertRaises(SystemExit):
+            self._parse({"name": "a", "eval_every": 0})
 
     def test_broken_json_is_reported(self):
         path = os.path.join(self._tmp.name, "broken.json")
@@ -134,11 +138,13 @@ class IsolationTest(unittest.TestCase):
 
     def test_the_runner_command_carries_tag_budget_and_no_launch(self):
         exp = {"name": "x", "tag": "exp-x", "boss": "GG_Hornet_1", "timescale": "fast",
-               "steps": 200000, "eval_episodes": 2, "variant": "b", "_no_launch": True}
+               "steps": 200000, "eval_episodes": 2, "eval_every": 4,
+               "variant": "b", "_no_launch": True}
         cmd = run_experiment.runner_command(exp, "plan.json", repo_root=REPO_ROOT)
         self.assertTrue(cmd[1].endswith("train_multi.py"))
         self.assertEqual(cmd[cmd.index("--tag") + 1], "exp-x")
         self.assertEqual(cmd[cmd.index("--steps") + 1], "200000")
+        self.assertEqual(cmd[cmd.index("--eval-every") + 1], "4")
         self.assertIn("--no-launch", cmd)
 
     def test_the_multiwindow_tag_namespaces_variant_a_trainers(self):

@@ -124,6 +124,10 @@ def parse_experiment(path):
     eval_episodes = raw.get("eval_episodes", 3)
     if not isinstance(eval_episodes, int) or isinstance(eval_episodes, bool) or eval_episodes < 0:
         raise SystemExit(f"{path}: 'eval_episodes' must be a non-negative integer.")
+    eval_every = raw.get("eval_every", 20)
+    if not isinstance(eval_every, int) or isinstance(eval_every, bool) or eval_every <= 0:
+        raise SystemExit(f"{path}: 'eval_every' must be a positive integer (rollouts between "
+                         f"probes; a bounded run has ~steps/n_steps/n_windows of them).")
 
     return {
         "name": name,
@@ -134,6 +138,7 @@ def parse_experiment(path):
         "variant": variant,
         "windows": windows,
         "eval_episodes": eval_episodes,
+        "eval_every": eval_every,
         "reward": {str(k): float(v) for k, v in reward.items()},
         "ppo": {str(k): float(v) for k, v in ppo.items()},
     }
@@ -182,6 +187,7 @@ def runner_command(experiment, config_path, repo_root=_REPO_ROOT):
         "--variant", experiment["variant"],
         "--steps", str(experiment["steps"]),
         "--eval-episodes", str(experiment["eval_episodes"]),
+        "--eval-every", str(experiment["eval_every"]),
         "--tag", experiment["tag"],
     ]
     if experiment.get("_no_launch"):
@@ -233,6 +239,9 @@ def main(argv=None):
                              "or a journal (appends to them)")
     parser.add_argument("--dry-run", action="store_true",
                         help="print what would run (command, env, files) and exit")
+    parser.add_argument("--no-launch", action="store_true",
+                        help="do not start the game windows (they are already running "
+                             "from a previous experiment of this batch)")
     args = parser.parse_args(argv)
 
     experiment = parse_experiment(args.config)
@@ -242,6 +251,8 @@ def main(argv=None):
             f"(models/ppo_hk/{experiment['boss']}__{experiment['tag']}). "
             f"Refusing to append silently - rename the experiment or pass --force.")
 
+    if args.no_launch:
+        experiment["_no_launch"] = True
     paths = prepare_work_dir(experiment)
     env = experiment_env(experiment, paths["overrides"])
 
