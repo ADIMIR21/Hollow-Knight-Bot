@@ -13,8 +13,9 @@ from ai_environment import HollowKnightEnv
 from ai_controller import HollowKnightController
 from bosses import resolve_query
 from screen_capture import USE_SCREEN_CAPTURE
-from hk_features import (damage_weight, victory_bonus, ACTION_COUNT, BossStateTracker,
-                           redirect_action, press_dash)
+from hk_features import (awaiting_decision, damage_weight, victory_bonus,
+                           EpisodeShaping, RESTART_RESEND_AFTER, ACTION_COUNT,
+                           BossStateTracker, redirect_action, press_dash)
 
 
 def _enable_precise_sleep():
@@ -146,7 +147,10 @@ class HollowKnightGym(gym.Env):
         # the truth comes from the pipe.
         self.last_time_scale = 1.0
         
-        self._last_phi = 0.0
+        # Potential-based shaping across the non-blocking reset; the phi formula
+        # itself is _potential below (the named numbers of the reward block), the
+        # baseline/boundary rule is EpisodeShaping (hk_features, unit-tested).
+        self._shaping = EpisodeShaping(self._potential)
         self._scene_damage = 0.0
         self._last_scene_damage = 0.0
         self._weighted_damage = 0.0
@@ -408,6 +412,10 @@ class HollowKnightGym(gym.Env):
             self._awaiting_fight = True
             self._awaiting_started_at = time.time()
             self._episode_active = False
+            # The window left the live fight, and the death scene this reset
+            # returns into is nobody's baseline: the first acting step after the
+            # fight is up re-baselines the shaping (EpisodeShaping.restart_fired).
+            self._shaping.restart_fired()
 
         self._telemetry_mtime = self.game_env.get_telemetry_mtime()
         obs = self._get_obs()
@@ -432,22 +440,27 @@ class HollowKnightGym(gym.Env):
         self._last_scene_damage = self._scene_damage
         self._weighted_damage_start = self._weighted_damage
         if self._episode_active:
-            self._last_phi = self._potential(float(obs[IDX["hp"]]), self._weighted_damage)
+            # The same live fight continues (step limit): keep the shaping
+            # continuous by taking the baseline from the live observation, against
+            # the damage baseline that was re-set just above.
+            self._shaping.rebaseline(float(obs[IDX["hp"]]), self.max_hp,
+                                     self._weighted_damage, self._weighted_damage_start)
 
         stacked_obs = np.concatenate(list(self._obs_deque)).astype(np.float32)
         self._log_reset_timing(reset_reason, time.time() - reset_started)
         self._episode_reason = "unknown"
         return stacked_obs, {}
 
-    def _potential(self, hp, weighted_damage):
+    def _potential(self, hp, max_hp, weighted_damage, weighted_damage_start):
         # Damage comes from the mod's monotone counter over every HealthManager in the scene, not
         # from the boss field. The pool that field describes is repaired by the game on the way to
         # the punished window (260 -> 4 -> 260), so reading damage as "started at, minus now"
         # turned every repair into a large negative step and charged the policy for opening the
         # only route to the kill. A counter that only grows keeps this term monotone whatever the
-        # game does to a pool.
-        damage_done = max(0.0, weighted_damage - self._weighted_damage_start)
-        hp_lost = max(0.0, self.max_hp - hp)
+        # game does to a pool. The baseline/boundary handling around this formula lives in
+        # hk_features.EpisodeShaping.
+        damage_done = max(0.0, weighted_damage - weighted_damage_start)
+        hp_lost = max(0.0, max_hp - hp)
         return DAMAGE_REWARD_PER_HP * damage_done - HEALTH_PENALTY_PER_MASK * hp_lost
 
     def step(self, action):
@@ -457,18 +470,28 @@ class HollowKnightGym(gym.Env):
         if self._awaiting_fight:
             self.controller.reset_all()
             new_mtime = self.game_env.wait_for_fresh_telemetry(self._telemetry_mtime, timeout=0.15)
-            if new_mtime != self._telemetry_mtime:
+            fresh = new_mtime != self._telemetry_mtime
+            if fresh:
                 self._telemetry_mtime = new_mtime
                 telemetry = self.game_env.get_telemetry()
                 if telemetry is not None:
                     self.last_time_scale = float(telemetry.get("time_scale", 1.0))
-                    if self._fight_in_progress():
-                        self._awaiting_fight = False
-                        self._episode_active = True
-                        print(f"[RESET] Fight scene is ready "
-                              f"({time.time() - self._awaiting_started_at:.1f}s after restart).")
-            elif time.time() - self._awaiting_started_at > 90.0:
-                print("[RESET] Fight still not up after 90s, re-sending restart.")
+            # Fresh telemetry is not success: the restart command itself can be lost
+            # to a reconnect gap while the idle game keeps streaming, and then
+            # nothing will ever bring the fight up. So the resend decision runs on
+            # every awaiting step (hk_features.awaiting_decision, pinned by
+            # tests/test_episode_boundary.py), while stale telemetry never declares
+            # the fight up - only a fresh frame may.
+            decision = awaiting_decision(fresh, fresh and self._fight_in_progress(),
+                                         time.time() - self._awaiting_started_at)
+            if decision == "fight_up":
+                self._awaiting_fight = False
+                self._episode_active = True
+                print(f"[RESET] Fight scene is ready "
+                      f"({time.time() - self._awaiting_started_at:.1f}s after restart).")
+            elif decision == "resend":
+                print(f"[RESET] Fight still not up after {RESTART_RESEND_AFTER:.0f}s, "
+                      f"re-sending restart.")
                 self.controller.request_fast_restart()
                 self._awaiting_started_at = time.time()
 
@@ -578,9 +601,8 @@ class HollowKnightGym(gym.Env):
         self._weighted_damage += damage_weight(
             damage_now, boss_is_open, OPEN_WINDOW_DAMAGE_MULTIPLIER)
 
-        phi = self._potential(current_hp, self._weighted_damage)
-        shaping = phi - self._last_phi
-        self._last_phi = phi
+        shaping = self._shaping.delta(current_hp, self.max_hp,
+                                      self._weighted_damage, self._weighted_damage_start)
         reward += shaping
         reward_parts["shaping"] += shaping
 

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Pure pieces of the training environment: the action table, the attack aiming
-rule and the boss-state features.
+rule, the boss-state features and the episode-boundary rules of the non-blocking
+reset (the shaping baseline, the restart resend decision).
 
 Nothing here imports numpy, gymnasium or vgamepad on purpose: this is the part of
 ``hk_gym`` that is worth testing without a game, and the unit tier runs with the
@@ -271,3 +272,88 @@ class BossStateTracker:
             min(1.0, self.age / self.phase_frames),
             self.changed,
         ]
+
+
+# --------------------------------------------------------------------------- #
+# Episode boundary (the non-blocking reset in hk_gym)
+# --------------------------------------------------------------------------- #
+# After a death the env fires the restart and returns from reset() at once, then
+# keeps stepping with action 0 until its own fight scene is really up. Neither the
+# reset itself nor those waiting steps sees a live fight, so two rules have to
+# survive that gap: where the shaping baseline comes from, and when a restart that
+# never took effect is re-sent. They live here so the unit tier can pin them
+# (tests/test_episode_boundary.py); hk_gym only does the wiring.
+
+
+class EpisodeShaping:
+    """Potential-based shaping that survives the non-blocking reset.
+
+    The reward adds the change of the potential between steps, so the baseline must
+    be re-derived from the first live observation of every episode. The reset path
+    returns while the window is still in the death scenario, so reset() cannot take
+    the baseline from its own (death-scene) observation, and a baseline left over
+    from the end of the previous episode would hand the first acting step of the new
+    one the whole phi-drop of the old one: about +200 per mask lost after a death, a
+    large unearned penalty after a victory. restart_fired() arms the re-baseline,
+    and the next delta() then takes it from its own observation and starts at 0.0,
+    whatever the wiring around it forgets.
+
+    ``potential`` is hk_gym's ``_potential`` - the named numbers of the reward
+    block live there. It is called as potential(hp, max_hp, weighted_damage,
+    weighted_damage_start).
+    """
+
+    def __init__(self, potential):
+        self._potential = potential
+        self._baseline = 0.0
+        self._needs_rebaseline = True
+
+    def restart_fired(self):
+        """The window left a live fight (death, victory, boss missing, first
+        start): the next delta() re-baselines from its own observation."""
+        self._needs_rebaseline = True
+
+    def rebaseline(self, hp, max_hp, weighted_damage, weighted_damage_start):
+        """Take the baseline from a live observation right away: a truncated
+        episode that continues the same fight keeps its shaping continuous."""
+        self._baseline = self._potential(hp, max_hp, weighted_damage,
+                                         weighted_damage_start)
+        self._needs_rebaseline = False
+
+    def delta(self, hp, max_hp, weighted_damage, weighted_damage_start):
+        """The shaping of one acting step: the potential now minus the baseline,
+        and the baseline then moves to the potential now. The first delta after
+        restart_fired() re-baselines instead and returns 0.0."""
+        phi = self._potential(hp, max_hp, weighted_damage, weighted_damage_start)
+        if self._needs_rebaseline:
+            self._baseline = phi
+            self._needs_rebaseline = False
+            return 0.0
+        shaping = phi - self._baseline
+        self._baseline = phi
+        return shaping
+
+
+# How long a window waits for its fight scene before the restart command is
+# re-sent (hk_gym's awaiting loop). The mod forces a restart 10 s after receiving
+# one, so 90 s means several lost commands, not a slow scene load.
+RESTART_RESEND_AFTER = 90.0
+
+
+def awaiting_decision(fresh_telemetry, fight_in_progress, seconds_awaiting,
+                      resend_after=RESTART_RESEND_AFTER):
+    """What a step does while its window waits for the fight scene after a restart.
+
+    Returns "fight_up" (enter the fight), "resend" (re-send the restart command)
+    or "wait" (keep releasing buttons and polling). The resend check runs on every
+    awaiting step, not only when the telemetry stream stalls: a restart command
+    lost to a reconnect gap leaves the idle game streaming telemetry forever, and a
+    check nested under "the stream stopped" would wait for a fight nothing will
+    ever bring up. Stale telemetry, in turn, never declares the fight up - only a
+    fresh frame may.
+    """
+    if fresh_telemetry and fight_in_progress:
+        return "fight_up"
+    if seconds_awaiting >= resend_after:
+        return "resend"
+    return "wait"
