@@ -71,3 +71,11 @@ class GameProcessTuningTest(unittest.TestCase):
         # An invalid handle must not break the launch: the failure is logged nowhere
         # and the game starts unthrottled-or-not, but running.
         self._tune(-1)
+
+    def test_the_launch_site_passes_the_raw_popen_handle(self):
+        # The red case of the failed relaunch: Popen exposes its Windows handle as
+        # _handle, not handle - a wrong attribute there crashed every launch_one.
+        source = Path(importlib.import_module("hk_multibox").__file__).read_text(encoding="utf-8")
+        self.assertIn("tune_game_process(int(proc._handle))", source,
+                      "launch_one must hand the raw Popen handle to the tuner")
+        self.assertNotIn("tune_game_process(proc.handle)", source)

@@ -278,7 +278,7 @@ def launch_one(n, wait_s, width=None, height=None):
     if height:
         cmd += ["-screen-height", str(int(height))]
     proc = subprocess.Popen(cmd, cwd=str(exe.parent), env=env)
-    tune_game_process(proc.handle)
+    tune_game_process(int(proc._handle))  # Popen's Windows handle (a PyHANDLE)
     state = wait_for_window(proc, n, wait_s)
     return proc, state
 
