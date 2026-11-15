@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Runtime.InteropServices;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -291,6 +292,9 @@ namespace AiTrainHK
             // DrainCommands() runs even while paused: "resume" arrives through it.
             DrainCommands();
 
+            if (!_aiPaused)
+                UpdateTransitionPriority();
+
             // A load that never left the menu: the slot may be empty or the game
             // may have refused the UI flow. Report it once instead of leaving
             // the trainer waiting for a scene that never comes.
@@ -321,6 +325,57 @@ namespace AiTrainHK
             TransitionWatchdogTick(unscaledDelta);
             FadeWatchdogTick();
             ApplyHeldAction();
+        }
+
+        // The maintainer's scheduling idea: a window crossing a scene transition needs the
+        // CPU more than its fighting siblings, and a slow transition is what showed up as
+        // white screens and 20-second "rests" that a click cured. This process is boosted
+        // to HIGH while the game is unsettled (a pending restart, a scene transition, a
+        // death-return scenario) and dropped back to NORMAL once the fight is live.
+        // Transient by design - the constant ABOVE_NORMAL raise starved the trainer's
+        // update (fps 15, commit 1e82ad1); a seconds-long boost around a transition does
+        // not, and during an update the game is paused anyway.
+        private bool _priorityBoosted = false;
+        private const uint HIGH_PRIORITY_CLASS = 0x80;
+        private const uint NORMAL_PRIORITY_CLASS = 0x20;
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool SetPriorityClass(IntPtr hProcess, uint dwPriorityClass);
+
+        [DllImport("kernel32.dll")]
+        private static extern IntPtr GetCurrentProcess();
+
+        private void UpdateTransitionPriority()
+        {
+            bool unsettled;
+            try
+            {
+                GameManager gm = GameManager.instance;
+                HeroController hero = HeroController.instance;
+                unsettled = !_inMenuScene
+                            && (_restartPending || (gm != null && !IsGameSettled(gm, hero)));
+            }
+            catch (Exception)
+            {
+                return;                 // a probe during teardown: keep the current class
+            }
+
+            if (unsettled && !_priorityBoosted)
+            {
+                if (SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS))
+                {
+                    _priorityBoosted = true;
+                    Log("[AI] transition priority boost ON");
+                }
+            }
+            else if (!unsettled && _priorityBoosted)
+            {
+                if (SetPriorityClass(GetCurrentProcess(), NORMAL_PRIORITY_CLASS))
+                {
+                    _priorityBoosted = false;
+                    Log("[AI] transition priority boost OFF (fight is live)");
+                }
+            }
         }
 
         // The bot's buttons used to come from an emulated gamepad built on the Python side, which
