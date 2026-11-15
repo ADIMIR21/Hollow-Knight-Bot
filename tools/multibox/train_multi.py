@@ -300,6 +300,26 @@ def _worker_env(cfg, boss_scene, entry_gate):
     return Monitor(HollowKnightGym())
 
 
+def _raise_trainer_priority():
+    """HIGH priority for this process (workers inherit it at spawn).
+
+    The PPO update is the one phase that genuinely needs every spare cycle, and
+    while it runs the game windows are frozen by GamePauseCallback - nothing competes
+    with the trainer. During collection the trainer mostly blocks on the workers, so
+    the windows keep their scheduling. Games stay at normal priority: an earlier
+    ABOVE_NORMAL raise starved the update instead (fps 15, ~25-minute updates).
+    """
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        HIGH_PRIORITY_CLASS = 0x80
+        ctypes.windll.kernel32.SetPriorityClass(
+            ctypes.windll.kernel32.GetCurrentProcess(), HIGH_PRIORITY_CLASS)
+    except Exception:
+        pass
+
+
 def run_shared_trainer(plan, boss_scene, boss_label, entry_gate, timescale, smoke_steps,
                        eval_episodes=3, eval_every=20, steps=None, run_tag=None):
     """Variant B: one PPO run over one pipe per window (this process)."""
@@ -315,6 +335,7 @@ def run_shared_trainer(plan, boss_scene, boss_label, entry_gate, timescale, smok
     tag = SMOKE_TAG if smoke_steps else run_tag
     hk_logging.setup_logging(trainer_log_path(tag))
     LOG = hk_logging.get_logger()
+    _raise_trainer_priority()
 
     print(f"[MULTI] Shared trainer over {len(plan)} window(s), boss: "
           f"{boss_label} ({boss_scene})")

@@ -236,10 +236,14 @@ def tune_game_process(handle):
     (EcoQoS) and starves them of scheduling: an unfocused window "rested" ~20 s on
     every transition and loaded instantly on a click (foreground = full speed),
     while the mod's focus watchdog saw ticks flowing the whole time - the loop ran,
-    just slow. Disabling the throttling and raising the priority class above normal
-    puts the windows back in charge of the schedule: a starved window stalls the
-    whole SubprocVecEnv lockstep anyway. Cosmetics by nature: any failure here is
-    swallowed, the launch proceeds either way.
+    just slow. Disabling the throttling puts the windows back on the normal queue.
+
+    Deliberately NOT raising the window priority: with three windows at
+    ABOVE_NORMAL the trainer's PPO update starved (fps dropped to 15, updates ran
+    ~25 minutes), which slows the step counter far worse than the throttling did.
+    The games keep normal priority and win only where they must - the trainer, in
+    exchange, runs at HIGH priority (see run_shared_trainer), which is safe because
+    during an update the game is paused and needs no CPU.
     """
     if os.name != "nt":
         return
@@ -257,8 +261,6 @@ def tune_game_process(handle):
         ProcessPowerThrottling = 4
         kernel32.SetProcessInformation(handle, ProcessPowerThrottling,
                                        ctypes.byref(state), ctypes.sizeof(state))
-        ABOVE_NORMAL_PRIORITY_CLASS = 0x8000
-        kernel32.SetPriorityClass(handle, ABOVE_NORMAL_PRIORITY_CLASS)
     except Exception:
         pass
 
