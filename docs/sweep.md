@@ -80,10 +80,10 @@ Stop a batch: Ctrl+C in the trainer's console (it saves the model and statistics
 (an unattended run): kill the python processes matching `train_multi|train\.py|run_experiment`,
 close the windows, and continue later as below.
 
-Extend a finished experiment to a larger budget (e.g. 200k -> 400k): set `"steps": 400000`
-in its config and run the same command again — the fingerprint matches, the trainer resumes
-from the experiment's own `hk_model_final.zip` and continues to the new total. No manual
-model handling.
+Extend a finished experiment to a larger budget (e.g. 200k -> 400k): SB3 treats
+`total_timesteps` as ADDITIONAL when resuming (`reset_num_timesteps=False` adds it to the
+model's counter), so set `"steps": 200000` — the trainer resumes from the experiment's own
+`hk_model_final.zip` and trains 200k MORE, landing at ~400k total. No manual model handling.
 
 Continue after a crash or a hard kill: the trainer resumes only from `hk_model_final.zip`,
 and the periodic checkpoints are history. Promote the newest checkpoint first:
