@@ -359,7 +359,7 @@ class RewardEconomicsTest(unittest.TestCase):
         # of step().
         # The win is paid through hk_features.victory_bonus, which also scales it by the masks still
         # standing, so what has to be in step() is the call carrying the named constant.
-        for needle in ("victory_bonus(VICTORY_REWARD", "reward -= DEATH_PENALTY", "reward -= STEP_PENALTY"):
+        for needle in ("victory_bonus(VICTORY_REWARD", "reward -= DEATH_PENALTY", "step_penalty(STEP_PENALTY"):
             self.assertTrue(needle in body, "step() does not pay %r" % needle)
         # A literal beside the names is how the block stops describing what is actually paid:
         # the victory bonus was still added as 1000.0 while the block named VICTORY_REWARD, so

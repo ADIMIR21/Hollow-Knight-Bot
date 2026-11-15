@@ -13,7 +13,7 @@ from ai_environment import HollowKnightEnv
 from ai_controller import HollowKnightController
 from bosses import resolve_query
 from screen_capture import USE_SCREEN_CAPTURE
-from hk_features import (awaiting_decision, damage_weight, victory_bonus,
+from hk_features import (awaiting_decision, damage_weight, step_penalty, victory_bonus,
                            EpisodeShaping, RESTART_RESEND_AFTER, ACTION_COUNT,
                            BossStateTracker, redirect_action, press_dash)
 
@@ -538,7 +538,7 @@ class HollowKnightGym(gym.Env):
             self.last_boss_y = obs[IDX["boss_y"]]
             self.last_dist = obs[IDX["dist_to_boss"]]
             self.last_time = time.time()
-            reward = -STEP_PENALTY / self.last_time_scale
+            reward = step_penalty(STEP_PENALTY, self.last_time_scale)
             info = {
                 "reward_parts": {"step_penalty": reward},
                 "step_limit": False,
@@ -623,8 +623,8 @@ class HollowKnightGym(gym.Env):
             self.controller.reset_all()
             self._episode_reason = "step limit"
 
-        reward -= STEP_PENALTY / self.last_time_scale
-        reward_parts["step_penalty"] -= STEP_PENALTY / self.last_time_scale
+        reward += step_penalty(STEP_PENALTY, self.last_time_scale)
+        reward_parts["step_penalty"] += step_penalty(STEP_PENALTY, self.last_time_scale)
 
         # The counter only ever grows, so the damage of this step is its increment, and what that
         # damage is worth depends on whether the boss was open when it landed.

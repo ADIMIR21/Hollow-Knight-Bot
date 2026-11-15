@@ -194,3 +194,32 @@ class BossStateTrackerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StepPenaltyTest(unittest.TestCase):
+    """The per-step cost must normalize by the game speed and never divide by zero.
+
+    A paused fight reports time_scale = 0 in telemetry, and the frame published at
+    the pause boundary was consumed by a step that divided by it - the resulting
+    ZeroDivisionError killed a SubprocVecEnv worker and, with it, the whole
+    multi-window trainer (verified live, 15.11 night run).
+    """
+
+    def test_normal_speed_pays_the_base_cost(self):
+        self.assertEqual(hk_features.step_penalty(0.05, 1.0), -0.05)
+
+    def test_a_faster_fight_pays_less_per_frame(self):
+        self.assertAlmostEqual(hk_features.step_penalty(0.05, 2.0), -0.025)
+        self.assertAlmostEqual(hk_features.step_penalty(0.05, 4.0), -0.0125)
+
+    def test_a_zero_scale_from_a_paused_frame_is_survived(self):
+        # The red case: this used to raise ZeroDivisionError in the worker.
+        self.assertEqual(hk_features.step_penalty(0.05, 0.0), -0.05)
+
+    def test_a_negative_or_none_scale_is_treated_as_normal_speed(self):
+        self.assertEqual(hk_features.step_penalty(0.05, -2.0), -0.05)
+        self.assertEqual(hk_features.step_penalty(0.05, None), -0.05)
+
+
+if __name__ == "__main__":
+    unittest.main()

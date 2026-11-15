@@ -180,6 +180,19 @@ def damage_weight(damage, boss_open, open_multiplier):
     return damage * open_multiplier if boss_open else damage
 
 
+def step_penalty(base, time_scale):
+    """The per-step cost, normalized by the game speed (a 2x fight pays half per frame).
+
+    A paused fight reports ``time_scale = 0`` in telemetry (the mod freezes
+    ``Time.timeScale``), and the frame published right at the pause boundary used to be
+    consumed by a step that divided by it - a ZeroDivisionError in a SubprocVecEnv
+    worker takes the whole multi-window trainer down. A non-positive scale is treated
+    as normal speed: the steps that race a pause are bookkeeping, not a slower fight.
+    """
+    scale = float(time_scale) if time_scale and float(time_scale) > 0.0 else 1.0
+    return -float(base) / scale
+
+
 # --------------------------------------------------------------------------- #
 # Episode boundary (the non-blocking reset in hk_gym) - see EpisodeShaping below;
 # the phi formula itself stays in hk_gym._potential with its named numbers.
