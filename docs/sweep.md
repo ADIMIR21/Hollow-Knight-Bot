@@ -54,6 +54,50 @@ is a live risk. So a budget of 200k steps costs roughly the same wall-clock per 
 batch regardless of the experiment count: run experiments in batches of four-window
 variant-b sessions, one after another.
 
+## Operator's runbook
+
+Launch a batch (3 windows, 2x, one experiment) — one paste, the same line for every
+baseline; `park_windows` boots the windows into the arena, the runner starts the trainer
+against them:
+
+```
+python tools/sweep/park_windows.py --windows 3 --wait 240; python tools/sweep/run_experiment.py experiments/baseline-1.json
+```
+
+Drop the experiment file name to switch baselines; `--no-launch` is only needed when the
+windows are already up from a previous experiment of the same batch.
+
+Watch progress:
+
+```
+python tools/sweep/report.py --boss GG_False_Knight   # all experiments, one table
+tail -f logs/progress__exp-baseline-1.txt             # live journal
+Get-Content "$env:LOCALAPPDATA\..\LocalLow\Team Cherry\Hollow Knight\ModLog.txt" -Wait -Tail 20   # mod log
+```
+
+Stop a batch: Ctrl+C in the trainer's console (it saves the model and statistics), then
+`python tools/multibox/hk_multibox.py stop` to close the windows. Without a console
+(an unattended run): kill the python processes matching `train_multi|train\.py|run_experiment`,
+close the windows, and continue later as below.
+
+Extend a finished experiment to a larger budget (e.g. 200k -> 400k): set `"steps": 400000`
+in its config and run the same command again — the fingerprint matches, the trainer resumes
+from the experiment's own `hk_model_final.zip` and continues to the new total. No manual
+model handling.
+
+Continue after a crash or a hard kill: the trainer resumes only from `hk_model_final.zip`,
+and the periodic checkpoints are history. Promote the newest checkpoint first:
+
+```
+cp $(ls -v models/ppo_hk/GG_False_Knight__exp-<name>/hk_night_run_*_steps.zip | tail -1)    models/ppo_hk/GG_False_Knight__exp-<name>/hk_model_final.zip
+python tools/sweep/run_experiment.py experiments/<name>.json --no-launch
+```
+
+Swap a model between experiment folders by copying the PAIR (`hk_model_final.zip` +
+`vecnormalize.pkl`) into the target folder — the fingerprint of the target folder decides
+whether it resumes: a model trained under a different reward or time scale is refused, and
+`HK_RESUME_CONFIG_CHANGED=1` is a deliberate warm start, never a fix.
+
 ## Continuing an interrupted experiment
 
 The trainer resumes only from `hk_model_final.zip`; the periodic
