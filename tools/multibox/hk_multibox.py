@@ -229,6 +229,40 @@ def wait_for_window(proc, n, wait_s):
     return "no-pipe"
 
 
+def tune_game_process(handle):
+    """Un-throttle a freshly launched game window process.
+
+    Under a saturated CPU Windows puts background windows into power throttling
+    (EcoQoS) and starves them of scheduling: an unfocused window "rested" ~20 s on
+    every transition and loaded instantly on a click (foreground = full speed),
+    while the mod's focus watchdog saw ticks flowing the whole time - the loop ran,
+    just slow. Disabling the throttling and raising the priority class above normal
+    puts the windows back in charge of the schedule: a starved window stalls the
+    whole SubprocVecEnv lockstep anyway. Cosmetics by nature: any failure here is
+    swallowed, the launch proceeds either way.
+    """
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+
+        class PROCESS_POWER_THROTTLING_STATE(ctypes.Structure):
+            _fields_ = [("Version", ctypes.c_ulong),
+                        ("ControlMask", ctypes.c_ulong),
+                        ("StateMask", ctypes.c_ulong)]
+
+        kernel32 = ctypes.windll.kernel32
+        # PROCESS_POWER_THROTTLING_EXECUTION_SPEED with an empty StateMask = opt out.
+        state = PROCESS_POWER_THROTTLING_STATE(Version=1, ControlMask=0x1, StateMask=0x0)
+        ProcessPowerThrottling = 4
+        kernel32.SetProcessInformation(handle, ProcessPowerThrottling,
+                                       ctypes.byref(state), ctypes.sizeof(state))
+        ABOVE_NORMAL_PRIORITY_CLASS = 0x8000
+        kernel32.SetPriorityClass(handle, ABOVE_NORMAL_PRIORITY_CLASS)
+    except Exception:
+        pass
+
+
 def launch_one(n, wait_s, width=None, height=None):
     exe = instance_exe(n)
     if exe is None:
@@ -244,6 +278,7 @@ def launch_one(n, wait_s, width=None, height=None):
     if height:
         cmd += ["-screen-height", str(int(height))]
     proc = subprocess.Popen(cmd, cwd=str(exe.parent), env=env)
+    tune_game_process(proc.handle)
     state = wait_for_window(proc, n, wait_s)
     return proc, state
 

@@ -47,3 +47,27 @@ class MultiboxNamingTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GameProcessTuningTest(unittest.TestCase):
+    """The launcher must opt game windows out of background throttling.
+
+    Under a saturated CPU an unfocused window crawled on every transition and
+    loaded instantly on a click (foreground scheduling), while the mod's tick
+    stamp kept flowing - scheduling, not a freeze. The tuning is Windows-only
+    and cosmetic: any failure must be swallowed, the launch proceeds either way.
+    """
+
+    def _tune(self, handle):
+        mb = importlib.import_module("hk_multibox")
+        mb.tune_game_process(handle)
+
+    def test_it_never_raises_and_noops_off_windows(self):
+        # On POSIX (CI) the helper returns before touching anything.
+        self._tune(0)
+
+    @unittest.skipIf(os.name != "nt", "the tuning is a Windows kernel call")
+    def test_a_bogus_handle_is_swallowed_on_windows(self):
+        # An invalid handle must not break the launch: the failure is logged nowhere
+        # and the game starts unthrottled-or-not, but running.
+        self._tune(-1)
