@@ -63,6 +63,13 @@ namespace AiTrainHK
         private string _latestJson = "{\"status\": \"booting\", \"restart_pending\": 0}";
         private long _seq = 0;
         private volatile bool _shuttingDown = false;
+        // Focus bookkeeping for the multi-window training: Unity freezes the whole player
+        // loop of an unfocused window when runInBackground is false, and a single click on
+        // the window unfreezes it in seconds (observed live). These stamps let the mod
+        // (a) re-assert runInBackground every tick and (b) self-heal from a frozen player
+        // loop from the pipe thread, which keeps running when the main loop does not.
+        private DateTime _lastClientSeenUtc = DateTime.MinValue;
+        private DateTime _lastTickUtc = DateTime.UtcNow;
         private readonly ConcurrentQueue<string> _incomingCommands = new ConcurrentQueue<string>();
 
         private string _targetScene = DEFAULT_BOSS_SCENE;
@@ -239,6 +246,9 @@ namespace AiTrainHK
             var pipeThread = new Thread(PipeListenerLoop) { IsBackground = true, Name = "HK_AI_PipeServer" };
             pipeThread.Start();
 
+            var focusThread = new Thread(FocusWatchdogLoop) { IsBackground = true, Name = "HK_AI_FocusWatchdog" };
+            focusThread.Start();
+
             Publish(StatusJson("initialized"));
             Log($"[AI] Exporter {MOD_VERSION} is running! Pipe: \\\\.\\pipe\\{PipeName}");
             Log("[AI] Commands: restart | teleport | set_boss <scene> | set_gate <gate> | boss <query> | bosses | load <slot> | warp | pause | resume");
@@ -271,6 +281,13 @@ namespace AiTrainHK
 
         private void OnTick(float unscaledDelta)
         {
+            _lastTickUtc = DateTime.UtcNow;
+            // Re-asserted every tick on purpose: something in the game resets
+            // runInBackground mid-session, and a one-shot set from Initialize survives
+            // only until that moment - after it, an unfocused window's player loop is
+            // frozen (the stuck white transition a click on the window cured instantly).
+            Application.runInBackground = true;
+
             // DrainCommands() runs even while paused: "resume" arrives through it.
             DrainCommands();
 
@@ -1535,6 +1552,7 @@ case "probe":
 
             while (!_shuttingDown)
             {
+                _lastClientSeenUtc = DateTime.UtcNow;
                 events.Clear();
                 string toSend = null;
 
@@ -2079,6 +2097,36 @@ case "probe":
             catch (Exception)
             {
                 Publish(StatusJson("waiting_for_hero_body"));
+            }
+        }
+
+        // The thread that unfreezes what the tick cannot: if the player loop is frozen
+        // (runInBackground flipped to false while the window was unfocused - the white
+        // screen a click on the window cures in seconds), OnTick does not run anymore and
+        // cannot re-assert it. The pipe threads keep running, so this watchdog sees the
+        // tick stamp stop and restores the flag from here. What exactly resets the flag
+        // mid-session is unverified; the symptom and the cure are verified live.
+        private void FocusWatchdogLoop()
+        {
+            while (!_shuttingDown)
+            {
+                Thread.Sleep(2000);
+                try
+                {
+                    if (_aiPaused) continue;
+                    if ((DateTime.UtcNow - _lastClientSeenUtc).TotalSeconds > 5) continue;
+                    TimeSpan idle = DateTime.UtcNow - _lastTickUtc;
+                    if (idle.TotalSeconds > 5)
+                    {
+                        Application.runInBackground = true;
+                        Log($"[AI] focus watchdog: no ticks for {idle.TotalSeconds:F0} s " +
+                            "while a training client is connected - re-forcing runInBackground");
+                    }
+                }
+                catch (Exception)
+                {
+                    // The watchdog must never take the game down; the next pass retries.
+                }
             }
         }
 
