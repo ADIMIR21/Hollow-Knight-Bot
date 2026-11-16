@@ -1,11 +1,11 @@
 {
-    "name": "fk2",
-    "boss": "GG_Failed_Champion",
-    "timescale": "fast",
-    "steps": 400000,
-    "windows": 3,
-    "eval_episodes": 3,
-    "eval_every": 2,
-    "reward": {},
-    "ppo": {}
+  "name": "fk2",
+  "boss": "GG_Failed_Champion",
+  "timescale": "fast",
+  "steps": 1000000,
+  "windows": 3,
+  "eval_episodes": 3,
+  "eval_every": 2,
+  "reward": {},
+  "ppo": {}
 }
