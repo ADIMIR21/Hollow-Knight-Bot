@@ -180,6 +180,29 @@ def damage_weight(damage, boss_open, open_multiplier):
     return damage * open_multiplier if boss_open else damage
 
 
+BOSS_FROZEN_RESTART_FRAMES = 900
+
+
+def frozen_boss_counter(prev, cur, frames):
+    """Counts consecutive frames the boss has been a statue.
+
+    ``prev``/``cur`` are comparable tuples (boss_state, boss_hp, boss_x, boss_y);
+    any difference resets the counter. Returns ``(frames, frozen)`` where frozen
+    means the counter reached ``BOSS_FROZEN_RESTART_FRAMES`` (~6 s of game frames
+    at 2x). A live fight never stands this still: False Knight's idle between
+    attacks is 1-3 s and always animates.
+
+    This is the trainer-side containment for the frozen-boss bug (a statue while
+    the hero moves - the bot must not train against one); the game-side root
+    cause is tracked separately.
+    """
+    if prev is not None and cur == prev:
+        frames += 1
+    else:
+        frames = 0
+    return frames, frames >= BOSS_FROZEN_RESTART_FRAMES
+
+
 def step_penalty(base, time_scale):
     """The per-step cost, normalized by the game speed (a 2x fight pays half per frame).
 

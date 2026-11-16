@@ -223,3 +223,50 @@ class StepPenaltyTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FrozenBossCounterTest(unittest.TestCase):
+    """The statue-bug containment: a frozen boss must end the episode, not train it.
+
+    Live-verified on Failed Champion at 2x: the boss's FSM stops while the hero
+    keeps moving. The counter treats a fully static boss (same state, hp and
+    position) as frozen after BOSS_FROZEN_RESTART_FRAMES consecutive frames.
+    """
+
+    def test_a_live_fight_never_accumulates(self):
+        frames, frozen = hk_features.frozen_boss_counter(None, ("Idle", 360, 5.0, 3.0), 0)
+        self.assertEqual((frames, frozen), (0, False))
+        frames, frozen = hk_features.frozen_boss_counter(("Idle", 360, 5.0, 3.0),
+                                                         ("Slam", 350, 6.0, 3.0), frames)
+        self.assertEqual((frames, frozen), (0, False))
+
+    def test_a_statue_accumulates_and_fires(self):
+        key = ("Idle", 360, 5.0, 3.0)
+        frames = 0
+        frozen = False
+        for _ in range(hk_features.BOSS_FROZEN_RESTART_FRAMES + 1):
+            frames, frozen = hk_features.frozen_boss_counter(key, key, frames)
+        self.assertTrue(frozen, "a statue for the full budget never triggered")
+
+    def test_any_change_resets_the_counter(self):
+        key = ("Idle", 360, 5.0, 3.0)
+        frames, _ = hk_features.frozen_boss_counter(key, key, 500)
+        frames, frozen = hk_features.frozen_boss_counter(key, ("Idle", 350, 5.0, 3.0), frames)
+        self.assertEqual((frames, frozen), (0, False))
+
+    def test_threshold_is_about_six_seconds_of_game_frames(self):
+        self.assertLess(hk_features.BOSS_FROZEN_RESTART_FRAMES, 1200,
+                        "the threshold must stay below a step-limit length fight")
+        self.assertGreater(hk_features.BOSS_FROZEN_RESTART_FRAMES, 400,
+                           "the threshold must stay above a legitimate idle")
+
+    def test_the_gym_wires_the_detector_and_ends_the_episode(self):
+        source = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hk_gym.py"), encoding="utf-8").read()
+        self.assertIn("frozen_boss_counter(", source,
+                      "hk_gym does not wire the frozen-boss counter")
+        self.assertIn('"boss frozen"', source,
+                      "the frozen-boss episode is not tagged with its reset reason")
+
+
+if __name__ == "__main__":
+    unittest.main()

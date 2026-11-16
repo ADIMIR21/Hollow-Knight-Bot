@@ -13,8 +13,9 @@ from ai_environment import HollowKnightEnv
 from ai_controller import HollowKnightController
 from bosses import resolve_query
 from screen_capture import USE_SCREEN_CAPTURE
-from hk_features import (awaiting_decision, damage_weight, step_penalty, victory_bonus,
-                           EpisodeShaping, RESTART_RESEND_AFTER, ACTION_COUNT,
+from hk_features import (awaiting_decision, damage_weight, frozen_boss_counter,
+                           step_penalty, victory_bonus, EpisodeShaping,
+                           BOSS_FROZEN_RESTART_FRAMES, RESTART_RESEND_AFTER, ACTION_COUNT,
                            BossStateTracker, redirect_action, press_dash)
 
 
@@ -170,6 +171,10 @@ class HollowKnightGym(gym.Env):
         self._last_episode_was_victory = False
         self._boss_death_frames = 0
         self._no_boss_frames = 0
+        # The frozen-boss statue detector: consecutive frames where the boss's state,
+        # hp and position are all identical (see hk_features.frozen_boss_counter).
+        self._boss_frozen_key = None
+        self._boss_frozen_frames = 0
         # Reset timing: episode end reason + accumulated reset time statistics
         self._episode_reason = "start"
         self._reset_stats = {}
@@ -360,6 +365,7 @@ class HollowKnightGym(gym.Env):
         # The boss state string never reaches the policy as text: the tracker turns it
         # into "an attack is winding up", "he is open for a hit" and the state's age.
         frame_state = telemetry.get("boss_state") if (telemetry is not None and "hp" in telemetry) else None
+        self.last_boss_state_raw = frame_state
         boss_state_features = self._boss_state.update(frame_state)
 
         dist_to_boss = np.sqrt((x - boss_x)**2 + (y - boss_y)**2)
@@ -653,6 +659,24 @@ class HollowKnightGym(gym.Env):
             truncated = True
             self.controller.reset_all()
             self._episode_reason = "boss missing"
+
+        frozen_key = (self.last_boss_state_raw, round(float(current_boss_hp)),
+                      round(float(current_boss_x), 1), round(float(current_boss_y), 1))
+        self._boss_frozen_frames, boss_frozen = frozen_boss_counter(
+            self._boss_frozen_key, frozen_key, self._boss_frozen_frames)
+        self._boss_frozen_key = frozen_key
+        if boss_frozen:
+            # The statue bug: the boss's FSM stops while the hero keeps moving
+            # (observed on Failed Champion at 2x). Training against a statue is
+            # garbage data - end the episode and let the restart machinery
+            # produce a fresh fight. The stuck state name goes to the log so the
+            # game-side root cause can be tracked down with it.
+            truncated = True
+            self.controller.reset_all()
+            self._episode_reason = "boss frozen"
+            print(f"[RESET] Boss frozen as a statue: state={frozen_key[0]!r}, "
+                  f"hp={frozen_key[1]} for {BOSS_FROZEN_RESTART_FRAMES} frames - "
+                  f"forcing a fresh fight.")
 
         if self._boss_death_frames >= VICTORY_CONFIRM_FRAMES and current_boss_hp <= 0 and self._last_boss_dead >= 0.5:
             won = victory_bonus(VICTORY_REWARD, current_hp, HERO_MAX_MASKS)
