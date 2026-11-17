@@ -13,6 +13,7 @@ lines are fed through _handle_line exactly as _read_loop would.
 import json
 import os
 import sys
+import time
 import unittest
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -179,3 +180,60 @@ class SharedClientTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SendTimeoutTest(unittest.TestCase):
+    """A frozen game must not hang the sender: the write is bounded.
+
+    Live-verified failure: the sweep parking sent a load command to a window whose
+    game had stopped reading its pipe - os.write blocked forever and the parking
+    script hung for 16 hours. The bounded write returns False, drops the handle
+    (the blocked writer exits with EBADF, the reader thread reconnects) and the
+    caller moves on.
+    """
+
+    def setUp(self):
+        import hk_pipe
+        self.hk_pipe = hk_pipe
+        self.client = make_client()
+        self.client._fd = None  # no real handle: the write path is driven by mocks
+
+    def tearDown(self):
+        pass
+
+    def test_a_stuck_write_returns_false_within_the_timeout(self):
+        import threading
+        released = threading.Event()
+
+        def blocking_write(fd, data):
+            released.wait(30)          # simulates a frozen game: never completes
+            return len(data)
+
+        self.client._fd = 999
+        original = self.hk_pipe.os.write
+        self.hk_pipe.os.write = blocking_write
+        self.hk_pipe.SEND_TIMEOUT_S = 0.5
+        try:
+            started = time.monotonic()
+            result = self.client.send_command("load 3")
+            elapsed = time.monotonic() - started
+        finally:
+            self.hk_pipe.os.write = original
+            released.set()
+        self.assertFalse(result, "a stuck write must return False, not hang")
+        self.assertLess(elapsed, 5.0, "the bounded write did not respect the timeout")
+
+    def test_a_healthy_write_still_returns_true(self):
+        self.client._fd = None
+        self.client._fd = 123
+        original = self.hk_pipe.os.write
+        self.hk_pipe.os.write = lambda fd, data: len(data)
+        self.hk_pipe.SEND_TIMEOUT_S = 5.0
+        try:
+            self.assertTrue(self.client.send_command("timescale 2"))
+        finally:
+            self.hk_pipe.os.write = original
+
+    def test_no_fd_returns_false_immediately(self):
+        self.client._fd = None
+        self.assertFalse(self.client.send_command("timescale 2"))

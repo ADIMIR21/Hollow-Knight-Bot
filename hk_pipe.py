@@ -51,6 +51,11 @@ REQUIRED_PROTOCOL = 3
 
 _RETRY_OPEN_DELAY = 0.5
 _READ_CHUNK = 65536
+# A command write that stays blocked this long means the game is not reading its
+# pipe (a frozen window) - the send gives up and the connection is dropped so the
+# reader thread reconnects. Without this, one frozen window hangs the caller
+# forever (the sweep parking hung 16 hours on a load command once).
+SEND_TIMEOUT_S = 10.0
 # Reader poll interval: the reader never leaves a ReadFile pending on the
 # handle (see _read_loop), so it wakes up to check the queue at this rate.
 _READ_POLL_INTERVAL = 0.005
@@ -259,22 +264,49 @@ class HKPipeClient:
         """Send a command to the mod ('restart GG_False_Knight door_dreamEnter' etc.).
 
         True — the line went into the pipe (the mod picks it up within a frame or two).
+        The write runs in a bounded worker: a frozen game stops reading its pipe and a
+        plain os.write would block the caller forever (the sweep parking hung 16 hours
+        on a load command once). On timeout the connection handle is closed - the stuck
+        write dies with EBADF and the reader thread reconnects - and False is returned.
         """
         payload = (text.rstrip("\n") + "\n").encode("utf-8")
         with self._send_lock:
             fd = self._fd
             if fd is None:
                 return False
+            outcome = []
+
+            def _write():
+                try:
+                    data = payload
+                    while data:
+                        written = os.write(fd, data)
+                        if written <= 0:
+                            outcome.append(False)
+                            return
+                        data = data[written:]
+                    outcome.append(True)
+                except OSError:
+                    # the pipe dropped mid-write or the handle was closed on timeout
+                    outcome.append(False)
+
+            worker = threading.Thread(target=_write, daemon=True)
+            worker.start()
+            worker.join(SEND_TIMEOUT_S)
+
+            if outcome:
+                return outcome[0]
+
+            # The write is stuck: drop the handle so the reader thread reconnects
+            # and the blocked writer exits with EBADF instead of hanging forever.
             try:
-                while payload:
-                    written = os.write(fd, payload)
-                    if written <= 0:
-                        return False
-                    payload = payload[written:]
-                return True
+                os.close(fd)
             except OSError:
-                # the pipe dropped mid-write — the reader thread will reconnect
-                return False
+                pass
+            with self._cond:
+                if self._fd == fd:
+                    self._fd = None
+            return False
 
     def stop(self):
         """Stops the client and unblocks the reader thread."""
