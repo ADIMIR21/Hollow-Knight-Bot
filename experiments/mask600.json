@@ -1,0 +1,11 @@
+{
+    "name": "mask600",
+    "boss": "GG_False_Knight",
+    "timescale": "normal",
+    "steps": 400000,
+    "windows": 3,
+    "eval_episodes": 3,
+    "eval_every": 2,
+    "reward": {"HEALTH_PENALTY_PER_MASK": 600},
+    "ppo": {}
+}
