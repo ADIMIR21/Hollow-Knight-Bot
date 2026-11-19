@@ -1,0 +1,11 @@
+{
+    "name": "mask300fc",
+    "boss": "GG_Failed_Champion",
+    "timescale": "normal",
+    "steps": 400000,
+    "windows": 2,
+    "eval_episodes": 3,
+    "eval_every": 2,
+    "reward": {"HEALTH_PENALTY_PER_MASK": 300},
+    "ppo": {}
+}
